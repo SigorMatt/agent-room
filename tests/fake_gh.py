@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Stand-in for `gh api` that keeps issues and comments in a JSON file.
+"""Stand-in for `gh api` that keeps repos, issues and comments in a JSON file.
 
-Only the endpoints room.py uses. FAKE_GH_DB is the file, FAKE_GH_LOGIN the author.
+Only the endpoints room.py uses. FAKE_GH_DB is the file, FAKE_GH_LOGIN the caller.
 """
 import json
 import os
@@ -15,18 +15,18 @@ login = os.environ.get("FAKE_GH_LOGIN", "SigorMatt")
 args = sys.argv[1:]
 assert args[0] == "api", args
 method = args[args.index("-X") + 1] if "-X" in args else "GET"
-path = next(x for x in args[1:] if "/" in x and not x.startswith("-"))
+path = next(x for x in args[1:] if not x.startswith("-") and x not in ("api", method))
 body = json.loads(sys.stdin.read()) if "--input" in args else None
 
 try:
     with open(db_path) as f:
         db = json.load(f)
 except FileNotFoundError:
-    db = {"issues": {}, "next_id": 1000}
+    db = {"repos": {}, "next_id": 1000}
 
 url = urlsplit(path)
 q = {k: v[0] for k, v in parse_qs(url.query).items()}
-parts = url.path.split("/")  # repos, owner, repo, issues, [n], [comments]
+parts = url.path.split("/")  # repos, owner, repo, issues|labels, [n], [comments]
 now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
@@ -37,19 +37,36 @@ def done(obj):
     sys.exit(0)
 
 
-if len(parts) == 4 and method == "POST":
-    n = str(len(db["issues"]) + 1)
-    db["issues"][n] = {"number": int(n), "title": body["title"], "state": "open", "comments": [],
-                       "updated_at": now}
-    done({"number": int(n), "html_url": f"https://github.com/x/y/issues/{n}"})
-if len(parts) == 4 and method == "GET":
-    done([{"number": i["number"], "title": i["title"], "comments": len(i["comments"]),
-           "updated_at": i["updated_at"]} for i in db["issues"].values() if i["state"] == "open"])
-
-issue = db["issues"].get(parts[4])
-if issue is None:
-    print('{"message":"Not Found"}', file=sys.stderr)
+def fail(status, message):
+    print(json.dumps({"message": message}))
+    print(f"gh: {message} (HTTP {status})", file=sys.stderr)
     sys.exit(1)
+
+
+if parts == ["user"]:
+    done({"login": login})
+
+repo = db["repos"].setdefault(f"{parts[1]}/{parts[2]}", {"issues": {}, "labels": []})
+
+if parts[3] == "labels" and method == "POST":
+    if body["name"] in repo["labels"]:
+        fail(422, "Validation Failed")
+    repo["labels"].append(body["name"])
+    done({"name": body["name"]})
+
+if len(parts) == 4 and method == "POST":
+    n = str(len(repo["issues"]) + 1)
+    repo["issues"][n] = {"number": int(n), "title": body["title"], "state": "open", "comments": [],
+                         "labels": body.get("labels", []), "updated_at": now}
+    done({"number": int(n), "html_url": f"https://github.com/{parts[1]}/{parts[2]}/issues/{n}"})
+if len(parts) == 4 and method == "GET":
+    done([{"number": i["number"], "title": i["title"], "comments": len(i["comments"]), "updated_at": i["updated_at"]}
+          for i in repo["issues"].values()
+          if i["state"] == q.get("state", "open") and ("labels" not in q or q["labels"] in i["labels"])])
+
+issue = repo["issues"].get(parts[4])
+if issue is None:
+    fail(404, "Not Found")
 
 if len(parts) == 5 and method == "GET":
     done({"number": issue["number"], "state": issue["state"]})
@@ -68,5 +85,4 @@ if len(parts) == 6 and method == "GET":
     per, page = int(q.get("per_page", 30)), int(q.get("page", 1))
     done(cs[(page - 1) * per: page * per])
 
-print(f"fake gh: unhandled {method} {path}", file=sys.stderr)
-sys.exit(1)
+fail(400, f"fake gh: unhandled {method} {path}")
