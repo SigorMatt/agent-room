@@ -12,11 +12,15 @@ ROOM = os.path.join(HERE, "..", "room.py")
 tmp = tempfile.mkdtemp()
 shim = os.path.join(tmp, "bin", "gh")
 os.makedirs(os.path.dirname(shim))
-open(shim, "w").write(f'#!/bin/sh\nexec "{sys.executable}" "{os.path.join(HERE, "fake_gh.py")}" "$@"\n')
-os.chmod(shim, 0o755)
+for name, target in (("gh", "fake_gh.py"), ("curl", "fake_curl.py")):
+    path = os.path.join(tmp, "bin", name)
+    open(path, "w").write(f'#!/bin/sh\nexec "{sys.executable}" "{os.path.join(HERE, target)}" "$@"\n')
+    os.chmod(path, 0o755)
+CURL_LOG = os.path.join(tmp, "curl.log")
 
-ENV = dict(os.environ, PATH=os.path.dirname(shim) + os.pathsep + os.environ["PATH"],
-           FAKE_GH_DB=os.path.join(tmp, "db.json"), ROOM_REPO="SigorMatt/agent-room")
+ENV = {k: v for k, v in os.environ.items() if not k.startswith("ROOM_")}
+ENV.update(PATH=os.path.dirname(shim) + os.pathsep + os.environ["PATH"], FAKE_GH_DB=os.path.join(tmp, "db.json"),
+           FAKE_CURL_LOG=CURL_LOG, ROOM_REPO="SigorMatt/agent-room")
 
 
 def env_for(role):  # each participant gets its own cursor dir, like two separate machines
@@ -136,6 +140,43 @@ def t_close():
     code, out, _ = finish(p)
     assert code == 4 and "All done" in out and "closed" in out, (code, out)
     assert run("rooms").stdout.strip() == ""
+
+
+def curl_calls():  # what the fake curl was called with since the last check
+    calls = [json.loads(line) for line in open(CURL_LOG)] if os.path.exists(CURL_LOG) else []
+    open(CURL_LOG, "w").close()
+    return calls
+
+
+def t_buzz():
+    msg = "ESCALATION-1: use postgres or sqlite? (secret detail)"
+    r = run("say", "1", "lead", msg, "--buzz", role="lead")
+    assert "sent #" in r.stdout and "ROOM_NTFY_TOPIC is not set" in r.stdout, r.stdout
+    assert curl_calls() == []
+
+    r = run("say", "1", "lead", msg, "--buzz", role="lead", ROOM_NTFY_TOPIC="t-abc123")
+    assert "[buzz sent]" in r.stdout, r.stdout
+    (args,) = curl_calls()
+    joined = " ".join(args)
+    assert args[-1] == "https://ntfy.sh/t-abc123", args
+    assert "Title: ESCALATION-1 · agent-room room 1" in args and "#issuecomment-" in joined, args
+    assert "postgres" not in joined and "secret" not in joined, "push must not carry the message content"
+    assert "Authorization" not in joined
+
+    run("say", "1", "lead", "DONE: all tasks", "--buzz", role="lead", ROOM_NTFY_TOPIC="t", ROOM_NTFY_TOKEN="tk_x")
+    (args,) = curl_calls()
+    assert "Authorization: Bearer tk_x" in args and "Title: DONE · agent-room room 1" in args, args
+
+    r = run("say", "1", "lead", "hi", "--buzz", role="lead", ROOM_NTFY_TOPIC="t", FAKE_CURL_FAIL="429")
+    assert r.returncode == 0 and "buzz failed" in r.stdout and "shared IP" in r.stdout, r.stdout
+    curl_calls()
+
+
+def t_ping():
+    r = run("ping", cwd=tmp, ROOM_REPO=None, check=False)
+    assert r.returncode != 0 and "ROOM_NTFY_TOPIC" in r.stderr
+    r = run("ping", cwd=tmp, ROOM_REPO=None, ROOM_NTFY_TOPIC="t")
+    assert "buzz sent" in r.stdout and curl_calls()[0][-1] == "https://ntfy.sh/t"
 
 
 def t_pagination():

@@ -13,16 +13,21 @@ or `gh auth login` on your own machine.
   room.py read  N --all           print the whole transcript
   room.py wait  N ROLE            block until someone else speaks, print, exit
   room.py close N ROLE [TEXT]     post a closing note and close the room
+  room.py ping                    send a test phone notification
 
-Every command takes --repo OWNER/NAME. Without it: $ROOM_REPO, else the GitHub
-remote of the current checkout.
+Every room command takes --repo OWNER/NAME. Without it: $ROOM_REPO, else the
+GitHub remote of the current checkout. `say --buzz` also pushes a phone
+notification through ntfy (only the message kind and room, never the content).
 
 wait exits 0 with new messages, 3 on timeout (re-arm it), 4 if the room is closed.
 
 Environment:
-  ROOM_REPO   default repo for rooms
-  ROOM_TRUST  comma-separated GitHub logins whose comments count (default: your gh login)
-  ROOM_STATE  where read cursors live (default ~/.agent-room)
+  ROOM_REPO         default repo for rooms
+  ROOM_TRUST        comma-separated GitHub logins whose comments count (default: your gh login)
+  ROOM_STATE        where read cursors live (default ~/.agent-room)
+  ROOM_NTFY_TOPIC   ntfy topic your phone subscribes to (needed for --buzz and ping)
+  ROOM_NTFY_SERVER  ntfy server (default https://ntfy.sh)
+  ROOM_NTFY_TOKEN   optional ntfy access token (only raises limits on a paid ntfy.sh tier)
 """
 import argparse
 import json
@@ -168,6 +173,39 @@ def hint(cmd, room, role, extra=""):
     return f"{ME} {cmd} {room} {role}{extra} --repo {REPO}"
 
 
+def buzz(title, message, click=None):
+    """Push a phone notification through ntfy. Never raises; returns an error string, or None if sent."""
+    topic = os.environ.get("ROOM_NTFY_TOPIC", "").strip()
+    if not topic:
+        return "ROOM_NTFY_TOPIC is not set"
+    server = os.environ.get("ROOM_NTFY_SERVER", "https://ntfy.sh").rstrip("/")
+    cmd = ["curl", "-fsS", "-m", "20", "-o", "/dev/null",
+           "-H", f"Title: {title}", "-H", "Priority: high", "-H", "Tags: bell"]
+    if click:
+        cmd += ["-H", f"Click: {click}"]
+    token = os.environ.get("ROOM_NTFY_TOKEN", "").strip()
+    if token:
+        cmd += ["-H", f"Authorization: Bearer {token}"]
+    cmd += ["-d", message, f"{server}/{topic}"]
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+    except (OSError, subprocess.TimeoutExpired) as e:
+        return str(e)
+    if r.returncode == 0:
+        return None
+    err = r.stderr.strip() or f"curl exited {r.returncode}"
+    if "429" in err:
+        err += " (ntfy's daily limit for this shared IP; a paid ntfy tier plus ROOM_NTFY_TOKEN avoids it)"
+    elif "403" in err:
+        err += " (is ntfy.sh allowed in this environment's network settings?)"
+    return err
+
+
+def message_kind(text):
+    m = re.match(r"\s*([A-Z][A-Z]+(?:-\d+)?)\b", text or "")
+    return m.group(1) if m else "Message"
+
+
 # --- commands
 
 def cmd_new(a):
@@ -196,12 +234,25 @@ def post(room, role, text):
     if len(text) > MAX_CHARS:
         sys.exit(f"message is {len(text)} chars; keep it under {MAX_CHARS} and link to files or commits instead")
     body = f"<!-- agent-room role={role} -->\n**[{role}]**\n\n{text.strip()}\n"
-    return gh(f"repos/{REPO}/issues/{room}/comments", "POST", {"body": body})
+    return gh(f"repos/{REPO}/issues/{room}/comments", "POST", {"body": body}), text
 
 
 def cmd_say(a):
-    c = post(a.room, a.role, a.text)
+    c, text = post(a.room, a.role, a.text)
     print(f"sent #{c['id']}")
+    if a.buzz:
+        kind = message_kind(text)
+        err = buzz(f"{kind} · {REPO.split('/')[1]} room {a.room}", f"{kind} from {a.role} in {REPO} room {a.room}",
+                   c.get("html_url") or f"https://github.com/{REPO}/issues/{a.room}")
+        # the message is already in the room, so a failed buzz is a warning, not an error
+        print("[buzz sent]" if err is None else f"[buzz failed: {err}]")
+
+
+def cmd_ping(a):
+    err = buzz("agent-room test", "If your phone buzzed, agent-room notifications work.")
+    if err:
+        sys.exit(f"buzz failed: {err}")
+    print("buzz sent - check your phone")
 
 
 def cmd_read(a):
@@ -284,6 +335,7 @@ def main():
     cmd("rooms", cmd_rooms)
     s = cmd("say", cmd_say); s.add_argument("room", type=int); s.add_argument("role", type=role_arg)
     s.add_argument("text", nargs="?")
+    s.add_argument("--buzz", action="store_true", help="also push a phone notification via ntfy")
     s = cmd("read", cmd_read); s.add_argument("room", type=int); s.add_argument("role", type=role_arg, nargs="?")
     s.add_argument("--all", action="store_true")
     s = cmd("wait", cmd_wait); s.add_argument("room", type=int); s.add_argument("role", type=role_arg)
@@ -291,8 +343,11 @@ def main():
     s.add_argument("--interval", type=float, default=5, help="seconds between polls (default 5)")
     s = cmd("close", cmd_close); s.add_argument("room", type=int); s.add_argument("role", type=role_arg)
     s.add_argument("text", nargs="?")
+    sub.add_parser("ping").set_defaults(fn=cmd_ping, repo=None)
 
     a = p.parse_args()
+    if a.fn is cmd_ping:
+        sys.exit(cmd_ping(a) or 0)
     REPO = a.repo or os.environ.get("ROOM_REPO") or repo_from_checkout()
     if not REPO:
         sys.exit("which repo? Run inside the project's checkout, or pass --repo OWNER/NAME")
