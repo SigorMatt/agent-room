@@ -90,12 +90,27 @@ Never end a turn without a live waiter. A duplicate waiter is harmless; a missin
 - Work on one branch, `agent-room/N`, and push often. When the plan is done, open a PR to the default branch.
 - Give each plan task to a builder subagent. Run independent tasks in parallel, at most three at once, each in its own worktree.
 - Each builder's brief contains:
-  - the task text from the plan
-  - pointers to the relevant design sections
+  - the task ID, and the doc sections to read, by path and heading. Point to them; don't paste them in. Builders read the docs themselves.
   - its done-when check
-  - this rule: *"If the design or plan doesn't settle something that matters, stop and return `QUESTION: <question>, options, your recommendation` instead of guessing. Small implementation details are yours; list them in your result."*
+  - the reply rules below, copied word for word.
 - Builders never post in the room.
-- When a builder's result comes back, verify its done-when check yourself and merge its work into `agent-room/N`. Then tick the task in `BUILD_PLAN.md` and post `STATUS: T-n done (<check result>). Next: …`.
+- When a builder's result comes back, run its done-when check yourself and merge its work into `agent-room/N`. Then tick the task in `BUILD_PLAN.md` and post `STATUS: T-n done (<check result>). Next: …`.
+
+**Reply rules for builders** (include these in every brief, word for word)
+
+> Work silently, with no progress updates. Your final reply is read by a busy lead, so keep it to at most 10 lines and in exactly one of these two forms:
+>
+> `RESULT T-n: done` (or `failed`), then: branch and commit · done-when check and its result in one line · up to 3 one-line notes on decisions you made.
+>
+> `QUESTION T-n: <one sentence>`, then: up to 3 options, one line each · your recommendation in one line.
+>
+> No code, diffs, file listings or logs in the reply. If a check fails, include only its last 10 lines. Put anything longer in a file and give its path. Don't start subagents of your own.
+
+**Protect your own context.** You run for hours, and every builder's chatter you read stays in your context.
+- Don't read builders' diffs or files in full. Verify by running the done-when check and `git diff --stat`. Open a file only when a check fails.
+- Persist state in the repo, not in your memory. Plan progress goes into `BUILD_PLAN.md` and your own choices under "Lead decisions". After a compaction, re-read those instead of reconstructing them.
+- When you answer a builder, use one or two sentences that cite the doc section. Don't re-explain the task; a resumed builder still has its context.
+- Prefer resuming a builder over starting a new one for follow-ups on its task, and never ask a builder for status.
 
 **Builder questions**
 - If the docs answer it, answer, and resume the same builder so it keeps its context.
