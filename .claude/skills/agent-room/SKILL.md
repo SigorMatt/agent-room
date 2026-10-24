@@ -86,6 +86,18 @@ You have no waiter. You act only when Matthew brings you in ("check the room", a
 
 Never end a turn without a live waiter. A duplicate waiter is harmless; a missing one makes you deaf.
 
+**You coordinate; builders do the work.** Your job is to plan the order, brief builders, integrate their results, answer their questions and escalate. Everything heavier goes to a builder subagent, wherever that makes sense:
+
+| Delegate to a builder | Do yourself |
+|---|---|
+| Implementing a task, writing tests, refactoring | Writing briefs and answers |
+| Fixing a failing check: resume the same builder with the failure tail | Running done-when checks |
+| Investigating the codebase ("where is X handled?") | Merges that apply cleanly |
+| Resolving a merge conflict that isn't trivial | Ticking `BUILD_PLAN.md`, noting lead decisions |
+| Any job that means reading more than a file or two | Room messages, escalations, the final PR |
+
+Rule of thumb: if it takes more than a couple of commands, or more than one file to read, delegate it.
+
 **Build**
 - Work on one branch, `agent-room/N`, and push often. When the plan is done, open a PR to the default branch.
 - Give each plan task to a builder subagent. Run independent tasks in parallel, at most three at once, each in its own worktree.
