@@ -402,7 +402,9 @@ def t_recreated_state_branch_rebuilds_stale_worktrees():
     room("state", "init-lead", session="L1", state="GA", **here)
     room("state", "path", state="GB", **away)
     g("--git-dir", repo, "update-ref", "-d", "refs/heads/agent-room/state")  # Matthew deletes the branch
-    room("state", "init", session="arch", state="GARCH", **here)  # and the architect recreates it
+    # and the architect recreates it (dated, or within the same second it would be the very same root commit)
+    room("state", "init", session="arch", state="GARCH", GIT_AUTHOR_DATE="2026-01-01T00:00:00Z",
+         GIT_COMMITTER_DATE="2026-01-01T00:00:00Z", **here)
     new = sha(repo, "agent-room/state")
     for state, kw in (("GA", here), ("GB", away)):
         r = room("state", "path", state=state, **kw)
