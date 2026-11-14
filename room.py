@@ -2103,6 +2103,7 @@ def add_gate_commands(sub, common):
 # Intents reconcile recognizes: "merge PR #<n> at <sha>", "open PR <branch or M<k>>", "post <KIND>", "close room".
 
 WAITING_FOR_OWNER = "waiting for owner"
+QUIET_STATUSES = ("paused", "stopped", "done")
 DEFAULT_BUDGET_HOURS = 8
 INTENT_SKEW = 120  # seconds a room message may seem to predate the intent recorded before it (clock skew)
 
@@ -2139,6 +2140,36 @@ def span(secs):
 
 def status_of(values):
     return values.get("status") or "running"
+
+
+def halted(values):
+    """Whether the status is paused, stopped or done, in any case; any other value counts as running."""
+    return status_of(values).strip().lower() in QUIET_STATUSES
+
+
+def current_room(values, playbook):
+    """(number, where) of the room the state records: the block's room, else PLAYBOOK.md's; None if neither."""
+    for n, where in ((values.get("room"), "MISSIONS.md"),
+                     ((re.search(r"^room:[ \t]*(\d+)", playbook or "", re.M) or [None, None])[1], "PLAYBOOK.md")):
+        if (n or "").strip().isdigit() and int(n) > 0:
+            return int(n), where
+    return None
+
+
+def quiet_reason(a, values, playbook):
+    """Why the watchdog stays quiet whatever the progress, or None."""
+    if halted(values):
+        return f"status is {status_of(values)}"
+    if (values.get("waiting_for_owner") or "").strip().lower() == "yes":
+        return "waiting_for_owner is yes"
+    step = values.get("step") or "none"
+    if step.strip().lower().startswith(WAITING_FOR_OWNER):
+        return f"step is {step}"
+    room = current_room(values, playbook)
+    if room and room[0] != a.room:
+        return (f"room {a.room} is not the current room ({room[1]} records room {room[0]}); this watchdog is left "
+                "from an earlier phase: delete it")
+    return None
 
 
 def say(room, role, text, a=None):
@@ -2205,11 +2236,9 @@ def mission_push():
 def cmd_watchdog(a):
     path, values = pushed_state()  # fetched and read from git objects: the watchdog never writes state
     step, mission = values.get("step") or "none", values.get("mission") or "none"
-    if status_of(values) != "running":
-        print(f"quiet: status is {status_of(values)}")
-        return 0
-    if step.lower() == WAITING_FOR_OWNER:
-        print(f"quiet: step is {WAITING_FOR_OWNER}")
+    why = quiet_reason(a, values, pushed_text(path, "PLAYBOOK.md"))
+    if why:
+        print(f"quiet: {why}")
         return 0
     found = []
     change = last_change(path, "step")
@@ -2419,7 +2448,7 @@ def cmd_reconcile(a):
     print(f"intent: {intent}")
     if intent != "none":
         print(intent_hint(a, intent, path, msgs, pr))
-    if status_of(values) != "running":
+    if halted(values):
         print(f"status: {status_of(values)}: a lead that resumes the work sets it back after taking the lease "
               f"('{ME} state set status=running')")
     drill = re.search(r"^drill:[ \t]*(\S.*?)[ \t]*$", pushed_text(path, "PLAYBOOK.md") or "", re.M)

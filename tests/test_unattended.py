@@ -113,15 +113,16 @@ def state_sha():
     return g("--git-dir", PET, "rev-parse", "agent-room/state").stdout.strip()
 
 
-def edit_state(name, fn):
-    """Edit a playbook file in the state worktree and commit it; returns the text before."""
+def edit_state(name, fn, hours=None):
+    """Edit a playbook file in the state worktree and commit it (dated HOURS ago if given); returns the text
+    before."""
     room("state", "sync", check=True)
     path = os.path.join(STATE_DIR, "docs", "playbook", name)
     with open(path) as f:
         text = f.read()
     with open(path, "w") as f:
         f.write(fn(text))
-    room("state", "commit", "-m", f"test: edit {name}", check=True)
+    room("state", "commit", "-m", f"test: edit {name}", check=True, **(ago(hours)[1] if hours is not None else {}))
     return text
 
 
@@ -342,6 +343,27 @@ def t_pause_flow():
     room("lease", "take", check=True)
 
 
+def t_watchdog_status_values():
+    # cold M4 R1-8: only paused, stopped or done keep it quiet, in any case; any other value counts as running
+    age_alarms()
+    set_state("step=build 4", hours=6)
+    for value in ("Running", "runing", "active"):
+        edit_state("MISSIONS.md", lambda t, v=value: re.sub(r"^status: .*$", f"status: {v}", t, count=1, flags=re.M),
+                   hours=5)
+        assert block()["status"] == value
+        r = watchdog()
+        assert r.returncode == 0 and "alarm" in r.stdout, (value, out(r))
+        age_alarms()
+    for value in ("PAUSED", "Stopped", "done"):
+        edit_state("MISSIONS.md", lambda t, v=value: re.sub(r"^status: .*$", f"status: {v}", t, count=1, flags=re.M),
+                   hours=5)
+        n = len(alarms())
+        r = watchdog()
+        assert r.returncode == 0 and r.stdout.strip() == f"quiet: status is {value}", (value, out(r))
+        assert len(alarms()) == n
+    set_state("status=running", hours=5)
+
+
 def t_watchdog_quiet_while_waiting_for_owner():
     age_alarms()
     set_state("step=waiting for owner", hours=5)
@@ -349,6 +371,40 @@ def t_watchdog_quiet_while_waiting_for_owner():
     r = watchdog()
     assert r.returncode == 0 and r.stdout.strip() == "quiet: step is waiting for owner", out(r)
     assert len(alarms()) == n and state_sha() == before
+    # cold M4 R1-9: a step that starts with it, and the block's own waiting_for_owner key, are quiet too
+    set_state("step=Waiting for owner (MERGE-HOLD-4)", hours=5)
+    r = watchdog()
+    assert r.stdout.strip() == "quiet: step is Waiting for owner (MERGE-HOLD-4)", out(r)
+    for value in ("yes", "YES"):
+        set_state("step=gate", f"waiting_for_owner={value}", hours=5)
+        r = watchdog()
+        assert r.stdout.strip() == "quiet: waiting_for_owner is yes", out(r)
+    assert len(alarms()) == n
+    set_state("waiting_for_owner=no", hours=5)
+    r = watchdog()
+    assert "alarm" in r.stdout and len(alarms()) == n + 1, out(r)
+
+
+def t_watchdog_quiet_for_another_room():
+    # cold M4 R1-10: a watchdog left over from an earlier phase stays quiet, and says why
+    age_alarms()
+    assert "room 2 in SigorMatt/pet" in room("new", "Phase 2", check=True).stdout
+    set_state("room=2", "step=spec 2", hours=5)
+    n = len(alarms())
+    r = watchdog()
+    assert r.returncode == 0 and r.stdout.strip() == ("quiet: room 1 is not the current room (MISSIONS.md records "
+                                                      "room 2); this watchdog is left from an earlier phase: delete "
+                                                      "it"), out(r)
+    r = room("watchdog", "2", ROOM_SESSION="wd")
+    assert r.returncode == 0 and "alarm" in r.stdout and "LEAD-SILENT" in text_of(comments("2")[-1]), out(r)
+    assert len(alarms()) == n
+    # with no room in the block, PLAYBOOK.md's decides
+    set_state("room=0", hours=5)
+    original = edit_state("PLAYBOOK.md", lambda t: re.sub(r"^room: .*$", "room: 2", t, count=1, flags=re.M), hours=5)
+    r = watchdog()
+    assert "quiet: room 1 is not the current room (PLAYBOOK.md records room 2)" in r.stdout, out(r)
+    edit_state("PLAYBOOK.md", lambda t: original, hours=5)
+    set_state("room=1", hours=5)
 
 
 def t_watchdog_missing_status_reads_running():
@@ -604,11 +660,11 @@ def t_reconcile_post_intent():
 
 
 def t_reconcile_close_room_intent():
-    assert "room 2 in SigorMatt/pet" in room("new", "Phase 2", check=True).stdout
+    assert "room 3 in SigorMatt/pet" in room("new", "Phase 3", check=True).stdout
     set_state("intent=close room")
-    assert hint(reconcile("2")) == "intent not done: redo it (room 2 is open)"
-    room("close", "2", "lead", "DONE: phase 2", check=True)
-    assert hint(reconcile("2")) == "intent done: clear it (room 2 is closed)"
+    assert hint(reconcile("3")) == "intent not done: redo it (room 3 is open)"
+    room("close", "3", "lead", "DONE: phase 3", check=True)
+    assert hint(reconcile("3")) == "intent done: clear it (room 3 is closed)"
 
 
 def t_reconcile_unknown_intent_status_and_drill():
