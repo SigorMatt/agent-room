@@ -136,13 +136,18 @@ def git_out(*args, cwd=None):
     return git(*args, cwd=cwd).stdout.strip()
 
 
+def repo_of_url(url):
+    """OWNER/NAME from a GitHub (or Claude proxy) git URL, or None."""
+    m = re.search(r"(?:github\.com[:/]+|/git/)([\w.-]+)/([\w.-]+?)(?:\.git)?/?$", url)
+    return f"{m.group(1)}/{m.group(2)}" if m else None
+
+
 def repo_from_checkout():
     try:
         url = git("remote", "get-url", "origin", check=False, timeout=10).stdout.strip()
     except StateError:
         return None
-    m = re.search(r"(?:github\.com[:/]+|/git/)([\w.-]+)/([\w.-]+?)(?:\.git)?/?$", url)
-    return f"{m.group(1)}/{m.group(2)}" if m else None
+    return repo_of_url(url)
 
 
 def default_trust():
@@ -560,6 +565,10 @@ class StateMoved(Exception):
     """A push to the state branch was rejected because someone else pushed first."""
 
 
+class BlockUnreadable(StateError):
+    """MISSIONS.md, or the machine block in it, is missing or broken: no lease can be read."""
+
+
 class StateExit(Exception):
     """Stop with this exit code and message (5: the lease is someone else's; 3: stand down)."""
 
@@ -614,37 +623,67 @@ def remote_heads():
     return heads
 
 
+def project_toplevel():
+    """The main worktree of the project checkout around the current directory, or None."""
+    if (repo_from_checkout() or "").lower() != REPO.lower():
+        return None
+    common = git("rev-parse", "--git-common-dir", check=False).stdout.strip()
+    common = os.path.realpath(common) if common else ""
+    return os.path.dirname(common) if os.path.basename(common) == ".git" else None
+
+
+def is_stale_state_worktree(path):
+    """A state worktree left over from an agent-room/state that was deleted and recreated: a linked
+    worktree or clone of this repo whose HEAD holds docs/playbook/, and not the project checkout."""
+    url = git("remote", "get-url", "origin", cwd=path, check=False).stdout.strip()
+    if (repo_of_url(url) or "").lower() != REPO.lower() and url != remote_url():
+        return False
+    if git("rev-parse", "-q", "--verify", f"HEAD:{PLAYBOOK_DIR}", cwd=path, check=False).returncode != 0:
+        return False
+    top = project_toplevel()
+    return not (top and os.path.realpath(top) == os.path.realpath(path))
+
+
 def check_state_dir(path):
-    """Refuse a directory that isn't the state worktree, before anything resets or cleans it: one
-    with another branch checked out, or whose HEAD shares no history with the state branch (the
-    project checkout, or a builder's worktree, whatever the current directory)."""
+    """Fetch, then judge the directory before anything resets or cleans it. Returns 'ok', or 'stale'
+    for a state worktree whose history the recreated branch no longer shares. Refuses anything else:
+    a directory with another branch checked out, or with no state history (the project checkout, or
+    a builder's worktree, whatever the current directory)."""
     branch = git("symbolic-ref", "-q", "--short", "HEAD", cwd=path, check=False).stdout.strip()
     if branch and branch != STATE_BRANCH:
         raise StateError(f"{path} has branch {branch} checked out, so it isn't the state worktree; "
                          "set ROOM_STATE_DIR to a directory of its own")
-    if git("rev-parse", "-q", "--verify", STATE_REF, cwd=path, check=False).returncode != 0:
-        fetch(path)
-    if git("merge-base", "HEAD", STATE_REF, cwd=path, check=False).returncode != 0:
-        raise StateError(f"{path} holds no {STATE_BRANCH} history (the project checkout?), so it isn't the "
-                         "state worktree; set ROOM_STATE_DIR to a directory of its own")
+    fetch(path)
+    if git("merge-base", "HEAD", STATE_REF, cwd=path, check=False).returncode == 0:
+        return "ok"
+    if is_stale_state_worktree(path):
+        return "stale"
+    raise StateError(f"{path} holds no {STATE_BRANCH} history (the project checkout?), so it isn't the "
+                     "state worktree; set ROOM_STATE_DIR to a directory of its own")
+
+
+def move_aside(path, why):
+    aside = f"{path}.broken-{time.strftime('%Y%m%dT%H%M%SZ', time.gmtime())}"
+    if os.path.lexists(aside):
+        aside += f"-{os.getpid()}"
+    os.rename(path, aside)
+    print(f"[state worktree {path} {why}; moved it to {aside} and made a new one]", file=sys.stderr)
 
 
 def ensure_worktree():
-    """Path of the state worktree: checked, rebuilt if broken, created if missing."""
+    """Path of the state worktree, just fetched: checked, rebuilt if broken or stale, created if missing."""
     path = state_path()
     if os.path.lexists(os.path.join(path, ".git")):
         r = git("rev-parse", "--show-toplevel", cwd=path, check=False)
         if r.returncode == 0:
-            check_state_dir(path)
-            return path
-        if "not a git repository" not in r.stderr:
+            if check_state_dir(path) == "ok":
+                return path
+            move_aside(path, f"is stale (no history of the recreated {STATE_BRANCH})")
+        elif "not a git repository" in r.stderr:
+            # e.g. the project checkout it was added from was cloned again
+            move_aside(path, "was broken")
+        else:
             raise StateError(f"git rev-parse in {path}: {r.stderr.strip()}")
-        # e.g. the project checkout it was added from was cloned again: move it aside and start over
-        aside = f"{path}.broken-{time.strftime('%Y%m%dT%H%M%SZ', time.gmtime())}"
-        if os.path.lexists(aside):
-            aside += f"-{os.getpid()}"
-        os.rename(path, aside)
-        print(f"[state worktree {path} was broken; moved it to {aside} and made a new one]", file=sys.stderr)
     if STATE_BRANCH not in remote_heads():
         raise StateError(f"{STATE_BRANCH} doesn't exist in {REPO} yet: the architect runs '{ME} state init'")
     if os.path.isdir(path) and os.listdir(path):
@@ -800,7 +839,7 @@ def add_missing(names, msg):
 def read_block(text):
     m = STATE_BLOCK.search(text)
     if not m:
-        raise StateError(f"{PLAYBOOK_DIR}/MISSIONS.md has no agent-room-state block")
+        raise BlockUnreadable(f"{PLAYBOOK_DIR}/MISSIONS.md has no agent-room-state block")
     values = {}
     for line in m.group(1).splitlines():
         key, sep, value = line.partition(":")
@@ -871,23 +910,26 @@ def pushed_text(path, name):
 
 def lease_holder():
     """(session, generation) of the lease on the remote state branch, freshly fetched."""
-    path = ensure_worktree()
-    fetch(path)
+    path = ensure_worktree()  # fetched
     text = pushed_text(path, "MISSIONS.md")
     if text is None:
-        raise StateError(f"{PLAYBOOK_DIR}/MISSIONS.md is missing on {STATE_BRANCH}: run '{ME} state init-lead'")
+        raise BlockUnreadable(f"{PLAYBOOK_DIR}/MISSIONS.md is missing on {STATE_BRANCH}: run '{ME} state init-lead'")
     return lease_of(read_block(text))
 
 
 def lease_guard(a, kind=None):
     """Lease check on send, for say and close: a lead with a state worktree may not post while
     another session holds the lease (exit 5). A released lease (none) doesn't block, so a
-    retiring lead can still post NEXT-LEAD-NEEDED. No kind is exempt; KIND is unused."""
+    retiring lead can still post NEXT-LEAD-NEEDED, and neither does an unreadable one (a missing
+    MISSIONS.md or a broken block), with a warning. No kind is exempt; KIND is unused."""
     if a.role != "lead" or not state_worktree_exists():
         return
     sid = session_id(a)
     try:
         holder, gen = lease_holder()
+    except BlockUnreadable as e:  # no session can be shown to hold it, and the lead must be able to say so
+        print(f"[lease unreadable, posting anyway: {e}]", file=sys.stderr)
+        return
     except StateError as e:
         sys.exit(f"not sent: lease check failed: {e}")
     if holder not in (sid, "none"):
@@ -937,12 +979,13 @@ def cmd_state_sync(a):
 
 
 def changed_paths(path):
-    """Paths the worktree changes against the commit its work was built on: staged and unpushed."""
+    """Paths the worktree changes against the commit its work was built on: staged and unpushed.
+    Without rename detection, so a renamed or moved file counts under its old name too."""
     git("add", "-A", cwd=path)
-    out = set(git_out("diff", "--cached", "--name-only", cwd=path).splitlines())
+    out = set(git_out("diff", "--cached", "--no-renames", "--name-only", cwd=path).splitlines())
     base = git("merge-base", "HEAD", STATE_REF, cwd=path, check=False).stdout.strip()
     if base:
-        out |= set(git_out("diff", "--name-only", base, "HEAD", cwd=path).splitlines())
+        out |= set(git_out("diff", "--no-renames", "--name-only", base, "HEAD", cwd=path).splitlines())
     return out
 
 
@@ -952,8 +995,12 @@ def cmd_state_commit(a):
     if touched:  # lead-owned files need the lease, read from the freshly fetched branch
         fetch(path)
         text = pushed_text(path, "MISSIONS.md")
-        values = read_block(text) if text is not None else {}
-        require_lease(values, session_id(a), f"not committed ({', '.join(touched)} are lead-owned)")
+        try:
+            if text is None:
+                raise BlockUnreadable(f"{PLAYBOOK_DIR}/MISSIONS.md is missing on {STATE_BRANCH}")
+            require_lease(read_block(text), session_id(a), f"not committed ({', '.join(touched)} are lead-owned)")
+        except BlockUnreadable as e:  # no one holds a lease that can't be read; let the repair through
+            print(f"[lease unreadable, committing anyway: {e}]", file=sys.stderr)
     if commit_and_push(path, a.message):
         print(f"pushed {git_out('rev-parse', '--short', 'HEAD', cwd=path)} to {STATE_BRANCH}")
     else:
@@ -997,19 +1044,30 @@ def cmd_state_next(a):
 
 def cmd_lease_take(a):
     sid = session_id(a)
+    seen = []  # the lease as each try found it
 
     def take(values):
         holder, gen = lease_of(values)
+        seen.append((holder, gen))
         if holder not in ("none", sid) and not a.takeover:
             raise StateExit(EXIT_MOVED, f"lease held by {holder}: stand down (generation {gen}; "
                                         "--takeover only for a lead Matthew starts after LEAD-SILENT)")
         return {"lease_session": sid, "lease_generation": next_int(values, "lease_generation")}
-    try:
-        new = change_state(a, f"lease: {sid} takes the lead lease", take, need_lease=False)
-    except StateMoved:
-        print("lease not taken: another session pushed first; stand down, or see 'lease check'", file=sys.stderr)
-        return EXIT_MOVED
-    print(new["lease_generation"])
+
+    for _ in range(2):
+        try:
+            new = change_state(a, f"lease: {sid} takes the lead lease", take, need_lease=False)
+            print(new["lease_generation"])
+            return 0
+        except StateMoved:
+            # the push lost to some other write; only a lease that another session took means stand down
+            holder, gen = lease_holder()
+            if holder not in ("none", sid) and (holder, gen) != seen[-1]:
+                print(f"lease not taken: {holder} took it first (generation {gen}); stand down", file=sys.stderr)
+                return EXIT_MOVED
+    print(f"lease not taken: {STATE_BRANCH} moved under both tries, and no session took the lease; "
+          "run 'lease take' again", file=sys.stderr)
+    return 1
 
 
 def cmd_lease_release(a):
@@ -1158,8 +1216,7 @@ def cmd_preflight(a):
     # branch after a fetch, so uncommitted edits in the worktree can't pass for it
     path = None
     try:
-        path = ensure_worktree()
-        fetch(path)
+        path = ensure_worktree()  # fetched
     except StateError as e:
         path = None
         check("✗", f"state branch: {e}")
