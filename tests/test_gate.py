@@ -362,6 +362,51 @@ def t_real_archive_and_dispositions():
     assert R.parse_disposition(rows[0]["disposition"])[0] == "fixed" and rows[0]["file"] == "docs/design/v1.md"
 
 
+
+def badge(sev):
+    return f'<img src="https://img.shields.io/badge/X-634FD1?style=flat-square" height="20px" alt="{sev}">'
+
+
+def t_badges_inside_code_are_not_severities():  # cold M3 R1-13
+    quoted = badge("{sev}")
+    body = "\n".join(["<h3>Code Review by Qodo</h3>", "<code>🐞 Bugs (4)</code>", GREY, badge("Action required"),
+                      "<details>", "<summary>  1.  Badge built from the severity <code>🐞 Bug</code></summary>",
+                      "> <details>", "><summary>Code</summary>", ">```python", f">+    lines += ['{quoted}']", ">```",
+                      "></details>", "</details>",
+                      "<details>", "<summary>  2.  Merge proceeds with failing checks</summary>",
+                      f"><pre>\n>{badge('Informational')}\n></pre>", "</details>",
+                      "<details>", "<summary>  3.  Third</summary>", f"<code>{badge('Informational')}</code>", "</details>",
+                      "<details>", "<summary>  4.  Fourth</summary>", "~~~", badge("Informational"), "~~~", "</details>",
+                      "<!-- https://github.com/o/r/commit/" + "a" * 40 + " -->"])
+    assert [f["severity"] for f in R.qodo_findings(body)] == ["Action required"] * 4, R.qodo_findings(body)
+    masked = R.mask_code(body)
+    assert len(masked) == len(body) and masked.count("\n") == body.count("\n") and "{sev}" not in masked
+
+
+def t_shared_titles_take_the_strictest_severity():  # cold M3 R1-14
+    assert R.stricter("Remediation recommended", "Action required") == "Action required"
+    assert R.stricter("Action required", "Informational") == "Action required"
+    assert R.stricter(None, "Informational") == "Informational" and R.stricter("Informational", "odd") == "Informational"
+    twice = [("Action required", "Unchecked input", False), ("Remediation recommended", "Unchecked input", False)]
+    mission(qodo_findings=twice,
+            qodo_rows=lambda s: [("2", "Remediation recommended", "Unchecked input", "app.py", "dismissed: validated upstream")])
+    r = gate()
+    failed(r, "dispositions", 'Qodo #2 "Unchecked input" is top severity')
+    assert verdict(r) == "gate: FAIL hold reasons 1", out(r)
+
+
+def t_titles_compare_without_stripping_the_cell():  # cold M3 R1-15
+    archived = R.qodo_findings("<h3>Code Review by Qodo</h3>\n<summary>  1.  Use &lt;path&gt;   placeholders "
+                               "<code>🐞 Bug</code></summary>\n")
+    assert archived[0]["title"] == "Use <path> placeholders"
+    for cell in ("Use <path> placeholders", "use  &lt;path&gt; PLACEHOLDERS", "Use `<path>` placeholders"):
+        assert R.title_key(cell) == archived[0]["key"], cell
+    assert R.title_key("Use placeholders") != archived[0]["key"]
+    mission(qodo_findings=[("Informational", "Use &lt;path&gt; placeholders", False)],
+            qodo_rows=lambda s: [("1", "Informational", "Use <path> placeholders", "app.py", "dismissed: by design")])
+    r = gate()
+    assert r.returncode == 0, out(r)
+
 def t_exempt_patterns():
     for p in ("reviews/cold/M3/round-1.md", "reviews/cold/M3/round-2.md", "reviews/cold/M12/round-3.md",
               "reviews/cold/M3/scoped-1.md", "reviews/cold/M3/scoped-14.md", "reviews/cold/M3/DISPOSITIONS.md",

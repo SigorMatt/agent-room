@@ -1335,8 +1335,35 @@ def plain(title):
 
 
 def title_key(title):
-    """How finding titles are compared: plain text, case-folded (backticks of a table cell dropped)."""
-    return plain(title.replace("`", "")).casefold()
+    """How finding titles are compared, the same way on both sides: entities unescaped, backticks dropped,
+    whitespace and case folded. A table cell is compared as written: no <…> is stripped from it, since
+    the tool prints titles such as "Use <path> placeholders" as plain text."""
+    return " ".join(html.unescape(title).replace("`", "").split()).casefold()
+
+
+SEVERITY_RANK = {"action required": 3, "remediation recommended": 2, "informational": 1}
+
+
+def stricter(a, b):
+    """The stricter of two Qodo severities (labels it doesn't know rank lowest)."""
+    return a if SEVERITY_RANK.get((a or "").lower(), 0) >= SEVERITY_RANK.get((b or "").lower(), 0) else b
+
+
+def mask_code(text):
+    """TEXT with every character inside code blanked, keeping positions: <pre>…</pre>, <code>…</code> and
+    fenced blocks, also when quoted with '>'. A severity badge quoted from the PR's code in a finding's
+    excerpt is not Qodo's. qodo_review.py has the same weakness (it reads every badge), so the severity
+    the tool prints after such a quote can be wrong; the gate reads the severity itself."""
+    def blank(s):
+        return re.sub(r"[^\n]", " ", s)
+
+    out, fenced = [], False
+    for line in text.splitlines(keepends=True):
+        fence = re.match(r"[> \t]*(```|~~~)", line)
+        out.append(blank(line) if fenced or fence else line)
+        if fence:
+            fenced = not fenced
+    return re.sub(r"<pre>.*?</pre>|<code>.*?</code>", lambda m: blank(m.group(0)), "".join(out), flags=re.S)
 
 
 def is_code_review(text):
@@ -1346,8 +1373,9 @@ def is_code_review(text):
 
 
 def qodo_findings(text):
-    """[{number, title, key, severity}] of a Code Review comment, severity from the badge above each."""
-    badges = [(m.start(), m.group(1)) for m in _SEVERITY.finditer(text)]
+    """[{number, title, key, severity}] of a Code Review comment, severity from the last badge above
+    each finding, not counting badges inside code."""
+    badges = [(m.start(), m.group(1)) for m in _SEVERITY.finditer(mask_code(text))]
     out = []
     for m in _FINDING.finditer(text):
         severity = None
@@ -1355,7 +1383,7 @@ def qodo_findings(text):
             if position < m.start():
                 severity = label
         title = plain(m.group(2).strip())
-        out.append({"number": m.group(1), "title": title, "key": title.casefold(), "severity": severity})
+        out.append({"number": m.group(1), "title": title, "key": title_key(title), "severity": severity})
     return out
 
 
@@ -1725,7 +1753,9 @@ def check_dispositions(g, root, head, rec, ledger_text):
         rows = find_table(text, ("#", "finding", "disposition"), ("severity", "file"))
         if rows is None and mode == "on":
             reasons.append((f"{path} has no | # | … | finding | … | disposition | table", None))
-        comment = {f["key"]: f for f in (q["findings"] if q else [])}
+        comment = {}  # title key -> finding; findings sharing a title take the strictest severity
+        for f in (q["findings"] if q else []):
+            comment[f["key"]] = dict(f, severity=stricter(f["severity"], comment.get(f["key"], {}).get("severity")))
         seen = set()
         for row in rows or []:
             key = title_key(row["finding"])
@@ -1735,7 +1765,7 @@ def check_dispositions(g, root, head, rec, ledger_text):
             n_qodo += 1
             f = comment.get(key) or {}
             top = TOP_QODO in ((f.get("severity") or "").lower(), row.get("severity", "").strip("` ").lower())
-            label = f"Qodo #{row['#'].strip() or '?'} \"{plain(row['finding'].replace('`', ''))}\""
+            label = f"Qodo #{row['#'].strip() or '?'} \"{' '.join(row['finding'].split())}\""
             reasons += judge(root, head, label, row["disposition"], top, row.get("file", ""), ledger)
         if mode == "on" and q is None:
             reasons.append((f"{path} says qodo: on, but no Code Review comment is archived for this PR", None))
