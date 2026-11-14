@@ -14,6 +14,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
@@ -53,8 +54,11 @@ R = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(R)
 
 
+EXTRA_GIT_ENV = {}  # e.g. commit dates, for one test
+
+
 def g(*args, cwd=CHECKOUT, check=True):
-    r = subprocess.run(["git", *args], cwd=cwd, env=GIT_ENV, capture_output=True, text=True)
+    r = subprocess.run(["git", *args], cwd=cwd, env=dict(GIT_ENV, **EXTRA_GIT_ENV), capture_output=True, text=True)
     if check and r.returncode != 0:
         raise AssertionError(f"git {args} failed: {r.stderr}")
     return r
@@ -661,14 +665,22 @@ def t_checks():
     s = mission()
     sha = s["head"]
 
-    def run(name, status="completed", conclusion="success", id=1):
-        return {"id": id, "name": name, "status": status, "conclusion": conclusion if status == "completed" else None}
+    def run(name, status="completed", conclusion="success", id=1, suite=1):
+        return {"id": id, "name": name, "status": status, "conclusion": conclusion if status == "completed" else None,
+                "check_suite": {"id": suite}}
 
     gh_cfg(check_runs={sha: [run("ci"), run("docs", conclusion="skipped", id=2), run("lint", conclusion="neutral", id=3)]})
     r = gate()
     assert r.returncode == 0 and "3 passed" in line(r, "checks"), out(r)
     gh_cfg(check_runs={sha: [run("ci", conclusion="failure", id=1), run("ci", id=2)]})  # a re-run replaces a failure
     assert gate().returncode == 0
+    # two workflows (check suites) with a job of the same name are two runs (cold M3 R1-9)
+    gh_cfg(check_runs={sha: [run("test", conclusion="failure", id=10, suite=1), run("test", id=11, suite=2)]})
+    r = gate()
+    failed(r, "checks", "failed: test")
+    assert verdict(r) == "gate: FAIL hold reasons 3", out(r)
+    gh_cfg(check_runs={sha: [run("test", id=10, suite=1), run("test", id=11, suite=2)]})
+    assert "2 passed" in line(gate(), "checks")
     gh_cfg(check_runs={sha: [run("ci", conclusion="failure"), run("lint", conclusion="timed_out", id=2)]})
     r = gate()
     assert r.returncode == 6, out(r)
@@ -706,6 +718,40 @@ def t_checks():
     gh_reset()
 
 
+
+def t_checks_wait_while_new_head_has_workflows_but_no_runs():  # cold M3 R1-10
+    assert R.WORKFLOW.fullmatch(".github/workflows/ci.yml") and R.WORKFLOW.fullmatch(".github/workflows/x.yaml")
+    assert not R.WORKFLOW.fullmatch(".github/workflows/sub/ci.yml") and not R.WORKFLOW.fullmatch(".github/ci.yml")
+    g("checkout", "-q", "-B", "main", "origin/main")
+    commit("ci: add a workflow", {".github/workflows/ci.yml": "on: push\n"})
+    g("push", "-q", "origin", "main")
+    try:
+        mission()
+        r = gate()
+        assert r.returncode == 3, out(r)
+        assert "no check runs or statuses for HEAD yet, though it has 1 workflow(s)" in line(r, "checks")
+        assert verdict(r).startswith("gate: WAIT checks: no check runs"), out(r)
+        gh_cfg(protection={"required_status_checks": {"contexts": ["ci"]}})
+        assert gate().returncode == 3, "a new HEAD waits rather than failing on a missing required check"
+        gh_reset()
+        old = f"@{int(time.time()) - 3600} +0000"
+        EXTRA_GIT_ENV.update(GIT_AUTHOR_DATE=old, GIT_COMMITTER_DATE=old)
+        try:
+            mission()
+        finally:
+            EXTRA_GIT_ENV.clear()
+        r = gate()
+        assert r.returncode == 0 and "✓ checks: no checks ran for HEAD" in r.stdout, out(r)
+        gh_cfg(protection={"required_status_checks": {"contexts": ["ci"]}})
+        failed(gate(), "checks", "required but missing: ci")
+    finally:
+        gh_reset()
+        g("checkout", "-q", "-B", "main", "origin/main")
+        commit("ci: drop the workflow", {".github/workflows/ci.yml": None})
+        g("push", "-q", "origin", "main")
+    mission()
+    assert "no checks configured" in line(gate(), "checks"), "a HEAD without workflows"
+
 def t_sensitive_paths():
     mission(extra={".github/workflows/ci.yml": "on: push\n"})
     r = gate()
@@ -741,6 +787,7 @@ def t_sensitive_paths():
 
 def t_allow_hold():
     s = mission(extra={".github/workflows/ci.yml": "on: push\n"})
+    gh_cfg(check_runs={s["head"]: [{"id": 1, "name": "ci", "status": "completed", "conclusion": "success"}]})
     r = gate("--allow-hold", "5")
     assert r.returncode == 1 and "go together" in r.stderr, out(r)
     r = gate("--allow-hold", "5", "--decision", "DECISION-7")
@@ -759,6 +806,7 @@ def t_allow_hold():
     post_raw("DECISION-8: fine, merge it")  # Matthew from GitHub, untagged
     assert gate("--allow-hold", "5", "--decision", "DECISION-8").returncode == 0
     assert gate().returncode == 6, "without --allow-hold the match still holds"
+    gh_reset()
 
 
 def t_pr_check():

@@ -1780,35 +1780,56 @@ def gh_pages(path, key):
         page += 1
 
 
-def check_checks(g, head):
+CHECKS_GRACE = 600  # seconds a new HEAD with workflows may have no runs before "no checks ran" passes
+WORKFLOW = glob_regex(".github/workflows/*.y*ml")
+
+
+def check_checks(g, root, head):
     required, err = required_contexts()
     if err:
         g.fail("checks", [(err, None)])
         return
     rank = {"ok": 0, "pending": 1, "failed": 2}
-    runs = {}  # name -> the newest run of that name: a re-run replaces an older one
+    # filter=latest already drops superseded re-runs; two workflows may each have a job of the same
+    # name, so runs are told apart by check suite as well as by name
+    runs = {}
     for run in gh_pages(f"repos/{REPO}/commits/{head}/check-runs?filter=latest", "check_runs"):
-        if run.get("name") and run.get("id", 0) >= runs.get(run["name"], {}).get("id", 0):
-            runs[run["name"]] = run
-    state = {name: "pending" if run.get("status") != "completed" else
-             "ok" if run.get("conclusion") in ("success", "neutral", "skipped") else "failed"
-             for name, run in runs.items()}
+        key = ((run.get("check_suite") or {}).get("id"), run.get("name"))
+        if run.get("name") and run.get("id", 0) >= runs.get(key, {}).get("id", 0):
+            runs[key] = run
+    results = [(name, "pending" if run.get("status") != "completed" else
+                "ok" if run.get("conclusion") in ("success", "neutral", "skipped") else "failed")
+               for (_, name), run in runs.items()]
+    statuses = {}
     for s in gh_pages(f"repos/{REPO}/commits/{head}/status", "statuses"):
-        if s.get("context"):  # a context reported both ways counts at its worst
+        if s.get("context"):  # a context reported twice counts at its worst
             v = {"success": "ok", "pending": "pending"}.get(s.get("state"), "failed")
-            state[s["context"]] = max(state.get(s["context"], v), v, key=rank.get)
-    failed = sorted(c for c, v in state.items() if v == "failed")
-    missing = sorted(required - set(state))
-    pending = sorted(c for c, v in state.items() if v == "pending")
+            statuses[s["context"]] = max(statuses.get(s["context"], v), v, key=rank.get)
+    results += list(statuses.items())
+    note = "no checks configured"
+    if not results:  # CI may not have created its runs yet: wait while HEAD is new
+        workflows = [p for p in zsplit(git("ls-tree", "-r", "--name-only", "-z", head, "--", ".github/workflows",
+                                           cwd=root).stdout) if WORKFLOW.fullmatch(p)]
+        if workflows:
+            age = int(time.time()) - int(git_out("log", "-1", "--format=%ct", head, cwd=root))
+            if age < CHECKS_GRACE:
+                g.wait("checks", f"no check runs or statuses for HEAD yet, though it has {len(workflows)} "
+                                 f"workflow(s); HEAD is {max(age, 0)}s old (waiting up to {CHECKS_GRACE // 60} minutes)")
+                return
+            note = "no checks ran for HEAD"
+    names = {name for name, _ in results}
+    failed = sorted({c for c, v in results if v == "failed"})
+    missing = sorted(required - names)
+    pending = sorted({c for c, v in results if v == "pending"})
     if failed or missing:
         g.fail("checks", [(t, 3) for t in (f"failed: {', '.join(failed)}" if failed else None,
                                             f"required but missing: {', '.join(missing)}" if missing else None) if t])
     elif pending:
         g.wait("checks", f"pending: {', '.join(pending)}")
-    elif not state:
-        g.ok("checks", "no checks configured")
+    elif not results:
+        g.ok("checks", note)
     else:
-        g.ok("checks", f"{len(state)} passed" + (f" (required: {', '.join(sorted(required))})" if required else ""))
+        g.ok("checks", f"{len(results)} passed" + (f" (required: {', '.join(sorted(required))})" if required else ""))
 
 
 def room_number(playbook, missions):
@@ -1928,7 +1949,7 @@ def run_gate(a, expect_sha=None):
     rec = review_records(root, sha, mission, a.pr)
     check_coverage(g, root, sha, rec)                         # 3
     check_dispositions(g, root, sha, rec, ledger)             # 4
-    check_checks(g, sha)                                      # 5
+    check_checks(g, root, sha)                                # 5
     check_sensitive(g, root, sha, playbook, missions, a)      # 6
     return g.verdict(sha), sha
 
