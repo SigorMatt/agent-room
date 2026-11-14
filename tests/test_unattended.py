@@ -595,19 +595,25 @@ def t_successor_takes_the_lease():
     room("lease", "take", check=True)  # back to L1 for the tests that follow
 
 
-def t_handoff_retries_when_the_branch_moves():
-    set_state("step=build")
+def architect_writes_first(note):
+    """A pre-push hook on the state worktree: on the first push only, the architect (another machine, no
+    checkout) commits NOTE to HANDOFF.md first, so that push loses to an unrelated write. Returns its directory."""
     bdir = os.path.join(tmp, "state", "B")
     b_env = f'ROOM_SESSION=arch ROOM_STATE_DIR="{bdir}" ROOM_STATE_REMOTE="{PET}"'
     room("state", "path", check=True, cwd=tmp, ROOM_STATE_DIR=bdir, ROOM_STATE_REMOTE=PET, ROOM_SESSION="arch")
-    hooks = pre_push(f"""[ -e "$0.fired" ] && exit 0
+    return pre_push(f"""[ -e "$0.fired" ] && exit 0
 touch "$0.fired"
 cd "{tmp}"
 {b_env} "{sys.executable}" "{ROOM}" state sync >/dev/null 2>&1
-echo "- the architect wrote meanwhile" >> "{bdir}/docs/playbook/HANDOFF.md"
+echo "- {note}" >> "{bdir}/docs/playbook/HANDOFF.md"
 {b_env} "{sys.executable}" "{ROOM}" state commit -m "architect: handoff note" >/dev/null 2>&1
 exit 0
 """)
+
+
+def t_handoff_retries_when_the_branch_moves():
+    set_state("step=build")
+    hooks = architect_writes_first("the architect wrote meanwhile")
     n = len(comments())
     try:
         r = room("handoff", "1", "--step", "cold round 1", "--cursor", str(comments()[-1]["id"]))
@@ -619,6 +625,24 @@ exit 0
     b = block()
     assert b["step"] == "cold round 1" and b["lease_session"] == "none", b
     assert "the architect wrote meanwhile" in remote_file("docs/playbook/HANDOFF.md")
+    room("lease", "take", check=True)
+
+
+def t_successor_take_survives_an_unrelated_write():
+    # cold M4 R1-7, fixed by cold M2 R2-5: after a handoff, a successor whose plain take loses its push to the
+    # architect's write retries and wins, instead of standing down with no lead running
+    r = room("handoff", "1", "--step", "cold round 1", "--cursor", str(comments()[-1]["id"]))
+    assert r.returncode == 0 and block()["lease_session"] == "none", out(r)
+    gen = int(block()["lease_generation"])
+    hooks = architect_writes_first("the architect wrote again")
+    try:
+        r = room("lease", "take", ROOM_SESSION="L2")
+    finally:
+        no_hooks()
+    assert os.path.exists(os.path.join(hooks, "pre-push.fired")), "the race hook did not run"
+    assert r.returncode == 0 and r.stdout.strip() == str(gen + 1), out(r)
+    assert block()["lease_session"] == "L2" and "the architect wrote again" in remote_file("docs/playbook/HANDOFF.md")
+    room("lease", "release", check=True, ROOM_SESSION="L2")
     room("lease", "take", check=True)
 
 
