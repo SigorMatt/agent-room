@@ -10,6 +10,17 @@ docs/QODO-REVIEW.md."*
 it once in full before the first command. Nothing here merges a pull request: you read,
 fix, record and report; merging stays with whoever owns the repository.
 
+## In agent-room
+
+This repository uses the method with four deliberate deviations:
+
+1. The lead merges, subject to the merge gate; the doc leaves merging to the owner.
+2. The dispositions table gains a `cold caught` column, marked yes or no.
+3. With no first review, the mission continues on the cold review instead of stopping.
+4. Step 8's report goes to the room and to `QODO-VALUE.md`.
+
+The record formats are in `templates/reviews/` and `docs/design/m3-reviews-gate.md`.
+
 Provenance: the method of the hands project (its `docs/QODO-EXTRACTION.md` and `hands
 hosted-review`), observed on Qodo reviews of several pull requests in October 2026, ported
 here as a standalone tool with no dependency on hands, and checked by a cold dry run against
