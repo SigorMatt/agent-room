@@ -27,8 +27,8 @@ Exit 0 unless an error (1). It never schedules anything.
 
 ## Handover and joining helpers
 
-- `room.py join-line N` prints the line that starts a lead: `Join agent room N in OWNER/NAME as lead, pipeline <VERSION>. Follow LEAD.md: https://github.com/SigorMatt/agent-room/blob/<VERSION>/LEAD.md`.
-- `room.py handoff N --step STEP` records `step` and the room cursor (`cursor` from `room.py cursor N lead`) and `intent=schedule successor`, posts `HANDOFF: mission <mission>, next step <STEP>` and prints the join line for the scheduled task. The agent then schedules the task, and runs `state set intent=none`. If scheduling fails, the agent posts `NEXT-LEAD-NEEDED` (it buzzes).
+- `room.py join-line N [--takeover]` prints the line that starts a lead: `Join agent room N in OWNER/NAME as lead, pipeline <VERSION>. Follow LEAD.md: https://github.com/SigorMatt/agent-room/blob/<VERSION>/LEAD.md`. With `--takeover` it adds `Take over the lease (lease take --takeover): the previous lead stopped without handing over.`, for the lead Matthew starts after `LEAD-SILENT`.
+- `room.py handoff N --step STEP` posts `HANDOFF: mission <mission>, next step <STEP>` while it still holds the lease, then in one state write records `step`, the room cursor and `intent=none`, and releases the lease (`lease_session: none`). It prints the join line for the scheduled task, and the agent schedules it. If scheduling fails, the agent posts `NEXT-LEAD-NEEDED` (it buzzes); a released lease doesn't block that post. The successor's plain `lease take` wins, and a duplicate launch finds the lease held and stands down.
 - `room.py reconcile N` prints, for a joining lead, the recorded state next to GitHub's facts: the machine block; the recorded PR's state (open, merged with its merge sha, closed); whether the room holds the recorded `ESCALATION-n`/`MERGE-HOLD-n`/`HANDOFF`; and the recorded `intent`, with a one-line hint (`intent done: clear it`, `intent not done: redo it`). It changes nothing.
 
 ## Budgets
@@ -37,7 +37,7 @@ Exit 0 unless an error (1). It never schedules anything.
 
 ## Pause, stop, done
 
-- `room.py state set status=paused|stopped|done` is used by the lead before posting `PAUSED`, `STOPPED` or `DONE`. The watchdog then stays quiet.
+- `room.py state set status=paused|stopped|done` is used by the lead before posting `PAUSED`, `STOPPED` or `DONE`; after posting, it runs `lease release`. The watchdog then stays quiet, and the next lead joins with a plain `lease take`.
 
 ## Drill hooks
 
