@@ -261,6 +261,9 @@ def t_watchdog_one_alarm_per_stall():
     assert r.returncode == 0 and re.search(r"^quiet: LEAD-SILENT #\d+ at \S+ already reports this stall$", r.stdout,
                                            re.M), out(r)
     assert len(alarms()) == n and len(buzzes()) == nb and state_sha() == before
+    # cold M4 R1-6: ROOM_TRUST adds a login; the watchdog's own alarm (from the gh login) still counts
+    r = watchdog(ROOM_TRUST="matt-alt")
+    assert "already reports this stall" in r.stdout and len(alarms()) == n, out(r)
     age_alarms(6)  # older than the progress (5 hours ago): that alarm was for an earlier stall
     r = watchdog()
     assert r.returncode == 0 and "alarm" in r.stdout and len(alarms()) == n + 1, out(r)

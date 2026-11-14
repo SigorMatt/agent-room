@@ -52,7 +52,7 @@ the gate) and 6 if GitHub finds the PR not mergeable.
 Environment:
   ROOM_REPO         default repo for rooms
   ROOM_SESSION      this participant's session ID (see --session)
-  ROOM_TRUST        comma-separated GitHub logins whose comments count (default: your gh login)
+  ROOM_TRUST        comma-separated GitHub logins whose comments count besides your gh login's
   ROOM_STATE        where read cursors live (default ~/.agent-room)
   ROOM_STATE_DIR    the state branch's worktree (default ~/agent-room-state/OWNER__NAME)
   ROOM_STATE_REMOTE git URL to clone the state branch from when not run inside the project's checkout
@@ -2541,8 +2541,9 @@ def main():
     if not REPO:
         sys.exit("which repo? Run inside the project's checkout, or pass --repo OWNER/NAME")
     try:
+        # v1: ROOM_TRUST adds logins to the gh login; it never replaces it
         env_trust = os.environ.get("ROOM_TRUST", "")
-        TRUST = {s.strip().lower() for s in env_trust.split(",") if s.strip()} or default_trust()
+        TRUST = default_trust() | {s.strip().lower() for s in env_trust.split(",") if s.strip()}
         sys.exit(a.fn(a) or 0)
     except GhError as e:
         sys.exit(f"github error: {e}")
