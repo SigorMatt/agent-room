@@ -774,11 +774,20 @@ def t_pr_check():
         assert verdict(r) == "gate: FAIL hold reasons none; fix first: PR"
     set_pr(s["c2"])  # the PR says one head, origin has another
     failed(gate(), "PR", "it moved")
-    g("push", "-q", "-f", "origin", "HEAD:refs/heads/mission/gate-x")
-    set_pr(s["head"], ref="mission/gate-x")
+    g("push", "-q", "-f", "origin", "HEAD:refs/heads/mission/gate-M3")
+    set_pr(s["head"], ref="mission/gate-M3")
     failed(gate(), "PR", "not a mission/M<k>-… branch")
     r = gate("--mission", "M3")
     assert r.returncode == 0 and "(mission M3)" in line(r, "PR"), out(r)
+    # --mission must agree with the mission the head ref names (cold M3 R1-8)
+    failed(gate("--mission", "M2"), "PR", "has head mission/gate-M3, which names M3, not --mission M2")
+    g("push", "-q", "-f", "origin", "HEAD:refs/heads/mission/gate-x")
+    set_pr(s["head"], ref="mission/gate-x")
+    failed(gate("--mission", "M3"), "PR", "which names no mission, not --mission M3")
+    set_pr(s["head"])
+    r = gate("--mission", "M2")
+    assert r.returncode == 6 and "which names M3, not --mission M2" in line(r, "PR"), out(r)
+    assert gate("--mission", "M3").returncode == 0
     r = room("gate", "99")
     assert r.returncode == 1 and "github error" in r.stderr, out(r)
     set_pr(s["head"])

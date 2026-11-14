@@ -1889,8 +1889,11 @@ def run_gate(a, expect_sha=None):
     if head_repo.lower() != REPO.lower():
         problems.append(f"has its head in {head_repo or 'an unknown repo'}, not {REPO}")
     m = re.fullmatch(r"mission/(M\d+)(?:-.+)?", ref)
+    named = re.findall(r"(?<![A-Za-z0-9])M\d+(?![A-Za-z0-9])", ref)  # missions the head ref names
     if not ref.startswith("mission/") or not (m or a.mission):
         problems.append(f"has head {ref or '?'}, not a mission/M<k>-… branch")
+    elif a.mission and a.mission not in named:
+        problems.append(f"has head {ref}, which names {', '.join(named) or 'no mission'}, not --mission {a.mission}")
     if not SHA40.fullmatch(sha):
         problems.append("has no head sha")
     if problems:
