@@ -2443,9 +2443,15 @@ def intent_hint(a, intent, path, msgs, pr):
             return f"intent done: clear it ({kind} is in the room: #{hits[-1]['id']})"
         return f"intent not done: redo it (no {kind} in the room" + (" since the intent was recorded)" if since else ")")
     if re.fullmatch(r"close (?:the )?room", intent):
-        if is_closed(a.room):
-            return f"intent done: clear it (room {a.room} is closed)"
-        return f"intent not done: redo it (room {a.room} is open)"
+        issue = gh(f"repos/{REPO}/issues/{a.room}") or {}
+        if issue.get("state") != "closed":
+            return f"intent not done: redo it (room {a.room} is open)"
+        # close closes the issue first, then posts its note: both must have happened (GitHub's clock on both)
+        closed = parse_time(issue.get("closed_at"))
+        notes = [x for x in leads if closed is not None and (parse_time(x["at"]) or 0) >= closed]
+        if notes:
+            return f"intent done: clear it (room {a.room} is closed, closing note #{notes[-1]['id']})"
+        return f"intent not done: redo it (room {a.room} is closed, but no lead message came after it closed)"
     return ("intent unknown: check it by hand (reconcile knows: merge PR #<n> at <sha>, open PR <branch or M<k>>, "
             "post <KIND>, close room)")
 
