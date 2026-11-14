@@ -22,3 +22,8 @@
 | R2-3 | low | room.py | An unreadable lease blocks every lead `say` and `close` | fixed in 2dd7a48 | They post with a warning when MISSIONS.md is missing or its block unparseable; git errors still refuse; regression test (fixed in 354c618); repro e2 E3, e6 |
 | R2-4 | low | room.py | `state commit` can't repair a broken block | fixed in 6334a71 | The commit goes ahead with a warning while the pushed lease is unreadable; regression test; repro e6 |
 | R2-5 | low | room.py | `lease take` stands down after losing to an unrelated write | fixed in d938e1a | Re-syncs and retries once if the lease is free, ours or unchanged; stands down only if another session took it; regression test; repro e5 |
+| S1-1 | medium | room.py | While the block is unreadable, any session can commit lead-owned changes | fixed in 56dcb71 | The last `lease_session:` line still decides; another session is refused (exit 5); regression test `t_broken_fence_still_names_the_holder`; repro e4 |
+| S1-2 | low | room.py | While the block is unreadable, a superseded lead can post and close | fixed in 56dcb71 | Same rule for `say` and `close`; regression test; repro e8 |
+| S1-3 | low | room.py | A stale worktree with local work is moved aside silently and loses its commits | deferred: B-2 to M4 | BUILD-STATE.md, "Deferred to later milestones" |
+| S1-4 | low | room.py | From outside the checkout, a misconfigured state dir naming the project checkout is moved aside | deferred: B-2 to M4 | BUILD-STATE.md, "Deferred to later milestones" |
+| S1-5 | low | room.py | From inside a stale state worktree, R2-2 is still unfixed | deferred: B-2 to M4 | BUILD-STATE.md, "Deferred to later milestones" |
