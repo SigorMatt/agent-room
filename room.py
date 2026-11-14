@@ -558,6 +558,10 @@ class StateMoved(Exception):
     """A push to the state branch was rejected because someone else pushed first."""
 
 
+class BlockUnreadable(StateError):
+    """MISSIONS.md, or the machine block in it, is missing or broken: no lease can be read."""
+
+
 class StateExit(Exception):
     """Stop with this exit code and message (5: the lease is someone else's; 3: stand down)."""
 
@@ -828,7 +832,7 @@ def add_missing(names, msg):
 def read_block(text):
     m = STATE_BLOCK.search(text)
     if not m:
-        raise StateError(f"{PLAYBOOK_DIR}/MISSIONS.md has no agent-room-state block")
+        raise BlockUnreadable(f"{PLAYBOOK_DIR}/MISSIONS.md has no agent-room-state block")
     values = {}
     for line in m.group(1).splitlines():
         key, sep, value = line.partition(":")
@@ -902,19 +906,23 @@ def lease_holder():
     path = ensure_worktree()  # fetched
     text = pushed_text(path, "MISSIONS.md")
     if text is None:
-        raise StateError(f"{PLAYBOOK_DIR}/MISSIONS.md is missing on {STATE_BRANCH}: run '{ME} state init-lead'")
+        raise BlockUnreadable(f"{PLAYBOOK_DIR}/MISSIONS.md is missing on {STATE_BRANCH}: run '{ME} state init-lead'")
     return lease_of(read_block(text))
 
 
 def lease_guard(a, kind=None):
     """Lease check on send, for say and close: a lead with a state worktree may not post while
     another session holds the lease (exit 5). A released lease (none) doesn't block, so a
-    retiring lead can still post NEXT-LEAD-NEEDED. No kind is exempt; KIND is unused."""
+    retiring lead can still post NEXT-LEAD-NEEDED, and neither does an unreadable one (a missing
+    MISSIONS.md or a broken block), with a warning. No kind is exempt; KIND is unused."""
     if a.role != "lead" or not state_worktree_exists():
         return
     sid = session_id(a)
     try:
         holder, gen = lease_holder()
+    except BlockUnreadable as e:  # no session can be shown to hold it, and the lead must be able to say so
+        print(f"[lease unreadable, posting anyway: {e}]", file=sys.stderr)
+        return
     except StateError as e:
         sys.exit(f"not sent: lease check failed: {e}")
     if holder not in (sid, "none"):

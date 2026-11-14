@@ -423,6 +423,40 @@ def t_recreated_state_branch_rebuilds_stale_worktrees():
     assert os.path.exists(os.path.join(work, "docs", "playbook", "notes.md"))
 
 
+def push_edit(repo, name, fn):
+    """Edit a playbook file on the state branch from another clone, as a hand edit on GitHub would."""
+    other = tempfile.mkdtemp(dir=tmp, prefix="edit-")
+    g("clone", "-q", "--branch", "agent-room/state", repo, other)
+    path = os.path.join(other, "docs", "playbook", name)
+    open(path, "w").write(fn(open(path).read()))
+    g("-C", other, "commit", "-qam", f"hand edit of {name}")
+    g("-C", other, "push", "-q", "origin", "HEAD:agent-room/state")
+
+
+AGAIN = dict(cwd=os.path.join(tmp, "work", "again"), ROOM_REPO="SigorMatt/again", state="GA")
+BREAK_FENCE = ("```agent-room-state", "``` agent-room-state")
+
+
+def t_unreadable_lease_does_not_block_posting():
+    # cold M2 R2-3: with MISSIONS.md missing or its block broken, nobody can be shown to hold the lease
+    assert "room 1 in SigorMatt/again" in room("new", "Phase 1", **AGAIN).stdout
+    r = room("say", "1", "lead", "ESCALATION-1: preflight fails, need X", session="L1", **AGAIN)
+    assert "sent #" in r.stdout and len(r.stderr.strip().splitlines()) == 1, (r.stdout, r.stderr)
+    assert r.stderr.startswith("[lease unreadable, posting anyway: ") and "MISSIONS.md is missing" in r.stderr
+    room("state", "init-lead", session="L1", **AGAIN)
+    room("lease", "take", session="L1", **AGAIN)
+    assert room("say", "1", "lead", "STATUS: held", session="L2", check=False, **AGAIN).returncode == 5
+    push_edit(os.path.join(tmp, "git", "SigorMatt", "again.git"), "MISSIONS.md", lambda t: t.replace(*BREAK_FENCE, 1))
+    for session in ("L1", "L2"):
+        r = room("say", "1", "lead", f"ESCALATION-2: MISSIONS.md block broken ({session})", session=session, **AGAIN)
+        assert "sent #" in r.stdout and "has no agent-room-state block" in r.stderr, (r.stdout, r.stderr)
+    r = room("lease", "check", session="L1", check=False, **AGAIN)
+    assert r.returncode == 1 and "has no agent-room-state block" in r.stderr, "lease check still reports it"
+    transcript = room("read", "1", "--all", **AGAIN).stdout
+    assert "preflight fails" in transcript and "(L1)" in transcript and "(L2)" in transcript
+    assert "STATUS: held" not in transcript
+
+
 # --- lease
 
 def t_lease_take_race():
