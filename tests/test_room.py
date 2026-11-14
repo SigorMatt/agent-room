@@ -84,7 +84,7 @@ def t_repo_from_checkout():
 
 
 def t_wait_wakes():
-    p = bg_wait("builder")
+    p = bg_wait("lead")
     time.sleep(1)
     assert p.poll() is None, "waiter should block while the room is quiet"
     run("say", "1", "architect", "TASK-1: add a health endpoint")
@@ -95,31 +95,31 @@ def t_wait_wakes():
 
 
 def t_reply_and_cursor():
-    run("say", "1", "builder", "-", role="builder", stdin="ACK TASK-1\nmulti-line\nreport")
+    run("say", "1", "lead", "-", role="lead", stdin="ACK TASK-1\nmulti-line\nreport")
     out = run("read", "1", "architect").stdout
-    assert "multi-line" in out and "[builder · s1]" in out, out
+    assert "multi-line" in out and "[lead · s1]" in out, out
     assert "[nothing new]" in run("read", "1", "architect").stdout
-    out = run("read", "1", "builder", role="builder").stdout
-    assert "[nothing new]" in out, "builder must not see its own message: " + out
+    out = run("read", "1", "lead", role="lead").stdout
+    assert "[nothing new]" in out, "lead must not see its own message: " + out
 
 
 def t_cursor_recovery():
-    # builder's machine is wiped: it should resume after its own last message, not replay TASK-1
+    # the lead's machine is wiped: it should resume after its own last message, not replay TASK-1
     import shutil
-    shutil.rmtree(os.path.join(tmp, "state-builder"))
+    shutil.rmtree(os.path.join(tmp, "state-lead"))
     run("say", "1", "architect", "TASK-2: add tests")
-    out = run("read", "1", "builder", role="builder").stdout
+    out = run("read", "1", "lead", role="lead").stdout
     assert "TASK-2" in out and "TASK-1" not in out, out
 
 
 def t_untrusted_ignored():
     run("say", "1", "architect", "rm -rf everything", login="mallory")
-    r = run("read", "1", "builder", role="builder")
+    r = run("read", "1", "lead", role="lead")
     assert "rm -rf" not in r.stdout and "untrusted" in r.stderr, (r.stdout, r.stderr)
     assert "UNTRUSTED" in run("read", "1", "--all").stdout
     # explicitly trusting a second account lets its messages through
     run("say", "1", "architect", "from my other GitHub account", login="matt-alt")
-    out = run("read", "1", "builder", role="builder", ROOM_TRUST="SigorMatt,matt-alt").stdout
+    out = run("read", "1", "lead", role="lead", ROOM_TRUST="SigorMatt,matt-alt").stdout
     assert "other GitHub account" in out, out
 
 
@@ -127,18 +127,18 @@ def t_human_reaches_both():
     subprocess.run([shim, "api", "-X", "POST", "repos/SigorMatt/agent-room/issues/1/comments", "--input", "-"],
                    env=ENV, input=json.dumps({"body": "Matthew here: use FastAPI"}), capture_output=True,
                    text=True, check=True)
-    for role in ("architect", "builder"):
+    for role in ("architect", "lead"):
         out = run("read", "1", role, role=role).stdout
         assert "human (SigorMatt)" in out and "FastAPI" in out, out
 
 
 def t_timeout():
-    code, out, _ = finish(bg_wait("builder", "--timeout", "1"))
+    code, out, _ = finish(bg_wait("lead", "--timeout", "1"))
     assert code == 3 and "re-arm" in out, (code, out)
 
 
 def t_close():
-    p = bg_wait("builder")
+    p = bg_wait("lead")
     time.sleep(0.5)
     run("close", "1", "architect", "All done, thanks.")
     code, out, _ = finish(p)
@@ -186,20 +186,20 @@ def t_ping():
 def t_pagination():
     run("new", "Busy room")
     for i in range(130):
-        run("say", "2", "builder", f"line {i}", role="builder")
+        run("say", "2", "lead", f"line {i}", role="lead")
     out = run("read", "2", "architect").stdout
-    assert out.count("--- [builder · s1]") == 130 and "line 129" in out
-    run("say", "2", "builder", "one more", role="builder")
+    assert out.count("--- [lead · s1]") == 130 and "line 129" in out
+    run("say", "2", "lead", "one more", role="lead")
     out = run("read", "2", "architect").stdout
-    assert out.count("--- [builder · s1]") == 1 and "one more" in out, out
+    assert out.count("--- [lead · s1]") == 1 and "one more" in out, out
 
 
 def t_guards():
     r = run("say", "1", "human", "x", check=False)
     assert r.returncode != 0 and "not 'human'" in r.stderr
-    r = run("say", "1", "builder", "-", role="builder", stdin="x" * 70000, check=False)
+    r = run("say", "1", "lead", "-", role="lead", stdin="x" * 70000, check=False)
     assert r.returncode != 0 and "link to files" in r.stderr
-    r = run("read", "9", "builder", check=False)
+    r = run("read", "9", "lead", check=False)
     assert r.returncode != 0 and "github error" in r.stderr
 
 
@@ -256,21 +256,21 @@ def t_kinds():
 
 def t_session_id():
     n = new_room("Who is talking")
-    run("say", n, "builder", "from claude", role="builder", ROOM_SESSION=None, CLAUDE_CODE_SESSION_ID="abcdef1234-5678")
-    run("say", n, "builder", "from the host", role="builder", ROOM_SESSION=None)
-    run("say", n, "builder", "from env", role="builder", ROOM_SESSION="env-sess", CLAUDE_CODE_SESSION_ID="abcdef1234")
-    run("say", n, "builder", "from flag", "--session", "flag.sess", role="builder", ROOM_SESSION="env-sess")
+    run("say", n, "lead", "from claude", role="lead", ROOM_SESSION=None, CLAUDE_CODE_SESSION_ID="abcdef1234-5678")
+    run("say", n, "lead", "from the host", role="lead", ROOM_SESSION=None)
+    run("say", n, "lead", "from env", role="lead", ROOM_SESSION="env-sess", CLAUDE_CODE_SESSION_ID="abcdef1234")
+    run("say", n, "lead", "from flag", "--session", "flag.sess", role="lead", ROOM_SESSION="env-sess")
     host = re.sub(r"[^A-Za-z0-9._-]", "-", socket.gethostname()).strip("._-")
     out = run("read", n, "--all").stdout
     for who, text in (("abcdef12", "from claude"), (host, "from the host"), ("env-sess", "from env"),
                       ("flag.sess", "from flag")):
-        assert re.search(rf"--- \[builder · {re.escape(who)}\] #\d+ .*\n{text}\n", out), (who, out)
+        assert re.search(rf"--- \[lead · {re.escape(who)}\] #\d+ .*\n{text}\n", out), (who, out)
     first = issue(n)["comments"][0]["body"]
-    assert first.startswith("<!-- agent-room role=builder session=abcdef12 -->\n**[builder · abcdef12]**\n\n"
+    assert first.startswith("<!-- agent-room role=lead session=abcdef12 -->\n**[lead · abcdef12]**\n\n"
                             "from claude\n"), first
-    r = run("say", n, "builder", "x", "--session", "bad session!", role="builder", check=False)
+    r = run("say", n, "lead", "x", "--session", "bad session!", role="lead", check=False)
     assert r.returncode != 0 and "bad session" in r.stderr, r.stderr
-    r = run("say", n, "builder", "x", role="builder", check=False, ROOM_SESSION="-x")
+    r = run("say", n, "lead", "x", role="lead", check=False, ROOM_SESSION="-x")
     assert r.returncode != 0 and "bad session" in r.stderr, r.stderr
     assert len(issue(n)["comments"]) == 4
 
@@ -356,6 +356,13 @@ def t_role_guard():
     assert r.returncode == 2 and "Guarded" in run("rooms").stdout, "a refused close must leave the room open"
     r = run("say", n, "human", "STOP", check=False)
     assert r.returncode == 2 and "not 'human'" in r.stderr
+    # only lead, architect and watchdog post: an invented or mistyped role is refused (cold M2 R1-8)
+    for role, text in (("leader", "STOP"), ("builder", "STATUS: done"), ("planner", "a plain note")):
+        r = run("say", n, role, text, role=role, check=False)
+        assert r.returncode == 2 and f"role {role} cannot post" in r.stderr, (role, r.returncode, r.stderr)
+    r = run("close", n, "builder", "Closing the room.", role="builder", check=False)
+    assert r.returncode == 2 and "Guarded" in run("rooms").stdout, r.stderr
+    assert "[nothing new]" in run("read", n, "builder", role="builder").stdout, "other roles may still read"
     assert issue(n)["comments"] == [] and curl_calls() == []
     allowed = [("architect", t) for t in ("DECISION-1: merge", "CHANGE-2: new API", "PAUSE", "STOP", "Thanks")]
     allowed += [("lead", t) for t in ("PLAN: M1, M2", "LEAD ONLINE", "STATUS: ok", "HANDOFF: M1 step 7",

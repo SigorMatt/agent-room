@@ -26,9 +26,10 @@ without it: $ROOM_SESSION, else the first 8 characters of $CLAUDE_CODE_SESSION_I
 else the hostname. read and wait hide only this role's messages from this session,
 so a lead sees other leads' messages.
 
-A message's kind is its leading token: STATUS, ESCALATION-3, MERGE-HOLD-4,
-LEAD ONLINE, ACK DECISION-2. The role guard refuses a kind that belongs to another
-role (exit 2, nothing posted). `say` pushes a phone notification through ntfy for
+Only the roles lead, architect and watchdog post; any role may read. A message's
+kind is its leading token: STATUS, ESCALATION-3, MERGE-HOLD-4, LEAD ONLINE,
+ACK DECISION-2. The role guard refuses another role, or a kind that belongs to
+another role (exit 2, nothing posted). `say` pushes a phone notification through ntfy for
 ESCALATION, MERGE-HOLD, NEXT-LEAD-NEEDED, PAUSED, STOPPED, DONE and LEAD-SILENT;
 --buzz forces one, --no-buzz suppresses it. A push carries only the kind and the
 room, never the content.
@@ -77,6 +78,7 @@ LEAD_CANNOT = {"DECISION", "CHANGE", "PAUSE", "STOP"}
 ARCHITECT_CANNOT = {"PLAN", "LEAD ONLINE", "STATUS", "ESCALATION", "MERGE-HOLD", "HANDOFF",
                     "NEXT-LEAD-NEEDED", "PAUSED", "STOPPED", "DONE"}  # and every ACK
 WATCHDOG_CAN = {"LEAD-SILENT"}
+POSTING_ROLES = ("lead", "architect", "watchdog")  # anyone else may read, never post
 
 REPO = None         # set in main()
 TRUST = set()       # set in main()
@@ -211,6 +213,8 @@ def base_kind(kind):
 def guard_error(role, kind):
     """Why ROLE may not send a message of KIND, or None if it may."""
     base = base_kind(kind)
+    if role not in POSTING_ROLES:
+        return f"role {role} cannot post; only {', '.join(POSTING_ROLES)} do"
     if role == "lead" and base in LEAD_CANNOT:
         return f"a lead cannot send {kind}; that is for the architect or Matthew"
     if role == "architect" and (base in ARCHITECT_CANNOT or re.match(r"ACK\b", base or "")):
