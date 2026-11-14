@@ -250,9 +250,11 @@ def t_watchdog_stale_alarms():
     assert r.returncode == 0, out(r)
     assert "alarm: no progress for 5h" in r.stdout and "sent #" in r.stdout and "[buzz sent]" in r.stdout, out(r)
     [alarm] = alarms()
-    assert text_of(alarm) == f"LEAD-SILENT: no progress since {iso(t)} (step build, mission M1)", text_of(alarm)
+    assert text_of(alarm) == f"LEAD-SILENT: no progress since {iso(t)} (step build, mission M1) (buzz sent)", \
+        text_of(alarm)
     assert tag(alarm) == ("watchdog", "wd")
     assert len(buzzes()) == n + 1 and "Title: LEAD-SILENT · pet room 1" in buzzes()[-1], buzzes()[-1]
+    assert "Click: https://github.com/SigorMatt/pet/issues/1" in buzzes()[-1], "the buzz opens the room"
     assert "topic-secret" not in r.stdout + r.stderr
     assert state_sha() == before, "the watchdog never writes state"
 
@@ -277,6 +279,25 @@ def t_watchdog_one_alarm_per_stall():
     assert r.returncode == 0 and "alarm" in r.stdout and len(alarms()) == n + 2, out(r)
 
 
+def t_watchdog_retries_a_failed_buzz():
+    # cold M4 R1-3: it buzzes first, then posts how that went; an alarm whose buzz failed doesn't count
+    age_alarms(6)
+    n, nb = len(alarms()), len(buzzes())
+    r = watchdog(ROOM_NTFY_TOPIC=None)
+    assert r.returncode == 0 and "[buzz failed: ROOM_NTFY_TOPIC is not set]" in r.stdout, out(r)
+    assert text_of(alarms()[-1]).endswith(" (step build, mission M1) (buzz failed: ROOM_NTFY_TOPIC is not set)")
+    assert len(buzzes()) == nb
+    r = watchdog(FAKE_CURL_FAIL="429 Too Many Requests")
+    assert r.returncode == 0 and "[buzz failed: curl: (22)" in r.stdout, out(r)
+    text = text_of(alarms()[-1])
+    assert "(buzz failed: curl: (22) The requested URL returned error: 429" in text and "topic-secret" not in text, text
+    assert len(buzzes()) == nb + 1, "one try, and the post itself doesn't buzz"
+    r = watchdog()
+    assert "[buzz sent]" in r.stdout and text_of(alarms()[-1]).endswith(" (buzz sent)"), out(r)
+    assert len(alarms()) == n + 3 and len(buzzes()) == nb + 2
+    assert "already reports this stall" in watchdog().stdout
+
+
 def t_watchdog_recent_step_change():
     age_alarms()
     set_state("step=cold round 1")
@@ -290,7 +311,7 @@ def t_watchdog_recent_step_change():
     assert r.returncode == 0 and "quiet: progress 1h00m ago" in r.stdout, out(r)
     r = watchdog("--silent-after", "45m")  # drills use a short one
     assert r.returncode == 0 and "alarm: no progress for 1h" in r.stdout, out(r)
-    assert text_of(alarms()[-1]) == f"LEAD-SILENT: no progress since {iso(t)} (step cold round 2, mission M1)"
+    assert text_of(alarms()[-1]) == f"LEAD-SILENT: no progress since {iso(t)} (step cold round 2, mission M1) (buzz sent)"
     for bad in ("3x", "0m", "", "h"):
         r = watchdog("--silent-after", bad)
         assert r.returncode == 2 and "duration" in r.stderr, (bad, out(r))
@@ -308,7 +329,7 @@ def t_watchdog_recent_mission_push():
     t = push_mission(4)  # the newest tip, committed four hours ago: progress is the later of it and the step change
     r = watchdog()
     assert r.returncode == 0 and "alarm: no progress for 4h" in r.stdout, out(r)
-    assert text_of(alarms()[-1]) == f"LEAD-SILENT: no progress since {iso(t)} (step gate, mission M1)"
+    assert text_of(alarms()[-1]) == f"LEAD-SILENT: no progress since {iso(t)} (step gate, mission M1) (buzz sent)"
     for branch in (MISSION_BRANCH, "mission/M0-old"):  # merged and deleted, as GitHub does
         g("push", "-q", "origin", "--delete", branch)
     g("checkout", "-q", "-B", "main", "origin/main")
@@ -468,7 +489,7 @@ def t_watchdog_without_a_checkout():
     before = state_sha()
     r = watchdog(**kw)
     assert r.returncode == 0 and "alarm" in r.stdout, out(r)
-    assert text_of(alarms()[-1]) == f"LEAD-SILENT: no progress since {iso(t)} (step spec, mission M1)"
+    assert text_of(alarms()[-1]) == f"LEAD-SILENT: no progress since {iso(t)} (step spec, mission M1) (buzz sent)"
     assert state_sha() == before
     r = watchdog(**kw)
     assert "already reports this stall" in r.stdout, out(r)

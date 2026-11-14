@@ -2173,9 +2173,10 @@ def quiet_reason(a, values, playbook):
     return None
 
 
-def say(room, role, text, a=None):
-    """Post TEXT as ROLE through cmd_say: its role guard, its lease check on send and its buzz."""
-    cmd_say(argparse.Namespace(room=room, role=role, text=text, buzz=None, session=getattr(a, "session", None)))
+def say(room, role, text, a=None, buzz=None):
+    """Post TEXT as ROLE through cmd_say: its role guard, its lease check on send and its buzz (BUZZ as
+    --buzz/--no-buzz: None leaves it to the kind)."""
+    cmd_say(argparse.Namespace(room=room, role=role, text=text, buzz=buzz, session=getattr(a, "session", None)))
 
 
 def shallow_cut(path, sha):
@@ -2275,13 +2276,19 @@ def cmd_watchdog(a):
         print(f"quiet: progress {span(now - progress)} ago ({what} at {iso(progress)}), "
               f"under {span(a.silent_after)}")
         return 0
-    for m in map(parse, comments(a.room, iso(progress))):  # one alarm per stall
+    for m in map(parse, comments(a.room, iso(progress))):  # one alarm per stall, unless its buzz failed
         t = parse_time(m["at"])
-        if m["role"] == "watchdog" and trusted(m) and message_kind(m["text"]) == "LEAD-SILENT" and t and t > progress:
+        if m["role"] == "watchdog" and trusted(m) and message_kind(m["text"]) == "LEAD-SILENT" and t and \
+                t > progress and not re.search(r"\(buzz failed\b", m["text"]):
             print(f"quiet: LEAD-SILENT #{m['id']} at {m['at']} already reports this stall")
             return 0
     print(f"alarm: no progress for {span(now - progress)} ({what} at {iso(progress)})")
-    say(a.room, "watchdog", f"LEAD-SILENT: no progress since {iso(progress)} (step {step}, mission {mission})", a)
+    # buzz first (click: the room), then post saying how it went: an alarm whose buzz failed doesn't count above,
+    # so the next run tries again
+    err = buzz_message(a.room, "watchdog", "LEAD-SILENT", {})
+    print("[buzz sent]" if err is None else f"[buzz failed: {err}]")
+    say(a.room, "watchdog", f"LEAD-SILENT: no progress since {iso(progress)} (step {step}, mission {mission}) " +
+        ("(buzz sent)" if err is None else f"(buzz failed: {err})"), a, buzz=False)
     return 0
 
 
