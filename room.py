@@ -910,17 +910,33 @@ def lease_holder():
     return lease_of(read_block(text))
 
 
+def other_holder_named(text, sid):
+    """For a MISSIONS.md whose block won't parse: the other session its last `lease_session: X` line
+    still names, fence or no fence, or None when it names this session, none, or no one (or the
+    file is missing). A broken fence doesn't free the lease."""
+    found = re.findall(r"^[ \t]*lease_session:[ \t]*(\S+)", text or "", re.M)
+    holder = found[-1] if found else None
+    return holder if holder not in (None, "none", sid) else None
+
+
 def lease_guard(a, kind=None):
     """Lease check on send, for say and close: a lead with a state worktree may not post while
     another session holds the lease (exit 5). A released lease (none) doesn't block, so a
-    retiring lead can still post NEXT-LEAD-NEEDED, and neither does an unreadable one (a missing
-    MISSIONS.md or a broken block), with a warning. No kind is exempt; KIND is unused."""
+    retiring lead can still post NEXT-LEAD-NEEDED. An unreadable one (a missing MISSIONS.md or a
+    broken block) blocks only if its text still names another holder; otherwise it warns and posts.
+    No kind is exempt; KIND is unused."""
     if a.role != "lead" or not state_worktree_exists():
         return
     sid = session_id(a)
     try:
         holder, gen = lease_holder()
-    except BlockUnreadable as e:  # no session can be shown to hold it, and the lead must be able to say so
+    except BlockUnreadable as e:
+        other = other_holder_named(pushed_text(state_path(), "MISSIONS.md"), sid)
+        if other:
+            print(f"not sent: the lease block is unreadable ({e}), but it still names {other} as the holder, "
+                  f"not this session ({sid})", file=sys.stderr)
+            sys.exit(EXIT_LEASE)
+        # the holder, or no one: the lead must be able to report the problem
         print(f"[lease unreadable, posting anyway: {e}]", file=sys.stderr)
         return
     except StateError as e:
@@ -988,11 +1004,17 @@ def cmd_state_commit(a):
     if touched:  # lead-owned files need the lease, read from the freshly fetched branch
         fetch(path)
         text = pushed_text(path, "MISSIONS.md")
+        doing = f"not committed ({', '.join(touched)} are lead-owned)"
         try:
             if text is None:
                 raise BlockUnreadable(f"{PLAYBOOK_DIR}/MISSIONS.md is missing on {STATE_BRANCH}")
-            require_lease(read_block(text), session_id(a), f"not committed ({', '.join(touched)} are lead-owned)")
-        except BlockUnreadable as e:  # no one holds a lease that can't be read; let the repair through
+            require_lease(read_block(text), session_id(a), doing)
+        except BlockUnreadable as e:
+            other = other_holder_named(text, session_id(a))
+            if other:
+                raise StateExit(EXIT_LEASE, f"{doing}: the lease block is unreadable ({e}), but it still names "
+                                            f"{other} as the holder, not this session ({session_id(a)})")
+            # the holder, or no one: let the repair through
             print(f"[lease unreadable, committing anyway: {e}]", file=sys.stderr)
     if commit_and_push(path, a.message):
         print(f"pushed {git_out('rev-parse', '--short', 'HEAD', cwd=path)} to {STATE_BRANCH}")
