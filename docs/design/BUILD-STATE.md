@@ -42,7 +42,7 @@ Results of the eleven assumptions in `v1.md` ("To verify"). Evidence lives in is
 | 2 | Push `mission/*`, task branches and `agent-room/state` | Pass: no prefix needed. **Finding A** below |
 | 3 | Read branch protection, rulesets and bypass | Pass on a public repo. **Finding B** below |
 | 4 | A session schedules its successor; it gets the repo, runs without approvals, uses the right environment | Pass except the environment: the scheduled session started in auto mode with no approval prompts, had the caller's repos checked out with push access, and had `create_trigger`, `send_later`, `list_triggers` and `Agent`, but not `add_repo` (**Finding E**). It ran in the caller's environment, so a lead started from Matthew's `agent-room` environment getting its variables is checked in M6 |
-| 5 | Recurring watchdog task, at acceptable cost | Pending |
+| 5 | Recurring watchdog task, at acceptable cost | Pass: an hourly task fired on schedule (22:36:13Z), ran 22 seconds in auto mode with no approval prompts and posted on issue #4; then deleted. At one run every three hours, about eight short sessions a day. **Finding G** below |
 | 6 | The architect chat can start a subagent and create a scheduled task | Pass: the build lead is a Claude chat in a Project, and did both |
 | 7 | Resuming a subagent keeps its context | Pass |
 | 8 | Worktree isolation for parallel builders | Pass: worktrees under `.claude/worktrees/`, branch `worktree-agent-<id>` |
@@ -60,6 +60,7 @@ Results of the eleven assumptions in `v1.md` ("To verify"). Evidence lives in is
 - **D. Subagents can't read the Claude Project.** Builders, cold reviewers and Qodo readers can't load the Projects tool, so `QODO-REVIEW.md` is copied byte for byte into `docs/QODO-REVIEW.md`. The Project copy stays Matthew's master; changes reach the repo by PR.
 - **E. A scheduled session has no `add_repo`.** It inherits the repos of the session that scheduled it. So a lead schedules its successor from a session that already has the project repo, which every lead does.
 - **F. Builder worktrees start from the default branch,** not from the lead's current branch. A builder on a mission first merges the mission branch into its worktree branch, and every brief says so.
+- **G. Deleting a scheduled task deletes every session it started.** So a successor's one-time task is never deleted (it disables itself after firing), and a session started by a task can't delete that task (`update_trigger` with `enabled=false` stops it instead). The watchdog's runs are short, so deleting it at `DONE` is safe; the lead that deletes it was not started by it.
 - **C. A new repo may be completely empty** (`pet-todo` has no commits). Preflight detects this, and the architect's kickoff creates the first commit on `main`; no protection can exist yet, so this is safe.
 
 ## Decisions taken during the build
