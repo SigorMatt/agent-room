@@ -8,6 +8,7 @@ machine B has no checkout (state worktree is a clone of $ROOM_STATE_REMOTE).
 import contextlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -351,6 +352,43 @@ def t_state_path_default_location():
     r = room("state", "path", state=None)
     path = os.path.join(HOME, "agent-room-state", "SigorMatt__pet")
     assert r.stdout.strip() == path and os.path.isfile(os.path.join(path, ".git")), r.stdout
+
+
+def t_broken_state_worktree_is_rebuilt():
+    # cold M2 R1-12: the checkout it was added from is cloned again, leaving the worktree dangling
+    work = os.path.join(tmp, "work", "pet-r")
+    g("clone", "-q", PET, work)
+    kw = dict(state="R", cwd=work, session="R1")
+    room("state", "path", **kw)
+    for args in (("state", "path"), ("lease", "check")):
+        shutil.rmtree(work)
+        g("clone", "-q", PET, work)
+        r = room(*args, check=False, **kw)
+        assert r.returncode in (0, 5) and len(r.stderr.strip().splitlines()) == 1, (args, r.returncode, r.stderr)
+        assert re.fullmatch(r"\[state worktree .* was broken; moved it to .*/R\.broken-\d{8}T\d{6}Z(-\d+)? and made "
+                            r"a new one\]", r.stderr.strip()), r.stderr
+        assert g("-C", sdir("R"), "rev-parse", "HEAD").stdout.strip() == sha(PET, "agent-room/state")
+    assert room("state", "path", **kw).stderr == "", "a healthy worktree is left alone"
+    aside = [d for d in os.listdir(os.path.join(tmp, "state")) if d.startswith("R.broken-")]
+    assert len(aside) == 2, aside
+
+
+def t_refuses_a_dir_that_is_not_the_state_worktree():
+    # cold M2 R1-13: ROOM_STATE_DIR pointing at the project checkout must not reset or clean it
+    work = os.path.join(tmp, "work", "pet-x")
+    g("clone", "-q", PET, work)
+    g("-C", work, "checkout", "-q", "-b", "mission/M1-x", "origin/main")
+    app = os.path.join(work, "app.py")
+    open(app, "w").write("uncommitted mission work\n")
+    main_sha = sha(PET, "main")
+    for args in (("state", "sync"), ("state", "path"), ("lease", "check"), ("state", "commit", "-m", "x")):
+        r = room(*args, state=None, cwd=work, ROOM_STATE_DIR=work, check=False)
+        assert r.returncode == 1 and "has branch mission/M1-x checked out" in r.stderr, (args, r.stderr)
+    g("-C", work, "checkout", "-q", "--detach", "origin/main")  # detached at main, run from elsewhere
+    r = room("state", "sync", state=None, cwd=tmp, ROOM_STATE_DIR=work, check=False)
+    assert r.returncode == 1 and "holds no agent-room/state history" in r.stderr, r.stderr
+    assert open(app).read() == "uncommitted mission work\n"
+    assert g("-C", work, "rev-parse", "mission/M1-x").stdout.strip() == main_sha
 
 
 # --- lease

@@ -572,11 +572,37 @@ def remote_heads():
     return heads
 
 
+def check_state_dir(path):
+    """Refuse a directory that isn't the state worktree, before anything resets or cleans it: one
+    with another branch checked out, or whose HEAD shares no history with the state branch (the
+    project checkout, or a builder's worktree, whatever the current directory)."""
+    branch = git("symbolic-ref", "-q", "--short", "HEAD", cwd=path, check=False).stdout.strip()
+    if branch and branch != STATE_BRANCH:
+        raise StateError(f"{path} has branch {branch} checked out, so it isn't the state worktree; "
+                         "set ROOM_STATE_DIR to a directory of its own")
+    if git("rev-parse", "-q", "--verify", STATE_REF, cwd=path, check=False).returncode != 0:
+        fetch(path)
+    if git("merge-base", "HEAD", STATE_REF, cwd=path, check=False).returncode != 0:
+        raise StateError(f"{path} holds no {STATE_BRANCH} history (the project checkout?), so it isn't the "
+                         "state worktree; set ROOM_STATE_DIR to a directory of its own")
+
+
 def ensure_worktree():
-    """Path of the state worktree, created if missing."""
+    """Path of the state worktree: checked, rebuilt if broken, created if missing."""
     path = state_path()
-    if os.path.exists(os.path.join(path, ".git")):
-        return path
+    if os.path.lexists(os.path.join(path, ".git")):
+        r = git("rev-parse", "--show-toplevel", cwd=path, check=False)
+        if r.returncode == 0:
+            check_state_dir(path)
+            return path
+        if "not a git repository" not in r.stderr:
+            raise StateError(f"git rev-parse in {path}: {r.stderr.strip()}")
+        # e.g. the project checkout it was added from was cloned again: move it aside and start over
+        aside = f"{path}.broken-{time.strftime('%Y%m%dT%H%M%SZ', time.gmtime())}"
+        if os.path.lexists(aside):
+            aside += f"-{os.getpid()}"
+        os.rename(path, aside)
+        print(f"[state worktree {path} was broken; moved it to {aside} and made a new one]", file=sys.stderr)
     if STATE_BRANCH not in remote_heads():
         raise StateError(f"{STATE_BRANCH} doesn't exist in {REPO} yet: the architect runs '{ME} state init'")
     if os.path.isdir(path) and os.listdir(path):
