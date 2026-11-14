@@ -1,0 +1,71 @@
+{
+  "url": "https://api.github.com/repos/SigorMatt/agent-room/pulls/comments/4575709796",
+  "pull_request_review_id": 5907229379,
+  "id": 4575709796,
+  "node_id": "PRRC_kwDOVVYvuc8AAAABELvKZA",
+  "diff_hunk": "@@ -0,0 +1,66 @@\n+# v1 build state\n+\n+The build of the agent-room pipeline v1, as designed in [`v1.md`](v1.md). A fresh session can resume the build from this file alone: read `v1.md`, then this file, then issue #4.\n+\n+- **Owner:** Matthew. Wants minimal intervention: buzz only for a blocker that changes the design, or \"ready for your run\".\n+- **Build lead:** the Claude session that wrote the design. It works the way the pipeline will: milestone PRs into `main`, builder subagents, a fresh cold reviewer per PR, Qodo per `QODO-REVIEW.md`, merged by the lead.\n+- **Status room:** issue #4 in this repo. STATUS comments only.\n+- **ntfy topic:** set in Matthew's `agent-room` cloud environment and known to the build lead. Not written here.\n+\n+## Milestones\n+\n+| # | Milestone | Status |\n+| --- | --- | --- |\n+| M0 | Commit design and build state | In progress |\n+| M1 | Platform check | In progress |\n+| M2 | Core machinery | Not started |\n+| M3 | Reviews and merge gate | Not started |\n+| M4 | Unattended operation | Not started |\n+| M5 | Manuals and index | Not started |\n+| M6 | Dress rehearsal on `pet-todo` (build lead plays the architect) | Not started |\n+| M7 | Matthew's owner run, then tag `v1.0.0` | Not started |\n+\n+## Pre-approved fallbacks (Matthew, 2026-11-14)\n+\n+Applied without asking. Stop and ask only if the lead cannot merge PRs at all, or scheduled tasks do not work at all.\n+\n+| If the check finds | Then |\n+| --- | --- |\n+| A lead can't schedule its successor | Fallback buzz: Matthew starts the next lead |\n+| Branch pushes need a prefix | Adopt the prefix |\n+| Worktrees don't work for builders | Builders run one at a time |\n+| Resuming a builder doesn't work | Fresh builder with the full brief |\n+| A waiter dies when the machine idles | Rely on the watchdog and scheduled check-ins |\n+\n+## Platform check\n+\n+Results of the eleven assumptions in `v1.md` (\"To verify\"). Evidence lives in issue #4 and in the commits of the PR that closes M1.\n+\n+| # | Assumption | Result |\n+| --- | --- | --- |\n+| 1 | Merge a PR through the proxy, naming the expected head commit | Pending (tested on the M0 PR) |\n+| 2 | Push `mission/*`, task branches and `agent-room/state` | Pass: no prefix needed. **Finding A** below |\n+| 3 | Read branch protection, rulesets and bypass | Pass on a public repo. **Finding B** below |\n+| 4 | A session schedules its successor; it gets the repo, runs without approvals, uses the right environment | Partly: a chat session created a one-time task with no approval prompt, in auto mode. Repo access and tools in the started session: pending (probe, issue #4) |\n+| 5 | Recurring watchdog task, at acceptable cost | Pending |\n+| 6 | The architect chat can start a subagent and create a scheduled task | Pass: the build lead is a Claude chat in a Project, and did both |\n+| 7 | Resuming a subagent keeps its context | Pass |\n+| 8 | Worktree isolation for parallel builders | Pass: worktrees under `.claude/worktrees/`, branch `worktree-agent-<id>` |\n+| 9 | A waiter survives an idle hour | Pending (probe, 85 minutes) |\n+| 10 | Qodo's bot login and comment format match `QODO-REVIEW.md` | Pending (tested on the M0 PR) |\n+| 11 | A buzz reaches Matthew's phone | Sent from the build chat (HTTP 200). Receipt and the lead environment: pending |\n+\n+### Findings that change the build\n+\n+- **A. Branches can't be deleted through the proxy**, neither by `git push --delete` nor by the API. So:\n+    - builders never push; the lead merges their worktree branches locally, and only mission branches reach GitHub;\n+    - mission branches are removed by GitHub's \"Automatically delete head branches\" setting, which preflight checks and asks Matthew to turn on once per repo;\n+    - two probe branches remain in this repo (`mission/M0-probe`, `agent-room/state`) for Matthew to delete when convenient.\n+- **B. Private repos on GitHub Free can't have branch protection or rulesets** (the API answers 403, \"upgrade to GitHub Pro\"). Preflight treats that answer as \"no protection\", which passes.",
+  "path": "docs/design/BUILD-STATE.md",
+  "commit_id": "ea58582b24d52a886e1661351c0f8193d57b4865",
+  "original_commit_id": "ea58582b24d52a886e1661351c0f8193d57b4865",
+  "user": {
+    "login": "qodo-code-review[bot]",
+    "id": 151058649,
+    "node_id": "BOT_kgDOCQD42Q",
+    "avatar_url": "https://avatars.githubusercontent.com/in/484649?v=4",
+    "gravatar_id": "",
+    "url": "https://api.github.com/users/qodo-code-review%5Bbot%5D",
+    "html_url": "https://github.com/apps/qodo-code-review",
+    "followers_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/followers",
+    "following_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/following{/other_user}",
+    "gists_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/gists{/gist_id}",
+    "starred_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/starred{/owner}{/repo}",
+    "subscriptions_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/subscriptions",
+    "organizations_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/orgs",
+    "repos_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/repos",
+    "events_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/events{/privacy}",
+    "received_events_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/received_events",
+    "type": "Bot",
+    "user_view_type": "public",
+    "site_admin": false
+  },
+  "body": "<img src=\"https://img.shields.io/badge/Medium-634FD1?style=flat-square\" height=\"20px\" alt=\"Remediation recommended\">\n\n3\\. Preflight passes any 403 as no branch protection <code>🐞 Bug</code> <code>⛨ Security</code>\n\n<pre>\nFinding B records that preflight treats the GitHub 403 &#x27;upgrade to Pro&#x27; answer as &#x27;no protection&#x27;\nand passes it. A 403 caused by missing permissions or a token scope problem would be treated the\nsame way, so the approving-review check passes without being able to read the rules.\n</pre>\n\n\n<details>\n<summary><strong>Agent Prompt</strong></summary>\n\n```\n## Issue description\n`docs/design/BUILD-STATE.md` (Finding B) says preflight treats the GitHub 403 'upgrade to Pro' answer as 'no protection', which passes. The rule is generic: any 403 is taken as a pass, including permission or scope failures where protection cannot be read. The check in `docs/design/v1.md` (line 241) is meant to confirm that no approving review is required.\n\n## Fix Focus Areas\n- docs/design/BUILD-STATE.md[59-59]\n- docs/design/v1.md[241-241]\n\n## Recommended Fix\nIn the preflight spec, pass only when the 403 body names the plan limit on a private repo. Report any other failure as 'could not verify', so Matthew decides instead of the check passing silently.\n```\n\n<code>ⓘ Copy this prompt and use it to remediate the issue with your preferred AI generation tools</code>\n</details>\n\n[Dismiss ↗](https://app.qodo.ai/findings/fe55fbb7-98ba-41f6-8d68-4463709b8094?action=dismiss&origin=git) | [View ↗](https://app.qodo.ai/findings/fe55fbb7-98ba-41f6-8d68-4463709b8094)",
+  "created_at": "2026-11-14T21:26:17Z",
+  "updated_at": "2026-11-14T21:26:17Z",
+  "html_url": "https://github.com/SigorMatt/agent-room/pull/5#discussion_r4575709796",
+  "pull_request_url": "https://api.github.com/repos/SigorMatt/agent-room/pulls/5",
+  "_links": {
+    "self": {
+      "href": "https://api.github.com/repos/SigorMatt/agent-room/pulls/comments/4575709796"
+    },
+    "html": {
+      "href": "https://github.com/SigorMatt/agent-room/pull/5#discussion_r4575709796"
+    },
+    "pull_request": {
+      "href": "https://api.github.com/repos/SigorMatt/agent-room/pulls/5"
+    }
+  },
+  "reactions": {
+    "url": "https://api.github.com/repos/SigorMatt/agent-room/pulls/comments/4575709796/reactions",
+    "total_count": 0,
+    "+1": 0,
+    "-1": 0,
+    "laugh": 0,
+    "hooray": 0,
+    "confused": 0,
+    "heart": 0,
+    "rocket": 0,
+    "eyes": 0
+  },
+  "start_line": null,
+  "original_start_line": null,
+  "start_side": null,
+  "line": 59,
+  "original_line": 59,
+  "side": "RIGHT",
+  "author_association": "NONE",
+  "original_position": 59,
+  "position": 59,
+  "subject_type": "line",
+  "is_copilot_code_review": false,
+  "copilot_code_review_sources": []
+}
