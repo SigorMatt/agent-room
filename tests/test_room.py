@@ -448,6 +448,35 @@ def t_auto_buzz():
     assert r.returncode == 2 and "not allowed with" in r.stderr, r.stderr
 
 
+def t_close_buzzes_like_say():  # cold M2 R1-5
+    curl_calls()
+    n = new_room("Closing with DONE")
+    r = run("close", n, "lead", "DONE: phase 1 complete, PR #9 merged", role="lead", ROOM_NTFY_TOPIC="t-abc")
+    assert r.stdout.splitlines() == [f"room {n} closed", "[buzz sent]"], r.stdout
+    (args,) = curl_calls()
+    (comment,) = issue(n)["comments"]
+    assert f"Title: DONE · agent-room room {n}" in args and f"Click: {comment['html_url']}" in args, args
+    assert args[args.index("-d") + 1] == f"DONE from lead in SigorMatt/agent-room room {n}", args
+    assert "PR #9" not in " ".join(args), "a buzz must not carry the message text"
+    n = new_room("Closing with DONE, quietly")
+    r = run("close", n, "lead", "DONE: phase 2", "--no-buzz", role="lead", ROOM_NTFY_TOPIC="t-abc")
+    assert "[buzz" not in r.stdout and curl_calls() == [], r.stdout
+    n = new_room("Closing plainly")
+    r = run("close", n, "architect", ROOM_NTFY_TOPIC="t-abc")
+    assert "[buzz" not in r.stdout and curl_calls() == [] and issue(n)["state"] == "closed", r.stdout
+    n = new_room("Closing plainly, with a buzz")
+    r = run("close", n, "architect", "Wrapping up", "--buzz", ROOM_NTFY_TOPIC="t-abc")
+    (args,) = curl_calls()
+    assert "[buzz sent]" in r.stdout and f"Title: Message · agent-room room {n}" in args, (r.stdout, args)
+    n = new_room("Closing, buzz fails")
+    r = run("close", n, "lead", "**DONE**", role="lead", ROOM_NTFY_TOPIC="t-abc", FAKE_CURL_FAIL="429")
+    assert r.returncode == 0 and f"room {n} closed" in r.stdout and "[buzz failed:" in r.stdout, r.stdout
+    assert issue(n)["state"] == "closed" and len(issue(n)["comments"]) == 1
+    curl_calls()
+    r = run("close", n, "lead", "x", "--buzz", "--no-buzz", role="lead", check=False)
+    assert r.returncode == 2 and "not allowed with" in r.stderr, r.stderr
+
+
 def t_links_use_version():
     body = issue(new_room("Linked"))["body"]
     for doc in ("ARCHITECT.md", "LEAD.md"):

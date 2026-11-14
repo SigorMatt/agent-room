@@ -14,7 +14,7 @@ in Claude chat and cloud sessions, or `gh auth login` on your own machine.
   room.py read  N --all           print the whole transcript
   room.py wait  N ROLE            block until someone else speaks, print, exit
   room.py cursor N ROLE           print the last comment ID this role has read, or none
-  room.py close N ROLE [TEXT]     post a closing note and close the room
+  room.py close N ROLE [TEXT]     close the room and post a closing note (buzzes like say)
   room.py ping                    send a test phone notification
   room.py state init|init-lead|path|sync|commit|get|set|next   the playbook on agent-room/state
   room.py lease take|check        the lead lease (exit 3: another session won; 5: not the holder)
@@ -28,11 +28,12 @@ so a lead sees other leads' messages.
 
 Only the roles lead, architect and watchdog post; any role may read. A message's
 kind is its leading token, even inside markdown (**ESCALATION-3**): STATUS,
-ESCALATION-3, MERGE-HOLD-4, LEAD ONLINE, ACK DECISION-2. The role guard refuses another role, or a kind that belongs to
-another role (exit 2, nothing posted). `say` pushes a phone notification through ntfy for
-ESCALATION, MERGE-HOLD, NEXT-LEAD-NEEDED, PAUSED, STOPPED, DONE and LEAD-SILENT;
---buzz forces one, --no-buzz suppresses it. A push carries only the kind and the
-room, never the content.
+ESCALATION-3, MERGE-HOLD-4, LEAD ONLINE, ACK DECISION-2. The role guard refuses
+other roles, and kinds that belong to another role (exit 2, nothing posted).
+`say` and `close` push a phone notification through ntfy for ESCALATION,
+MERGE-HOLD, NEXT-LEAD-NEEDED, PAUSED, STOPPED, DONE and LEAD-SILENT; --buzz
+forces one, --no-buzz suppresses it. A push carries only the kind and the room,
+never the content.
 
 wait exits 0 with new messages (its last line is [cursor: ID]), 3 on timeout
 (re-arm it), 4 if the room is closed.
@@ -383,6 +384,14 @@ def buzz_message(room, role, kind, comment):
                 comment.get("html_url") or f"https://github.com/{REPO}/issues/{room}")
 
 
+def buzz_if_wanted(a, kind, comment):
+    """After say or close: buzz as the kind and --buzz/--no-buzz say, and print how it went."""
+    if wants_buzz(a.buzz, kind):
+        err = buzz_message(a.room, a.role, kind, comment)
+        # the message is already in the room, so a failed buzz is a warning, not an error
+        print("[buzz sent]" if err is None else f"[buzz failed: {err}]")
+
+
 # --- commands
 
 def cmd_new(a):
@@ -410,10 +419,7 @@ def cmd_say(a):
     lease_guard(a, kind)
     c = post(a.room, a.role, text)
     print(f"sent #{c['id']}")
-    if wants_buzz(a.buzz, kind):
-        err = buzz_message(a.room, a.role, kind, c)
-        # the message is already in the room, so a failed buzz is a warning, not an error
-        print("[buzz sent]" if err is None else f"[buzz failed: {err}]")
+    buzz_if_wanted(a, kind, c)
 
 
 def cmd_ping(a):
@@ -481,8 +487,9 @@ def cmd_close(a):
     lease_guard(a, kind)
     # close first, so a waiter woken by the closing note already sees the room as closed
     gh(f"repos/{REPO}/issues/{a.room}", "PATCH", {"state": "closed"})
-    post(a.room, a.role, text)
+    c = post(a.room, a.role, text)
     print(f"room {a.room} closed")
+    buzz_if_wanted(a, kind, c)
 
 
 def role_arg(s):
@@ -1126,6 +1133,14 @@ def add_state_commands(sub, common):
 # --- end of state branch, lease, preflight
 
 
+def add_buzz_flags(s):
+    g = s.add_mutually_exclusive_group()
+    g.add_argument("--buzz", dest="buzz", action="store_const", const=True, default=None,
+                   help="push a phone notification via ntfy even if the kind doesn't buzz")
+    g.add_argument("--no-buzz", dest="buzz", action="store_const", const=False,
+                   help="no phone notification, even if the kind buzzes")
+
+
 def from_arg(s):
     if s != "none" and not s.isdigit():
         raise argparse.ArgumentTypeError("--from takes a comment ID, or none for the room's start")
@@ -1151,11 +1166,7 @@ def main():
     cmd("rooms", cmd_rooms)
     s = cmd("say", cmd_say); s.add_argument("room", type=int); s.add_argument("role", type=role_arg)
     s.add_argument("text", nargs="?")
-    g = s.add_mutually_exclusive_group()
-    g.add_argument("--buzz", dest="buzz", action="store_const", const=True, default=None,
-                   help="push a phone notification via ntfy even if the kind doesn't buzz")
-    g.add_argument("--no-buzz", dest="buzz", action="store_const", const=False,
-                   help="no phone notification, even if the kind buzzes")
+    add_buzz_flags(s)
     s = cmd("read", cmd_read); s.add_argument("room", type=int); s.add_argument("role", type=role_arg, nargs="?")
     s.add_argument("--all", action="store_true")
     s.add_argument("--from", dest="from_id", type=from_arg, metavar="ID",
@@ -1166,6 +1177,7 @@ def main():
     s = cmd("cursor", cmd_cursor); s.add_argument("room", type=int); s.add_argument("role", type=role_arg)
     s = cmd("close", cmd_close); s.add_argument("room", type=int); s.add_argument("role", type=role_arg)
     s.add_argument("text", nargs="?")
+    add_buzz_flags(s)
     sub.add_parser("ping").set_defaults(fn=cmd_ping, repo=None)
     add_state_commands(sub, common)  # M2-B: state, lease, preflight
 
