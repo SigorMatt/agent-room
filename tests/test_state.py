@@ -428,7 +428,8 @@ def push_edit(repo, name, fn):
     other = tempfile.mkdtemp(dir=tmp, prefix="edit-")
     g("clone", "-q", "--branch", "agent-room/state", repo, other)
     path = os.path.join(other, "docs", "playbook", name)
-    open(path, "w").write(fn(open(path).read()))
+    text = fn(open(path).read())  # read before open(..., "w") truncates it
+    open(path, "w").write(text)
     g("-C", other, "commit", "-qam", f"hand edit of {name}")
     g("-C", other, "push", "-q", "origin", "HEAD:agent-room/state")
 
