@@ -7,7 +7,10 @@ FAKE_GH_STATE names a JSON file with the answers. Each value is a response body,
   protection  GET repos/O/N/branches/main/protection (default: 404 Branch not protected)
   rules       GET repos/O/N/rules/branches/main      (default: [])
   rulesets    {"<id>": body} for GET repos/O/N/rulesets/<id>
-  pulls       {"<n>": PR object} for GET repos/O/N/pulls/<n> (default: 404)
+  pulls       {"<n>": PR object} for GET repos/O/N/pulls/<n> (default: 404), and the list
+              GET repos/O/N/pulls?state=open|closed|all
+  commits     {"<sha>": commit object} for GET repos/O/N/commits/<sha>. Default: with FAKE_GH_GIT_ROOT set,
+              the committer date of <sha> in the bare repo $FAKE_GH_GIT_ROOT/O/N.git, else 404
   check_runs  {"<sha>": [check run]} for GET repos/O/N/commits/<sha>/check-runs (default: none)
   statuses    {"<sha>": [status]} for GET repos/O/N/commits/<sha>/status (default: none)
   merge       the answer to PUT repos/O/N/pulls/<n>/merge. Default: 200 with a merge sha when the
@@ -17,7 +20,9 @@ Every merge call is appended, as a JSON line, to FAKE_GH_STATE + ".calls".
 import hashlib
 import json
 import os
+import subprocess
 import sys
+import time
 from urllib.parse import parse_qs
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -61,6 +66,19 @@ if method == "GET" and parts[0] == "repos" and len(parts) >= 3:
         respond(cfg.get("rulesets", {}).get(rest[1], {"_status": 404, "message": "Not Found"}))
     if len(rest) == 2 and rest[0] == "pulls":
         respond(cfg.get("pulls", {}).get(rest[1], {"_status": 404, "message": "Not Found"}))
+    if rest == ["pulls"]:
+        want = query.get("state", "open")
+        respond(page([p for p in cfg.get("pulls", {}).values() if want == "all" or p.get("state") == want]))
+    if len(rest) == 2 and rest[0] == "commits":
+        if rest[1] in cfg.get("commits", {}):
+            respond(cfg["commits"][rest[1]])
+        root = os.environ.get("FAKE_GH_GIT_ROOT")
+        r = subprocess.run(["git", "--git-dir", os.path.join(root, parts[1], parts[2] + ".git"), "show", "-s",
+                            "--format=%ct", rest[1]], capture_output=True, text=True) if root else None
+        if r is None or r.returncode != 0:
+            respond({"_status": 404, "message": "No commit found for SHA: " + rest[1]})
+        date = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(int(r.stdout.strip())))
+        respond({"sha": rest[1], "commit": {"committer": {"date": date}}})
     if len(rest) == 3 and rest[0] == "commits" and rest[2] == "check-runs":
         runs = cfg.get("check_runs", {}).get(rest[1], [])
         respond({"total_count": len(runs), "check_runs": page(runs)})

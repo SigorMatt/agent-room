@@ -241,7 +241,8 @@ def t_state_init_lead():
     b = block()
     assert b["lease_session"] == "none" and b["lease_generation"] == "0" and b["counter"] == "0", b
     assert list(b) == ["lease_session", "lease_generation", "phase", "room", "mission", "step", "pr", "cursor",
-                       "counter", "intent", "waiting_for_owner"], list(b)
+                       "counter", "intent", "waiting_for_owner", "status", "mission_started"], list(b)
+    assert b["status"] == "running" and b["mission_started"] == "none", b
     before = sha(PET, "agent-room/state")
     r = room_b("state", "init-lead")
     assert "already present" in r.stdout and sha(PET, "agent-room/state") == before, r.stdout

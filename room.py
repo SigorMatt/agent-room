@@ -21,6 +21,11 @@ in Claude chat and cloud sessions, or `gh auth login` on your own machine.
   room.py preflight --role architect|lead [--fix]              check repo, state branch, environment
   room.py gate  PR [--mission M<k>] [--allow-hold 5 --decision DECISION-<n>]   the merge gate
   room.py merge PR --sha SHA [--allow-hold 5 --decision DECISION-<n>]        gate, then merge naming SHA
+  room.py watchdog N [--silent-after 3h]   the watchdog task: LEAD-SILENT (buzzes) when no progress; never writes
+  room.py join-line N [--takeover]         print the line that starts a lead
+  room.py handoff N --step STEP            post HANDOFF, record step and cursor, release the lease, print the join line
+  room.py reconcile N                      for a joining lead: the recorded state next to GitHub's facts
+  room.py budget                           the mission's elapsed time against its budget (exit 6 over)
 
 Every room command takes --repo OWNER/NAME. Without it: $ROOM_REPO, else the
 GitHub remote of the current checkout. --session SID names this participant;
@@ -56,6 +61,7 @@ Environment:
   ROOM_NTFY_TOKEN   optional ntfy access token (only raises limits on a paid ntfy.sh tier)
 """
 import argparse
+import datetime
 import html
 import json
 import os
@@ -152,9 +158,9 @@ def default_trust():
         return {REPO.split("/")[0].lower()}
 
 
-def doc_url(path):
-    """A link to a file of agent-room itself, at the version this client belongs to."""
-    return f"https://github.com/{HOME_REPO}/blob/{VERSION}/{path}"
+def doc_url(path, version=None):
+    """A link to a file of agent-room itself, at the version this client belongs to (or VERSION given)."""
+    return f"https://github.com/{HOME_REPO}/blob/{version or VERSION}/{path}"
 
 
 # --- identity
@@ -553,6 +559,7 @@ STATE_BLOCK = re.compile(r"^```agent-room-state[ \t]*\n(.*?)^```[ \t]*$", re.M |
 STATE_KEY = re.compile(r"[a-z][a-z0-9_]*")
 TEMPLATE_URL = "https://raw.githubusercontent.com/{repo}/{version}/templates/playbook/{name}"
 FIRST_GITIGNORE = "__pycache__/\n*.pyc\n.venv/\nnode_modules/\n.env\n.DS_Store\n"
+STATUSES = ("running", "paused", "stopped", "done")  # the machine block's status; a missing one reads as running
 EXIT_MOVED, EXIT_LEASE = 3, 5
 
 
@@ -869,14 +876,20 @@ def pushed_text(path, name):
     return r.stdout if r.returncode == 0 else None
 
 
-def lease_holder():
-    """(session, generation) of the lease on the remote state branch, freshly fetched."""
+def pushed_state():
+    """(worktree path, machine block) of MISSIONS.md on the remote state branch, freshly fetched. Reads
+    git objects only, so local work in the worktree is neither used nor touched."""
     path = ensure_worktree()
     fetch(path)
     text = pushed_text(path, "MISSIONS.md")
     if text is None:
         raise StateError(f"{PLAYBOOK_DIR}/MISSIONS.md is missing on {STATE_BRANCH}: run '{ME} state init-lead'")
-    return lease_of(read_block(text))
+    return path, read_block(text)
+
+
+def lease_holder():
+    """(session, generation) of the lease on the remote state branch, freshly fetched."""
+    return lease_of(pushed_state()[1])
 
 
 def lease_guard(a, kind=None):
@@ -969,15 +982,25 @@ def cmd_state_get(a):
     print(values[a.key])
 
 
+def single_line(key, value):
+    """VALUE stripped, or StateError if it holds any break read_block's splitlines() honours."""
+    if f"x{value}x".splitlines() != [f"x{value}x"]:
+        raise StateError(f"the value of {key} must be a single line (no line or paragraph separators)")
+    return value.strip()
+
+
 def cmd_state_set(a):
     updates = {}
     for pair in a.pairs:
         key, sep, value = pair.partition("=")
         if not sep or not STATE_KEY.fullmatch(key):
             raise StateError(f"expected KEY=VALUE with a lowercase key, got {pair!r}")
-        if f"x{value}x".splitlines() != [f"x{value}x"]:  # every break read_block's splitlines() honours
-            raise StateError(f"the value of {key} must be a single line (no line or paragraph separators)")
-        updates[key] = value.strip()
+        value = single_line(key, value)
+        if key == "status" and value not in STATUSES:
+            raise StateError(f"status must be one of {', '.join(STATUSES)}, not {value!r}")
+        if key == "mission_started" and value != "none" and parse_time(value) is None:
+            raise StateError(f"mission_started must be an ISO-8601 UTC time such as {iso(time.time())}, or none")
+        updates[key] = value
     change_state(a, f"state: set {', '.join(updates)}", lambda values: updates)
     print("set " + " ".join(f"{k}={v}" for k, v in updates.items()))
 
@@ -2011,6 +2034,408 @@ def add_gate_commands(sub, common):
 # --- end of review records, merge gate and merge
 
 
+# --- unattended operation: watchdog, join line, handoff, reconcile, budget
+#
+# "Lead rotation, pausing and continuity" of docs/design/v1.md; spec docs/design/m4-unattended.md. The agent
+# schedules with its own scheduled-task tool: room.py supplies the facts, the text and the state changes
+# around it. Every command here works inside the project's checkout or without one (ROOM_STATE_REMOTE).
+#
+#   watchdog N [--silent-after 3h]   join-line N [--takeover]   handoff N --step STEP   reconcile N   budget
+#
+# watchdog, reconcile and budget read the pushed state branch and never write it; the watchdog schedules nothing.
+# Intents reconcile recognizes: "merge PR #<n> at <sha>", "open PR <branch or M<k>>", "post <KIND>", "close room".
+
+WAITING_FOR_OWNER = "waiting for owner"
+DEFAULT_BUDGET_HOURS = 8
+INTENT_SKEW = 120  # seconds a room message may seem to predate the intent recorded before it (clock skew)
+
+
+def duration_arg(s):
+    m = re.fullmatch(r"(?:(\d+)h)?(?:(\d+)m)?(?:(\d+)s)?", s.strip())
+    secs = int(m.group(1) or 0) * 3600 + int(m.group(2) or 0) * 60 + int(m.group(3) or 0) if m else 0
+    if secs <= 0:
+        raise argparse.ArgumentTypeError("a duration above zero, like 3h, 45m, 1h30m or 90s")
+    return secs
+
+
+def iso(t):
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(t))
+
+
+def parse_time(s):
+    """Seconds since the epoch of an ISO-8601 time (Z, an offset, or none for UTC), or None if it isn't one."""
+    s = (s or "").strip()
+    if not s:
+        return None
+    try:
+        d = datetime.datetime.fromisoformat(s[:-1] + "+00:00" if s[-1] in "Zz" else s)
+    except ValueError:
+        return None
+    return (d if d.tzinfo else d.replace(tzinfo=datetime.timezone.utc)).timestamp()
+
+
+def span(secs):
+    secs = int(max(secs, 0))
+    h, m = secs // 3600, secs % 3600 // 60
+    return f"{h}h{m:02d}m" if h else f"{m}m" if m else f"{secs}s"
+
+
+def status_of(values):
+    return values.get("status") or "running"
+
+
+def say(room, role, text, a=None):
+    """Post TEXT as ROLE through cmd_say: its role guard, its lease check on send and its buzz."""
+    cmd_say(argparse.Namespace(room=room, role=role, text=text, buzz=None, session=getattr(a, "session", None)))
+
+
+def shallow_cut(path, sha):
+    """Whether the state history stops at SHA only because the clone is shallow."""
+    f = os.path.join(path, git_out("rev-parse", "--git-path", "shallow", cwd=path))
+    try:
+        with open(f) as fh:
+            return sha in fh.read().split()
+    except OSError:
+        return False
+
+
+def last_change(path, key):
+    """(sha, committer time) of the newest commit on the fetched state branch whose MISSIONS.md changes KEY in
+    the machine block (the commit that adds it counts), or None. Deepens a shallow clone as far as needed."""
+    rel = f"{PLAYBOOK_DIR}/MISSIONS.md"
+
+    def value(sha):
+        try:
+            return read_block(blob(path, sha, rel) or "").get(key)
+        except StateError:
+            return None
+    newer = None
+    for _ in range(50):
+        newer = None  # (sha, time, value) of the commit after the one being read
+        for entry in git_out("log", "--topo-order", "--format=%H %ct", STATE_REF, "--", rel, cwd=path).splitlines():
+            sha, ct = entry.split()
+            v = value(sha)
+            if newer and v != newer[2]:
+                return newer[0], int(newer[1])
+            newer = (sha, ct, v)
+        if newer is None or not shallow_cut(path, newer[0]):
+            break
+        before = git_out("rev-list", "--count", STATE_REF, cwd=path)
+        git("fetch", "-q", "--deepen=200", "origin", f"+refs/heads/{STATE_BRANCH}:{STATE_REF}", cwd=path)
+        if git_out("rev-list", "--count", STATE_REF, cwd=path) == before:
+            break
+    return (newer[0], int(newer[1])) if newer and newer[2] is not None else None
+
+
+def mission_push():
+    """(branch, committer time) of the newest mission/* branch tip on the remote, or None."""
+    best = None
+    for branch, sha in sorted(remote_heads().items()):
+        if not branch.startswith("mission/"):
+            continue
+        try:
+            c = gh(f"repos/{REPO}/commits/{sha}") or {}
+        except GhError as e:
+            if http_status(e) not in (404, 422):  # deleted after its merge since we listed it: no push to count
+                raise
+            continue
+        t = parse_time(((c.get("commit") or {}).get("committer") or {}).get("date"))
+        if t is not None and (best is None or t > best[1]):
+            best = (branch, t)
+    return best
+
+
+def cmd_watchdog(a):
+    path, values = pushed_state()  # fetched and read from git objects: the watchdog never writes state
+    step, mission = values.get("step") or "none", values.get("mission") or "none"
+    if status_of(values) != "running":
+        print(f"quiet: status is {status_of(values)}")
+        return 0
+    if step.lower() == WAITING_FOR_OWNER:
+        print(f"quiet: step is {WAITING_FOR_OWNER}")
+        return 0
+    found = []
+    change = last_change(path, "step")
+    if change:
+        found.append((change[1], f"step change {change[0][:12]}"))
+    push = mission_push()
+    if push:
+        found.append((push[1], f"{push[0]} pushed"))
+    if not found:
+        raise StateError(f"no progress to measure: {PLAYBOOK_DIR}/MISSIONS.md has no step in its history")
+    progress, what = max(found)
+    now = time.time()
+    if now - progress < a.silent_after:
+        print(f"quiet: progress {span(now - progress)} ago ({what} at {iso(progress)}), "
+              f"under {span(a.silent_after)}")
+        return 0
+    for m in map(parse, comments(a.room, iso(progress))):  # one alarm per stall
+        t = parse_time(m["at"])
+        if m["role"] == "watchdog" and trusted(m) and message_kind(m["text"]) == "LEAD-SILENT" and t and t > progress:
+            print(f"quiet: LEAD-SILENT #{m['id']} at {m['at']} already reports this stall")
+            return 0
+    print(f"alarm: no progress for {span(now - progress)} ({what} at {iso(progress)})")
+    say(a.room, "watchdog", f"LEAD-SILENT: no progress since {iso(progress)} (step {step}, mission {mission})", a)
+    return 0
+
+
+def pinned_version(path=None):
+    """The pipeline version PLAYBOOK.md pins on the state branch, else VERSION: sessions run the pinned tag,
+    and links name it (v1.md, "Versioning and upgrades"), so a pin bumped mid-mission reaches the next lead."""
+    try:
+        if path is None:
+            path = ensure_worktree()
+            fetch(path)
+        m = re.search(r"^pipeline:[ \t]*(\S+)", pushed_text(path, "PLAYBOOK.md") or "", re.M)
+    except StateError as e:
+        print(f"[can't read the pinned version ({e}); using {VERSION}]", file=sys.stderr)
+        return VERSION
+    if m and re.fullmatch(r"v\d+(\.\d+)*(-[\w.]+)?|main", m.group(1)):
+        return m.group(1)
+    print(f"[PLAYBOOK.md pins no pipeline version; using {VERSION}]", file=sys.stderr)
+    return VERSION
+
+
+def join_line(room, takeover=False, version=None):
+    version = version or pinned_version()
+    line = f"Join agent room {room} in {REPO} as lead, pipeline {version}. Follow LEAD.md: {doc_url('LEAD.md', version)}"
+    if takeover:
+        line += " Take over the lease (lease take --takeover): the previous lead stopped without handing over."
+    return line
+
+
+def cmd_join_line(a):
+    print(join_line(a.room, a.takeover))
+
+
+def cmd_handoff(a):
+    sid = session_id(a)
+    step = single_line("--step", a.step)
+    if not step:
+        raise StateError("--step needs the step the successor starts at")
+    path = ensure_worktree()
+    fetch(path)
+    p = pending(path)
+    if p:  # change_state would refuse after HANDOFF is posted; refuse before it instead
+        raise StateError(f"not handed off: the state worktree {path} has {p}: push them with '{ME} state commit "
+                         f"-m MSG', or drop them with '{ME} state sync'")
+    text = pushed_text(path, "MISSIONS.md")
+    if text is None:
+        raise StateError(f"{PLAYBOOK_DIR}/MISSIONS.md is missing on {STATE_BRANCH}: run '{ME} state init-lead'")
+    values = read_block(text)
+    require_lease(values, sid, "not handed off")
+    # posted while this session still holds the lease; then step, cursor, intent and the release in one write
+    say(a.room, "lead", f"HANDOFF: mission {values.get('mission') or 'none'}, next step {step}\n\n"
+                        "Successor: being scheduled now; a NEXT-LEAD-NEEDED follows if that fails.", a)
+    cursor = str(cursor_id(a.room, "lead") or "none")
+    updates = {"step": step, "cursor": cursor, "intent": "none", "lease_session": "none"}
+    for attempt in (1, 2, 3):
+        try:
+            change_state(a, f"handoff: {sid} hands over at step {step} and releases the lease", lambda v: updates)
+            break
+        except StateMoved:  # someone else wrote the state branch meanwhile: re-read, re-check the lease, re-apply
+            if attempt == 3:
+                raise StateExit(EXIT_MOVED, "HANDOFF is posted, but the state branch kept moving, so the state "
+                                            f"is not recorded: run '{ME} state set step={step} cursor={cursor} "
+                                            f"intent=none', then '{ME} lease release'")
+    print(f"recorded step {step}, cursor {cursor}, intent none; lease released by {sid}")
+    print("Schedule a one-time task about a minute from now whose prompt is the join line below. If that fails: "
+          f"{ME} say {a.room} lead 'NEXT-LEAD-NEEDED: ...' --repo {REPO}")
+    print(join_line(a.room, version=pinned_version(path)))
+
+
+def pr_state(p):
+    if p.get("merged") or p.get("merged_at"):
+        return f"merged as {p.get('merge_commit_sha') or '?'}"
+    if p.get("state") == "open":
+        return f"open at {(p.get('head') or {}).get('sha') or '?'}"
+    return "closed without merging"
+
+
+def pull_requests():
+    out, page = [], 1
+    while True:
+        batch = gh(f"repos/{REPO}/pulls?state=all&per_page=100&page={page}") or []
+        out += batch
+        if len(batch) < 100:
+            return out
+        page += 1
+
+
+def intent_hint(a, intent, path, msgs, pr):
+    """The one-line verdict on a recorded intent: done (clear it), not done (redo it), or unknown."""
+    leads = [m for m in msgs if m["role"] == "lead"]
+    m = re.fullmatch(r"merge PR #(\d+) at ([0-9a-fA-F]{7,40})", intent)
+    if m:
+        p = pr(int(m.group(1)))
+        if p is None:
+            return f"intent unknown: PR #{m.group(1)} can't be read; check it by hand"
+        if p.get("merged") or p.get("merged_at"):
+            return f"intent done: clear it (PR #{m.group(1)} is {pr_state(p)}; finish the bookkeeping)"
+        return f"intent not done: redo it (PR #{m.group(1)} is {pr_state(p)}; run the gate, then merge)"
+    m = re.fullmatch(r"open PR (?:for |from )?(\S+)", intent)
+    if m:
+        ref = m.group(1)
+        want = re.compile(re.escape(ref) if ref.startswith("mission/") else rf"mission/{re.escape(ref)}(?:-.+)?")
+        hits = [p for p in pull_requests() if want.fullmatch((p.get("head") or {}).get("ref") or "")]
+        if hits:
+            p = max(hits, key=lambda p: p.get("number", 0))
+            return f"intent done: clear it (PR #{p.get('number')} from {p['head']['ref']} is {pr_state(p)}; record it)"
+        return f"intent not done: redo it (no PR from {ref})"
+    m = re.fullmatch(r"post (.+)", intent)
+    kind = message_kind(m.group(1)) if m else None
+    if kind:
+        # a numbered kind is unique in the room; any other counts only if posted after the intent was recorded
+        since = None if re.search(r"-\d+$", kind) else last_change(path, "intent")
+        hits = [x for x in leads if message_kind(x["text"]) == kind and
+                (since is None or (parse_time(x["at"]) or 0) >= since[1] - INTENT_SKEW)]
+        if hits:
+            return f"intent done: clear it ({kind} is in the room: #{hits[-1]['id']})"
+        return f"intent not done: redo it (no {kind} in the room" + (" since the intent was recorded)" if since else ")")
+    if re.fullmatch(r"close (?:the )?room", intent):
+        if is_closed(a.room):
+            return f"intent done: clear it (room {a.room} is closed)"
+        return f"intent not done: redo it (room {a.room} is open)"
+    return ("intent unknown: check it by hand (reconcile knows: merge PR #<n> at <sha>, open PR <branch or M<k>>, "
+            "post <KIND>, close room)")
+
+
+def cmd_reconcile(a):
+    path, values = pushed_state()  # it changes nothing: no state write, no cursor move
+    print(f"recorded state ({PLAYBOOK_DIR}/MISSIONS.md on {STATE_BRANCH} at "
+          f"{git_out('rev-parse', '--short', STATE_REF, cwd=path)}):")
+    for k, v in values.items():
+        print(f"  {k}: {v}")
+    cache = {}
+
+    def pr(n):
+        if n not in cache:
+            try:
+                cache[n] = gh(f"repos/{REPO}/pulls/{n}") or {}
+            except GhError as e:
+                print(f"[can't read PR #{n}: {e}]", file=sys.stderr)
+                cache[n] = None
+        return cache[n]
+
+    recorded = values.get("pr") or "none"
+    n = re.search(r"\d+", recorded) if recorded != "none" else None
+    if n:
+        p = pr(int(n.group()))
+        print(f"PR: #{n.group()} {pr_state(p) if p is not None else 'unreadable'}")
+    else:
+        print("PR: none recorded")
+
+    msgs = [m for m in map(parse, comments(a.room)) if trusted(m)]
+
+    def latest(roles, kinds):
+        hits = [m for m in msgs if m["role"] in roles and message_kind(m["text"]) in kinds]
+        return hits[-1] if hits else None
+
+    try:
+        counter = int(values.get("counter") or 0)
+    except ValueError:
+        counter = 0
+    if counter > 0:
+        held = latest(("lead",), (f"ESCALATION-{counter}", f"MERGE-HOLD-{counter}"))
+        if held:
+            answer = latest(("architect", "human"), (f"DECISION-{counter}",))
+            print(f"counter {counter}: {message_kind(held['text'])} is in the room (#{held['id']}), " +
+                  (f"answered by DECISION-{counter} (#{answer['id']})" if answer else f"no DECISION-{counter} yet"))
+        else:
+            print(f"counter {counter}: neither ESCALATION-{counter} nor MERGE-HOLD-{counter} is in the room")
+    else:
+        print("counter 0: no escalation or hold yet")
+
+    h = latest(("lead",), ("HANDOFF",))
+    if h:
+        first = h["text"].splitlines()[0]
+        named = re.search(r"next step (.+)$", first)
+        step = values.get("step") or "none"
+        note = "names the recorded step" if named and named.group(1).strip() == step else \
+            f"the recorded step is {step}"
+        online = [m for m in msgs if m["role"] == "lead" and m["id"] > h["id"] and message_kind(m["text"]) == "LEAD ONLINE"]
+        if online:
+            note += f"; LEAD ONLINE #{online[-1]['id']} came after it"
+        print(f"HANDOFF: #{h['id']} at {h['at']} from lead · {h['session'] or '?'}: {first} ({note})")
+    else:
+        print("HANDOFF: none in the room")
+
+    intent = values.get("intent") or "none"
+    print(f"intent: {intent}")
+    if intent != "none":
+        print(intent_hint(a, intent, path, msgs, pr))
+    if status_of(values) != "running":
+        print(f"status: {status_of(values)}: a lead that resumes the work sets it back after taking the lease "
+              f"('{ME} state set status=running')")
+    drill = re.search(r"^drill:[ \t]*(\S.*?)[ \t]*$", pushed_text(path, "PLAYBOOK.md") or "", re.M)
+    if drill:
+        print(f"drill: {drill.group(1)}")
+    return 0
+
+
+def phase_budget(playbook, phase):
+    """(hours, source) of the "Mission budget: <n> hours" phrase under PLAYBOOK.md's "### Phase <phase>:"
+    heading, else the default eight hours."""
+    m = re.search(rf"^###[ \t]+Phase[ \t]+{re.escape(phase)}:[^\n]*\n(.*?)(?=^#{{1,3}}[ \t]|\Z)", playbook or "",
+                  re.M | re.S)
+    b = re.search(r"Mission budget:\s*(\d+(?:\.\d+)?)\s*hours?\b", m.group(1), re.I) if m else None
+    if b and float(b.group(1)) > 0:
+        return float(b.group(1)), f"phase {phase} in PLAYBOOK.md"
+    return float(DEFAULT_BUDGET_HOURS), "the default"
+
+
+def cmd_budget(a):
+    path, values = pushed_state()
+    mission, phase = values.get("mission") or "none", values.get("phase") or "1"
+    started = values.get("mission_started") or "none"
+    if started == "none":
+        print(f"budget: mission_started is none (mission {mission}); record it with the mission's spec: "
+              f"'{ME} state set mission_started={iso(time.time())}'")
+        return 1
+    t0 = parse_time(started)
+    if t0 is None:
+        raise StateError(f"mission_started is {started!r}, not an ISO-8601 time")
+    hours, source = phase_budget(pushed_text(path, "PLAYBOOK.md"), phase)
+    elapsed, budget = time.time() - t0, hours * 3600
+    line = f"budget: mission {mission} started {iso(t0)}, {span(elapsed)} elapsed of {hours:g}h ({source})"
+    if elapsed > budget:
+        print(f"{line}: over by {span(elapsed - budget)}; post an ESCALATION, never another automatic retry")
+        return EXIT_FAIL
+    print(f"{line}: {span(budget - elapsed)} left")
+    return 0
+
+
+def add_unattended_commands(sub, common):
+    """argparse wiring for watchdog, join-line, handoff, reconcile and budget."""
+    def leaf(name, fn, help):
+        s = sub.add_parser(name, parents=[common], help=help, description=help)
+        s.set_defaults(fn=state_command(fn))
+        return s
+
+    s = leaf("watchdog", cmd_watchdog, "the watchdog task, as role watchdog: post LEAD-SILENT (it buzzes) when "
+                                       "neither the recorded step nor a mission branch moved for DURATION; "
+                                       "never writes state or schedules anything")
+    s.add_argument("room", type=int)
+    s.add_argument("--silent-after", type=duration_arg, default=3 * 3600, metavar="DURATION",
+                   help="like 3h or 45m (default 3h; drills use a short one)")
+    s = leaf("join-line", cmd_join_line, "print the line that starts a lead")
+    s.add_argument("room", type=int)
+    s.add_argument("--takeover", action="store_true",
+                   help="for the lead Matthew starts after LEAD-SILENT: take the lease with lease take --takeover")
+    s = leaf("handoff", cmd_handoff, "post HANDOFF while holding the lease, then record step, cursor and intent=none "
+                                     "and release the lease in one state write; prints the join line to schedule")
+    s.add_argument("room", type=int)
+    s.add_argument("--step", required=True, help="the step the successor starts at")
+    s = leaf("reconcile", cmd_reconcile, "for a joining lead: the recorded state next to GitHub's facts, and a "
+                                         "hint on the recorded intent; changes nothing")
+    s.add_argument("room", type=int)
+    leaf("budget", cmd_budget, "the mission's elapsed time against its phase's budget (exit 0 under, 6 over, "
+                               "1 without mission_started)")
+
+
+# --- end of unattended operation
+
+
 def from_arg(s):
     if s != "none" and not s.isdigit():
         raise argparse.ArgumentTypeError("--from takes a comment ID, or none for the room's start")
@@ -2051,6 +2476,7 @@ def main():
     sub.add_parser("ping").set_defaults(fn=cmd_ping, repo=None)
     add_state_commands(sub, common)  # M2-B: state, lease, preflight
     add_gate_commands(sub, common)   # M3: gate, merge
+    add_unattended_commands(sub, common)  # M4: watchdog, join-line, handoff, reconcile, budget
 
     a = p.parse_args()
     SESSION_OPT = getattr(a, "session", None)
