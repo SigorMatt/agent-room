@@ -2555,7 +2555,9 @@ def phase_budget(playbook, phase):
     heading, else the default eight hours."""
     m = re.search(rf"^###[ \t]+Phase[ \t]+{re.escape(phase)}:[^\n]*\n(.*?)(?=^#{{1,3}}[ \t]|\Z)", playbook or "",
                   re.M | re.S)
-    b = re.search(r"Mission budget:\s*(\d+(?:\.\d+)?)\s*hours?\b", m.group(1), re.I) if m else None
+    # tolerant: markdown emphasis around the label or the number; h, hr, hrs, hour or hours; decimals
+    b = re.search(r"mission budget[*_` \t]*:[*_` \t]*(\d+(?:\.\d+)?|\.\d+)[*_` \t]*(?:hours?|hrs?|h)(?![a-z])",
+                  m.group(1), re.I) if m else None
     if b and float(b.group(1)) > 0:
         return float(b.group(1)), f"phase {phase} in PLAYBOOK.md"
     return float(DEFAULT_BUDGET_HOURS), "the default"

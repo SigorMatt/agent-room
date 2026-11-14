@@ -856,6 +856,27 @@ def t_budget():
         set_state("phase=1")
 
 
+def t_budget_phrasings():
+    # cold M4 R1-15: emphasis around the label or number, h/hr/hrs/hour(s), decimals; 9 hours have elapsed
+    set_state(f"mission_started={iso(time.time() - 9 * 3600)}")
+    original = remote_file("docs/playbook/PLAYBOOK.md")
+    try:
+        for phrase, hours in (("**Mission budget:** 4 hours.", "4"), ("Mission budget: 4h.", "4"),
+                              ("*Mission budget*: 4.5 hrs", "4.5"), ("__Mission budget:__ **10** hr", "10"),
+                              ("mission budget: 1 hour", "1"), ("Mission budget: 12.5h", "12.5"),
+                              ("Mission budget: `.5` hours", "0.5")):
+            edit_state("PLAYBOOK.md", lambda t, p=phrase: original.replace("Mission budget: 8 hours.", p))
+            r = room("budget")
+            assert f"elapsed of {hours}h (phase 1 in PLAYBOOK.md)" in r.stdout, (phrase, out(r))
+            assert r.returncode == (0 if float(hours) > 9 else 6), (phrase, out(r))
+        for phrase in ("Mission budget: 4 days", "Mission budget: four hours", "Mission budget: 4 hoursish"):
+            edit_state("PLAYBOOK.md", lambda t, p=phrase: original.replace("Mission budget: 8 hours.", p))
+            assert "elapsed of 8h (the default)" in room("budget").stdout, phrase
+    finally:
+        edit_state("PLAYBOOK.md", lambda t: original)
+    set_state("mission_started=none")
+
+
 setup()
 for name, fn in list(globals().items()):
     if name.startswith("t_"):
