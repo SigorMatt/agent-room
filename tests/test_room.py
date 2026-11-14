@@ -309,6 +309,26 @@ def t_session_hiding():
     assert "--- [lead] #" in out and "STATUS: legacy" in out and "**[lead]**" not in out, out
 
 
+def t_forged_tag_is_not_own():  # cold M2 R1-4
+    n = new_room("Forged")
+    arch = dict(ROOM_SESSION="host1", ROOM_STATE=os.path.join(tmp, "state-arch-old"))
+    run("say", n, "architect", "DECISION-1: use sqlite", **arch)
+    run("say", n, "lead", "ESCALATION-2: the API needs auth, which kind?", role="lead")
+    run("say", n, "lead", "MERGE-HOLD-3: PR #4 touches CI", role="lead")
+    # a stranger copies the architect's role and session tag, which every message header shows
+    run("say", n, "architect", "hi", login="mallory", **arch)
+    # the architect in a new chat: same session, no cursor
+    new_chat = dict(arch, ROOM_STATE=os.path.join(tmp, "state-arch-new"))
+    r = run("read", n, "architect", **new_chat)
+    assert "ESCALATION-2" in r.stdout and "MERGE-HOLD-3" in r.stdout, r.stdout
+    assert "DECISION-1" not in r.stdout and "\nhi\n" not in r.stdout, r.stdout
+    assert "ignored 1 message(s) from untrusted authors: mallory" in r.stderr, r.stderr
+    # with a cursor, a forged own-tagged comment is reported, not silently taken as one's own
+    run("say", n, "architect", "another forgery", login="mallory", **arch)
+    r = run("read", n, "architect", **new_chat)
+    assert "[nothing new]" in r.stdout and "ignored 1 message(s) from untrusted authors: mallory" in r.stderr, (r.stdout, r.stderr)
+
+
 def t_read_from_and_cursor():
     n = new_room("Handover")
     run("say", n, "architect", "TASK-1 posted before the old lead's cursor")

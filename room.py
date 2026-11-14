@@ -167,9 +167,10 @@ def session_id(a=None):
 
 
 def is_own(m, role, session):
-    """Sent by this participant: same role and session. A message from before sessions has
-    none, so its role alone decides, as it used to."""
-    return m["role"] == role and m["session"] in (None, session)
+    """Sent by this participant: a trusted author, same role and session. A message from before
+    sessions has none, so its role alone decides, as it used to. Anyone can copy a role and
+    session tag, so an untrusted comment is never one's own."""
+    return m["role"] == role and m["session"] in (None, session) and trusted(m)
 
 
 # --- messages
@@ -296,8 +297,9 @@ def unseen(room, role):
     """Messages from others this role hasn't seen; advances the cursor past them.
 
     Others are everyone but this role in this session. With no cursor (new or wiped
-    machine), everything after this participant's own last message counts as unseen,
-    so a restarted participant picks up where it left off.
+    machine), everything after this participant's own last trusted message counts as
+    unseen, so a restarted participant picks up where it left off, and a forged tag
+    can't make it skip anything.
     """
     sid = session_id()
     cur = load_cursor(room, role)
