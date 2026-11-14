@@ -249,6 +249,17 @@ def t_kinds():
         "I think so": None,
         "PLANs change": None,
         "": None,
+        # markdown decoration before the kind doesn't hide it (cold M2 R1-6)
+        "**ESCALATION-3**: postgres or sqlite?": "ESCALATION-3",
+        "`STOP` now": "STOP",
+        "> PAUSE": "PAUSE",
+        "## STATUS: ok": "STATUS",
+        "_DONE_": "DONE",
+        "*MERGE-HOLD-4_ CI": "MERGE-HOLD-4",
+        "**LEAD ONLINE**, generation 2": "LEAD ONLINE",
+        " > **ACK DECISION-2**": "ACK DECISION-2",
+        "> **Note**: plain": None,
+        "Re: DECISION-3": None,
     }
     for text, want in cases.items():
         assert kind(text) == want, (text, kind(text), want)
@@ -352,6 +363,13 @@ def t_role_guard():
         assert r.returncode == 2 and "Nothing was posted" in r.stderr, (role, text, r.returncode, r.stderr)
     r = run("say", n, "lead", "-", role="lead", stdin="DECISION-3: sneaky, via stdin", check=False)
     assert r.returncode == 2, r.stderr
+    # markdown around a kind doesn't get it past the guard (cold M2 R1-6)
+    wrapped = [("lead", "**DECISION-3**: merge as is"), ("lead", "`STOP` now"), ("lead", "> PAUSE"),
+               ("lead", "## CHANGE-4"), ("architect", "**PLAN**: M1, M2"), ("architect", "_STATUS_: ok"),
+               ("architect", "**ACK DECISION-1**"), ("watchdog", "**STATUS** fine")]
+    for role, text in wrapped:
+        r = run("say", n, role, text, role=role, check=False)
+        assert r.returncode == 2 and "Nothing was posted" in r.stderr, (role, text, r.returncode, r.stderr)
     r = run("close", n, "architect", "DONE: phase complete", check=False)
     assert r.returncode == 2 and "Guarded" in run("rooms").stdout, "a refused close must leave the room open"
     r = run("say", n, "human", "STOP", check=False)
@@ -367,7 +385,7 @@ def t_role_guard():
     allowed = [("architect", t) for t in ("DECISION-1: merge", "CHANGE-2: new API", "PAUSE", "STOP", "Thanks")]
     allowed += [("lead", t) for t in ("PLAN: M1, M2", "LEAD ONLINE", "STATUS: ok", "HANDOFF: M1 step 7",
                                       "ACK DECISION-1", "ACK CHANGE-2", "PAUSED at step 3", "a plain note")]
-    allowed += [("watchdog", "LEAD-SILENT: no progress in 3h")]
+    allowed += [("watchdog", "LEAD-SILENT: no progress in 3h"), ("watchdog", "**LEAD-SILENT** 3h")]
     for role, text in allowed:
         run("say", n, role, text, role=role)
     assert len(issue(n)["comments"]) == len(allowed)
@@ -394,6 +412,10 @@ def t_auto_buzz():
         r = run("say", n, "lead", text, role="lead", ROOM_NTFY_TOPIC="t-abc")
         assert "[buzz" not in r.stdout, (text, r.stdout)
     assert curl_calls() == []
+    for text, kind in (("**ESCALATION-6**: which db?", "ESCALATION-6"), ("> `DONE`", "DONE")):  # cold M2 R1-6
+        r = run("say", n, "lead", text, role="lead", ROOM_NTFY_TOPIC="t-abc")
+        (args,) = curl_calls()
+        assert "[buzz sent]" in r.stdout and f"Title: {kind} · agent-room room {n}" in args, (r.stdout, args)
     r = run("say", n, "lead", "ESCALATION-5: x", "--no-buzz", role="lead", ROOM_NTFY_TOPIC="t-abc")
     assert "sent #" in r.stdout and "[buzz" not in r.stdout and curl_calls() == [], r.stdout
     r = run("say", n, "lead", "STATUS: Qodo absent", "--buzz", role="lead", ROOM_NTFY_TOPIC="t-abc")
