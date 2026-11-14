@@ -344,8 +344,23 @@ def hint(cmd, room, role, extra=""):
 
 # --- phone notifications
 
+CURL_TIMEOUT = 30  # seconds; curl's own -m 20 normally ends it first
+
+
+def scrub(text, secrets):
+    """TEXT with each secret (the ntfy topic, the token) replaced by ***. A short secret is replaced
+    only where it stands alone, so it can't mangle ordinary words."""
+    for secret in filter(None, secrets):
+        pattern = re.escape(secret)
+        if len(secret) < 6:
+            pattern = rf"(?<![A-Za-z0-9_-]){pattern}(?![A-Za-z0-9_-])"
+        text = re.sub(pattern, "***", text)
+    return text
+
+
 def buzz(title, message, click=None):
-    """Push a phone notification through ntfy. Never raises; returns an error string, or None if sent."""
+    """Push a phone notification through ntfy. Never raises; returns an error string, or None if sent.
+    The error never echoes curl's argv, and never holds the topic or the token."""
     topic = os.environ.get("ROOM_NTFY_TOPIC", "").strip()
     if not topic:
         return "ROOM_NTFY_TOPIC is not set"
@@ -359,12 +374,14 @@ def buzz(title, message, click=None):
         cmd += ["-H", f"Authorization: Bearer {token}"]
     cmd += ["-d", message, f"{server}/{topic}"]
     try:
-        r = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
-    except (OSError, subprocess.TimeoutExpired) as e:
-        return str(e)
+        r = subprocess.run(cmd, capture_output=True, text=True, errors="replace", timeout=CURL_TIMEOUT)
+    except subprocess.TimeoutExpired:  # its text would hold the whole argv
+        return f"curl timed out after {CURL_TIMEOUT}s"
+    except OSError as e:  # its text can hold a file name; strerror doesn't
+        return f"could not run curl: {e.strerror or type(e).__name__}"
     if r.returncode == 0:
         return None
-    err = r.stderr.strip() or f"curl exited {r.returncode}"
+    err = scrub(r.stderr.strip(), (topic, token)) or f"curl exited {r.returncode}"
     if "429" in err:
         err += " (ntfy's daily limit for this shared IP; a paid ntfy tier plus ROOM_NTFY_TOKEN avoids it)"
     elif "403" in err:

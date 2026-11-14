@@ -9,6 +9,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import types
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOM = os.path.join(HERE, "..", "room.py")
@@ -475,6 +476,49 @@ def t_close_buzzes_like_say():  # cold M2 R1-5
     curl_calls()
     r = run("close", n, "lead", "x", "--buzz", "--no-buzz", role="lead", check=False)
     assert r.returncode == 2 and "not allowed with" in r.stderr, r.stderr
+
+
+def t_buzz_errors_hide_secrets():  # cold M2 R1-10
+    mod = load_room_module()
+    topic, token = "private-topic-r4nd0m", "tk_secret123"
+
+    def timeout(cmd, kw):
+        raise subprocess.TimeoutExpired(cmd, kw["timeout"])  # its text is the whole argv
+
+    def missing(cmd, kw):
+        raise FileNotFoundError(2, "No such file or directory", cmd[0])
+
+    def denied(cmd, kw):
+        raise PermissionError(13, "Permission denied", " ".join(cmd))
+
+    def echoes(cmd, kw):
+        return subprocess.CompletedProcess(cmd, 22, "", f"curl: (22) {' '.join(cmd)} returned error: 403")
+
+    def silent(cmd, kw):
+        return subprocess.CompletedProcess(cmd, 7, "", "")
+
+    def stub(behaviour):
+        def run(cmd, **kw):
+            assert f"https://ntfy.sh/{topic}" in cmd and f"Authorization: Bearer {token}" in cmd, cmd
+            return behaviour(cmd, kw)
+        mod.subprocess = types.SimpleNamespace(run=run, TimeoutExpired=subprocess.TimeoutExpired)
+
+    saved = dict(os.environ)
+    os.environ.update(ROOM_NTFY_TOPIC=topic, ROOM_NTFY_TOKEN=token)
+    try:
+        for behaviour, want in ((timeout, "curl timed out after 30s"),
+                                (missing, "could not run curl: No such file or directory"),
+                                (denied, "could not run curl: Permission denied"),
+                                (echoes, "https://ntfy.sh/*** returned error: 403 (is ntfy.sh allowed"),
+                                (silent, "curl exited 7")):
+            stub(behaviour)
+            err = mod.buzz("DONE · pet room 1", "DONE from lead in SigorMatt/pet room 1", "https://x/1#c")
+            assert want in err and topic not in err and token not in err, (behaviour.__name__, err)
+    finally:
+        os.environ.clear()
+        os.environ.update(saved)
+    # a short secret is replaced only where it stands alone
+    assert mod.scrub("The requested URL https://ntfy.sh/t failed", ("t",)) == "The requested URL https://ntfy.sh/*** failed"
 
 
 def t_links_use_version():
