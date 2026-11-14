@@ -129,13 +129,18 @@ def git_out(*args, cwd=None):
     return git(*args, cwd=cwd).stdout.strip()
 
 
+def repo_of_url(url):
+    """OWNER/NAME from a GitHub (or Claude proxy) git URL, or None."""
+    m = re.search(r"(?:github\.com[:/]+|/git/)([\w.-]+)/([\w.-]+?)(?:\.git)?/?$", url)
+    return f"{m.group(1)}/{m.group(2)}" if m else None
+
+
 def repo_from_checkout():
     try:
         url = git("remote", "get-url", "origin", check=False, timeout=10).stdout.strip()
     except StateError:
         return None
-    m = re.search(r"(?:github\.com[:/]+|/git/)([\w.-]+)/([\w.-]+?)(?:\.git)?/?$", url)
-    return f"{m.group(1)}/{m.group(2)}" if m else None
+    return repo_of_url(url)
 
 
 def default_trust():
@@ -607,37 +612,67 @@ def remote_heads():
     return heads
 
 
+def project_toplevel():
+    """The main worktree of the project checkout around the current directory, or None."""
+    if (repo_from_checkout() or "").lower() != REPO.lower():
+        return None
+    common = git("rev-parse", "--git-common-dir", check=False).stdout.strip()
+    common = os.path.realpath(common) if common else ""
+    return os.path.dirname(common) if os.path.basename(common) == ".git" else None
+
+
+def is_stale_state_worktree(path):
+    """A state worktree left over from an agent-room/state that was deleted and recreated: a linked
+    worktree or clone of this repo whose HEAD holds docs/playbook/, and not the project checkout."""
+    url = git("remote", "get-url", "origin", cwd=path, check=False).stdout.strip()
+    if (repo_of_url(url) or "").lower() != REPO.lower() and url != remote_url():
+        return False
+    if git("rev-parse", "-q", "--verify", f"HEAD:{PLAYBOOK_DIR}", cwd=path, check=False).returncode != 0:
+        return False
+    top = project_toplevel()
+    return not (top and os.path.realpath(top) == os.path.realpath(path))
+
+
 def check_state_dir(path):
-    """Refuse a directory that isn't the state worktree, before anything resets or cleans it: one
-    with another branch checked out, or whose HEAD shares no history with the state branch (the
-    project checkout, or a builder's worktree, whatever the current directory)."""
+    """Fetch, then judge the directory before anything resets or cleans it. Returns 'ok', or 'stale'
+    for a state worktree whose history the recreated branch no longer shares. Refuses anything else:
+    a directory with another branch checked out, or with no state history (the project checkout, or
+    a builder's worktree, whatever the current directory)."""
     branch = git("symbolic-ref", "-q", "--short", "HEAD", cwd=path, check=False).stdout.strip()
     if branch and branch != STATE_BRANCH:
         raise StateError(f"{path} has branch {branch} checked out, so it isn't the state worktree; "
                          "set ROOM_STATE_DIR to a directory of its own")
-    if git("rev-parse", "-q", "--verify", STATE_REF, cwd=path, check=False).returncode != 0:
-        fetch(path)
-    if git("merge-base", "HEAD", STATE_REF, cwd=path, check=False).returncode != 0:
-        raise StateError(f"{path} holds no {STATE_BRANCH} history (the project checkout?), so it isn't the "
-                         "state worktree; set ROOM_STATE_DIR to a directory of its own")
+    fetch(path)
+    if git("merge-base", "HEAD", STATE_REF, cwd=path, check=False).returncode == 0:
+        return "ok"
+    if is_stale_state_worktree(path):
+        return "stale"
+    raise StateError(f"{path} holds no {STATE_BRANCH} history (the project checkout?), so it isn't the "
+                     "state worktree; set ROOM_STATE_DIR to a directory of its own")
+
+
+def move_aside(path, why):
+    aside = f"{path}.broken-{time.strftime('%Y%m%dT%H%M%SZ', time.gmtime())}"
+    if os.path.lexists(aside):
+        aside += f"-{os.getpid()}"
+    os.rename(path, aside)
+    print(f"[state worktree {path} {why}; moved it to {aside} and made a new one]", file=sys.stderr)
 
 
 def ensure_worktree():
-    """Path of the state worktree: checked, rebuilt if broken, created if missing."""
+    """Path of the state worktree, just fetched: checked, rebuilt if broken or stale, created if missing."""
     path = state_path()
     if os.path.lexists(os.path.join(path, ".git")):
         r = git("rev-parse", "--show-toplevel", cwd=path, check=False)
         if r.returncode == 0:
-            check_state_dir(path)
-            return path
-        if "not a git repository" not in r.stderr:
+            if check_state_dir(path) == "ok":
+                return path
+            move_aside(path, f"is stale (no history of the recreated {STATE_BRANCH})")
+        elif "not a git repository" in r.stderr:
+            # e.g. the project checkout it was added from was cloned again
+            move_aside(path, "was broken")
+        else:
             raise StateError(f"git rev-parse in {path}: {r.stderr.strip()}")
-        # e.g. the project checkout it was added from was cloned again: move it aside and start over
-        aside = f"{path}.broken-{time.strftime('%Y%m%dT%H%M%SZ', time.gmtime())}"
-        if os.path.lexists(aside):
-            aside += f"-{os.getpid()}"
-        os.rename(path, aside)
-        print(f"[state worktree {path} was broken; moved it to {aside} and made a new one]", file=sys.stderr)
     if STATE_BRANCH not in remote_heads():
         raise StateError(f"{STATE_BRANCH} doesn't exist in {REPO} yet: the architect runs '{ME} state init'")
     if os.path.isdir(path) and os.listdir(path):
@@ -864,8 +899,7 @@ def pushed_text(path, name):
 
 def lease_holder():
     """(session, generation) of the lease on the remote state branch, freshly fetched."""
-    path = ensure_worktree()
-    fetch(path)
+    path = ensure_worktree()  # fetched
     text = pushed_text(path, "MISSIONS.md")
     if text is None:
         raise StateError(f"{PLAYBOOK_DIR}/MISSIONS.md is missing on {STATE_BRANCH}: run '{ME} state init-lead'")
@@ -1152,8 +1186,7 @@ def cmd_preflight(a):
     # branch after a fetch, so uncommitted edits in the worktree can't pass for it
     path = None
     try:
-        path = ensure_worktree()
-        fetch(path)
+        path = ensure_worktree()  # fetched
     except StateError as e:
         path = None
         check("✗", f"state branch: {e}")

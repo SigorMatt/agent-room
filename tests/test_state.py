@@ -391,6 +391,36 @@ def t_refuses_a_dir_that_is_not_the_state_worktree():
     assert g("-C", work, "rev-parse", "mission/M1-x").stdout.strip() == main_sha
 
 
+def t_recreated_state_branch_rebuilds_stale_worktrees():
+    # cold M2 R2-2: state worktrees of a deleted and recreated agent-room/state are stale, not foreign
+    repo = bare("again")
+    work = os.path.join(tmp, "work", "again")
+    g("clone", "-q", repo, work)
+    here = dict(cwd=work, ROOM_REPO="SigorMatt/again")  # worktree mode
+    away = dict(cwd=tmp, ROOM_REPO="SigorMatt/again", ROOM_STATE_REMOTE=repo)  # clone mode
+    room("state", "init", session="arch", state="GA", **here)
+    room("state", "init-lead", session="L1", state="GA", **here)
+    room("state", "path", state="GB", **away)
+    g("--git-dir", repo, "update-ref", "-d", "refs/heads/agent-room/state")  # Matthew deletes the branch
+    room("state", "init", session="arch", state="GARCH", **here)  # and the architect recreates it
+    new = sha(repo, "agent-room/state")
+    for state, kw in (("GA", here), ("GB", away)):
+        r = room("state", "path", state=state, **kw)
+        assert r.stdout.strip() == sdir(state), r.stdout
+        assert re.fullmatch(r"\[state worktree .* is stale \(no history of the recreated agent-room/state\); moved "
+                            r"it to .*\.broken-\d{8}T\d{6}Z(-\d+)? and made a new one\]", r.stderr.strip()), r.stderr
+        assert g("-C", sdir(state), "rev-parse", "HEAD").stdout.strip() == new
+    # the project checkout itself is still refused, even at a commit that holds docs/playbook/
+    os.makedirs(os.path.join(work, "docs", "playbook"))
+    open(os.path.join(work, "docs", "playbook", "notes.md"), "w").write("project notes\n")
+    g("-C", work, "checkout", "-q", "--detach", "origin/main")
+    g("-C", work, "add", "-A")
+    g("-C", work, "commit", "-qm", "project docs")
+    r = room("state", "sync", state=None, ROOM_STATE_DIR=work, check=False, **here)
+    assert r.returncode == 1 and "holds no agent-room/state history" in r.stderr, r.stderr
+    assert os.path.exists(os.path.join(work, "docs", "playbook", "notes.md"))
+
+
 # --- lease
 
 def t_lease_take_race():
