@@ -338,7 +338,7 @@ def t_copied_parsing_matches_the_tool():
     q = importlib.util.module_from_spec(spec)
     sys.modules["qodo_review"] = q  # its dataclasses look their module up
     spec.loader.exec_module(q)
-    for name in ("_HEADING", "_FINDING", "_SEVERITY", "_REVIEWED", "_RESOLVED_MARK"):
+    for name in ("_HEADING", "_FINDING", "_SEVERITY", "_REVIEWED", "_RESOLVED_MARK", "_CATEGORY", "_COUNT", "_STRUCK"):
         assert getattr(R, name).pattern == getattr(q, name).pattern, name
     for title in ("<s>Fix the <code>x</code> bug</s> <code>✓ Resolved</code>", "A &amp; B ~~struck~~", "a\\_b  c",
                   "Resolved title that is open", "<b>Bold</b>   spaced"):
@@ -347,6 +347,8 @@ def t_copied_parsing_matches_the_tool():
     mine, theirs = R.qodo_findings(text), q.findings(text)
     assert [(f["number"], f["title"], f["severity"]) for f in mine] == [(f.number, f.title, f.severity) for f in theirs]
     assert R.is_code_review(text) and q.is_code_review("issue-comment", {"body": text})
+    assert R.header_total(text) == q.header_total(text) == 2
+    assert [f["resolved"] for f in mine] == [f.resolved for f in theirs] == [True, True, False, True, False]
     summary = open(REAL_REVIEW.replace("6884442048", "6884435207"), encoding="utf-8").read()
     assert not R.is_code_review(summary) and not q.is_code_review("issue-comment", {"body": summary})
     assert R._REVIEWED.findall(text)[-1] == q.reviewed_commit(text) == "8c9c413a98cbac3dc5dcfdc04a29ae1b470916f5"
@@ -679,6 +681,52 @@ def t_finding_after_a_blank_line_needs_a_row():  # cold M3 R1-12
     failed(gate(), "dispositions", "reviews/cold/M3/DISPOSITIONS.md has no row for R1-2")
 
 
+
+def t_every_archived_qodo_finding_needs_a_row():  # cold M3 R1-5
+    s = mission()
+    start(base=s["head"])
+    rows = [("2", "Informational", "Greeting text is hard-coded", "app.py", "dismissed: the playbook fixes the text")]
+    commit("review: qodo fetch 2, which no longer shows finding 1", dict(
+        qodo_archive(2, [("Informational", "Greeting text is hard-coded", False)], s["c2"]),
+        **{f"reviews/qodo/PR-{PR}/DISPOSITIONS.md": qodo_dispositions(rows, reviewed=s["c2"], fetches="1, 2")}))
+    publish()
+    r = gate()
+    failed(r, "dispositions", "has no row for: Crash when the name is missing (archived fetches 1, 2)")
+    rows.insert(0, ("absent", "Action required", "Crash when the name is missing", "app.py", f"fixed in {s['c2'][:7]}"))
+    commit("review: dispositions for every fetch", {
+        f"reviews/qodo/PR-{PR}/DISPOSITIONS.md": qodo_dispositions(rows, reviewed=s["c2"], fetches="1, 2")})
+    publish()
+    r = gate()
+    assert r.returncode == 0 and "2 cold and 2 Qodo row(s)" in line(r, "dispositions"), out(r)
+    # an absent finding keeps the severity it had: dismissing an Action-required one holds
+    rows[0] = ("absent", "Informational", "Crash when the name is missing", "app.py", "dismissed: gone")
+    commit("review: dismiss the absent one", {
+        f"reviews/qodo/PR-{PR}/DISPOSITIONS.md": qodo_dispositions(rows, reviewed=s["c2"], fetches="1, 2")})
+    publish()
+    assert verdict(gate()) == "gate: FAIL hold reasons 1"
+
+
+def t_qodo_counts_must_agree():  # cold M3 R1-7
+    start()
+    c1 = commit("feat", {"app.py": APP1})
+    drifted = qodo_comment(QODO_FINDINGS, c1).replace("<summary>  1.  ", "<summary><b>1.</b> ").replace(
+        "<summary>  2.  ", "<summary><b>2.</b> ")
+    assert R.header_total(drifted) == 1 and R.qodo_findings(drifted) == []
+    files = qodo_archive(1, QODO_FINDINGS, c1)
+    files[f"reviews/qodo/PR-{PR}/1/issue-comment-7001.md"] = drifted
+    files.update({"reviews/cold/M3/DISPOSITIONS.md": cold_dispositions([]),
+                  f"reviews/qodo/PR-{PR}/DISPOSITIONS.md": qodo_dispositions([], reviewed=c1)})
+    commit("records", files)
+    publish()
+    r = gate()
+    failed(r, "dispositions", f"Qodo comment did not parse: read it (reviews/qodo/PR-{PR}/1/issue-comment-7001.md: "
+                              "the header counts 1 open, 0 parsed open)")
+    no_counts = qodo_comment(QODO_FINDINGS, c1).replace("<code>🐞 Bugs (1)</code>  <code>📘 Rule violations (0)</code>", "")
+    assert R.header_total(no_counts) is None
+    commit("records: no header counts", {f"reviews/qodo/PR-{PR}/1/issue-comment-7001.md": no_counts})
+    publish()
+    failed(gate(), "dispositions", "Qodo comment did not parse: read it", "no header counts, 1 parsed open")
+
 def t_qodo_dispositions():
     mission(qodo="off", qodo_file=False)
     r = gate(QODO_REVIEW="off")
@@ -694,7 +742,7 @@ def t_qodo_dispositions():
     three = QODO_FINDINGS + [("Remediation recommended", "Logs the user's name", False)]
     mission(qodo_findings=three)
     r = gate()
-    failed(r, "dispositions", f"DISPOSITIONS.md has no row for: Logs the user's name (archive fetch 1)")
+    failed(r, "dispositions", f"DISPOSITIONS.md has no row for: Logs the user's name (archived fetches 1)")
     mission(qodo_rows=lambda s: [("1", "Informational", "Crash when the name is missing", "app.py", "dismissed: no crash"),
                                  ("2", "Informational", "Greeting text is hard-coded", "app.py", "dismissed: by design")])
     r = gate()

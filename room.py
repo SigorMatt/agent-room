@@ -1323,6 +1323,9 @@ _FINDING = re.compile(r"<summary>[ \t]*(\d+)\.[ \t]+([^\n]*?)[ \t]*</summary>")
 _SEVERITY = re.compile(r'<img src="https://img\.shields\.io/badge/[^"]*"[^>]*alt="([^"]+)"')
 _REVIEWED = re.compile(r"<!--\s*https://[^\s]+/commit/([0-9a-f]{40})\s*-->")
 _RESOLVED_MARK = re.compile(r"✓\s*Resolved")
+_CATEGORY = re.compile(r"<code>\s*([^<]*?\(\d+\))\s*</code>")
+_COUNT = re.compile(r"\((\d+)\)\s*$")
+_STRUCK = re.compile(r"<s>|<del>|<strike>|~~|✓\s*Resolved")
 
 
 def plain(title):
@@ -1366,6 +1369,13 @@ def mask_code(text):
     return re.sub(r"<pre>.*?</pre>|<code>.*?</code>", lambda m: blank(m.group(0)), "".join(out), flags=re.S)
 
 
+def header_total(text):
+    """qodo_review.py's header_total(): the open findings the header counts, or None without counts."""
+    counts = [int(m.group(1)) for label in _CATEGORY.findall(text.split("<details", 1)[0])
+              for m in [_COUNT.search(label.strip())] if m]
+    return sum(counts) if counts else None
+
+
 def is_code_review(text):
     """qodo_review.py's is_code_review(): the comment's first heading names the Code Review."""
     m = _HEADING.search(text)
@@ -1383,7 +1393,20 @@ def qodo_findings(text):
             if position < m.start():
                 severity = label
         title = plain(m.group(2).strip())
-        out.append({"number": m.group(1), "title": title, "key": title_key(title), "severity": severity})
+        out.append({"number": m.group(1), "title": title, "key": title_key(title), "severity": severity,
+                    "resolved": bool(_STRUCK.search(m.group(2)))})
+    return out
+
+
+def qodo_titles(fetches):
+    """{title key: {title, severity, first, fetch}} over every archived fetch: the strictest severity any
+    finding of that title had, and the reviewed commit of the first fetch that holds the title."""
+    out = {}
+    for f in fetches:
+        for x in f["findings"]:
+            t = out.setdefault(x["key"], {"title": x["title"], "severity": x["severity"], "first": f["reviewed"],
+                                          "fetch": f["fetch"]})
+            t["severity"] = stricter(x["severity"], t["severity"])
     return out
 
 
@@ -1590,16 +1613,16 @@ def review_records(root, sha, mission, pr):
         m = re.fullmatch(rf"reviews/qodo/PR-{pr}/(\d+)/issue-comment-(\d+)\.md", p)
         if m:
             fetches.setdefault(int(m.group(1)), []).append((int(m.group(2)), p))
-    qodo = None  # the latest archive holding a Code Review comment (the newest comment if several)
-    for k in sorted(fetches, reverse=True):
+    archived = []  # every fetch holding a Code Review comment (its newest, if several), oldest first
+    for k in sorted(fetches):
         reviews = [(cid, p, text) for cid, p in fetches[k]
                    for text in [blob(root, sha, p) or ""] if is_code_review(text)]
         if reviews:
             _, p, text = max(reviews)
             hits = _REVIEWED.findall(text)
-            qodo = {"fetch": k, "path": p, "reviewed": hits[-1] if hits else None, "findings": qodo_findings(text)}
-            break
-    return {"cold": cold, "qodo": qodo,
+            archived.append({"fetch": k, "path": p, "reviewed": hits[-1] if hits else None,
+                             "findings": qodo_findings(text), "header": header_total(text)})
+    return {"cold": cold, "qodo": archived[-1] if archived else None, "qodo_fetches": archived,
             "cold_path": f"reviews/cold/{mission}/DISPOSITIONS.md",
             "cold_dispositions": blob(root, sha, f"reviews/cold/{mission}/DISPOSITIONS.md"),
             "qodo_path": f"reviews/qodo/PR-{pr}/DISPOSITIONS.md",
@@ -1753,9 +1776,7 @@ def check_dispositions(g, root, head, rec, ledger_text):
         rows = find_table(text, ("#", "finding", "disposition"), ("severity", "file"))
         if rows is None and mode == "on":
             reasons.append((f"{path} has no | # | … | finding | … | disposition | table", None))
-        comment = {}  # title key -> finding; findings sharing a title take the strictest severity
-        for f in (q["findings"] if q else []):
-            comment[f["key"]] = dict(f, severity=stricter(f["severity"], comment.get(f["key"], {}).get("severity")))
+        titles = qodo_titles(rec["qodo_fetches"])  # every finding of every fetch, absent now or not
         seen = set()
         for row in rows or []:
             key = title_key(row["finding"])
@@ -1763,16 +1784,24 @@ def check_dispositions(g, root, head, rec, ledger_text):
                 continue
             seen.add(key)
             n_qodo += 1
-            f = comment.get(key) or {}
-            top = TOP_QODO in ((f.get("severity") or "").lower(), row.get("severity", "").strip("` ").lower())
+            t = titles.get(key) or {}
+            top = TOP_QODO in ((t.get("severity") or "").lower(), row.get("severity", "").strip("` ").lower())
             label = f"Qodo #{row['#'].strip() or '?'} \"{' '.join(row['finding'].split())}\""
             reasons += judge(root, head, label, row["disposition"], top, row.get("file", ""), ledger)
         if mode == "on" and q is None:
             reasons.append((f"{path} says qodo: on, but no Code Review comment is archived for this PR", None))
         elif mode == "on":
-            missing = [f["title"] for f in q["findings"] if f["key"] not in seen]
+            missing = [t["title"] for key, t in titles.items() if key not in seen]
             if missing:
-                reasons.append((f"{path} has no row for: {'; '.join(missing)} (archive fetch {q['fetch']})", None))
+                fetched = ", ".join(str(f["fetch"]) for f in rec["qodo_fetches"])
+                reasons.append((f"{path} has no row for: {'; '.join(missing)} (archived fetches {fetched})", None))
+    # QODO-REVIEW rule 5: the header's open count must agree with the open findings that parse
+    for f in rec["qodo_fetches"]:
+        open_ = sum(1 for x in f["findings"] if not x["resolved"])
+        if f["header"] is None or f["header"] != open_:
+            counted = "no header counts" if f["header"] is None else f"the header counts {f['header']} open"
+            reasons.append((f"Qodo comment did not parse: read it ({f['path']}: {counted}, {open_} parsed open)",
+                            None))
     if reasons:
         g.fail("dispositions", reasons)
     else:
