@@ -59,6 +59,7 @@ Results of the eleven assumptions in `v1.md` ("To verify"). Evidence lives in is
 - **B. Private repos on GitHub Free can't have branch protection or rulesets** (the API answers 403, "upgrade to GitHub Pro"). Preflight treats only that answer, a 403 whose message asks to upgrade, as "no protection", which passes. Any other 403 (missing permission, token scope) fails the check.
 - **D. Subagents can't read the Claude Project.** Builders, cold reviewers and Qodo readers can't load the Projects tool, so `QODO-REVIEW.md` is copied byte for byte into `docs/QODO-REVIEW.md`. The Project copy stays Matthew's master; changes reach the repo by PR.
 - **E. A scheduled session has no `add_repo`.** It inherits the repos of the session that scheduled it. So a lead schedules its successor from a session that already has the project repo, which every lead does.
+- **F. Builder worktrees start from the default branch,** not from the lead's current branch. A builder on a mission first merges the mission branch into its worktree branch, and every brief says so.
 - **C. A new repo may be completely empty** (`pet-todo` has no commits). Preflight detects this, and the architect's kickoff creates the first commit on `main`; no protection can exist yet, so this is safe.
 
 ## Decisions taken during the build
