@@ -930,12 +930,13 @@ def cmd_state_sync(a):
 
 
 def changed_paths(path):
-    """Paths the worktree changes against the commit its work was built on: staged and unpushed."""
+    """Paths the worktree changes against the commit its work was built on: staged and unpushed.
+    Without rename detection, so a renamed or moved file counts under its old name too."""
     git("add", "-A", cwd=path)
-    out = set(git_out("diff", "--cached", "--name-only", cwd=path).splitlines())
+    out = set(git_out("diff", "--cached", "--no-renames", "--name-only", cwd=path).splitlines())
     base = git("merge-base", "HEAD", STATE_REF, cwd=path, check=False).stdout.strip()
     if base:
-        out |= set(git_out("diff", "--name-only", base, "HEAD", cwd=path).splitlines())
+        out |= set(git_out("diff", "--no-renames", "--name-only", base, "HEAD", cwd=path).splitlines())
     return out
 
 

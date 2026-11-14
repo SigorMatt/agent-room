@@ -483,6 +483,26 @@ def t_stale_lead_cannot_write():
     assert room_b("state", "set", "step=x", check=False).returncode == 5, "a released lease is no one's"
 
 
+def t_renaming_a_lead_file_needs_the_lease():
+    # cold M2 R2-1: a rename shows the old name too, staged or already committed locally
+    room("lease", "take")
+    before = sha(PET, "agent-room/state")
+    room("state", "sync", session="arch")
+    g("-C", sdir("A"), "mv", "docs/playbook/MISSIONS.md", "docs/playbook/archive-missions.md")
+    r = room("state", "commit", "-m", "tidy", session="arch", check=False)
+    assert r.returncode == 5 and "MISSIONS.md are lead-owned" in r.stderr, (r.returncode, r.stderr)
+    g("-C", sdir("A"), "commit", "-qm", "tidy")  # an unpushed commit holding the rename
+    r = room("state", "commit", "-m", "tidy", session="arch", check=False)
+    assert r.returncode == 5 and "MISSIONS.md are lead-owned" in r.stderr, (r.returncode, r.stderr)
+    assert sha(PET, "agent-room/state") == before
+    room("state", "sync")
+    g("-C", sdir("A"), "mv", "docs/playbook/LEDGER.md", "docs/playbook/LEDGER-old.md")
+    assert "pushed" in room("state", "commit", "-m", "the holder may").stdout
+    g("-C", sdir("A"), "mv", "docs/playbook/LEDGER-old.md", "docs/playbook/LEDGER.md")
+    assert "pushed" in room("state", "commit", "-m", "and back").stdout
+    room("lease", "release")
+
+
 def t_say_refused_without_lease():
     assert "room 1 in SigorMatt/pet" in room("new", "Phase 1").stdout
     room("lease", "take", "--takeover", session="L1")
