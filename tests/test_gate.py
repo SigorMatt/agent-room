@@ -427,6 +427,19 @@ def t_template_globs_match_nested_paths():  # cold M3 R1-1
     assert held(rules, "src/app.py") is None and held(rules, "web/packages.json") is None
 
 
+def t_blank_line_inside_a_table():  # cold M3 R1-12
+    text = ("| ID | severity |\n| --- | --- |\n| R1-1 | low |\n\n| R1-2 | high |\n\nnone\n\n"
+            "| criterion | met |\n| --- | --- |\n| P1 | yes |\n\n| a | b |\n|---|---|\n| 1 | 2 |\n")
+    tables = R.md_tables(text)
+    assert [(h, rows) for h, rows in tables] == [
+        (["id", "severity"], [["R1-1", "low"], ["R1-2", "high"]]), (["criterion", "met"], [["P1", "yes"]]),
+        (["a", "b"], [["1", "2"]])], tables
+    report = cold_report(1, "c" * 40, [("R1-1", "low", "app.py:1"), ("R1-2", "high", "app.py:2")])
+    report = report.replace("| R1-1 | low | app.py:1 | a finding | it breaks |\n",
+                            "| R1-1 | low | app.py:1 | a finding | it breaks |\n\n")
+    assert R.parse_cold_report("r.md", "round", 1, report)["findings"] == {"R1-1": "low", "R1-2": "high"}
+
+
 def t_wrapped_merge_hold_bullet():  # cold M3 R1-11
     playbook = ("## Merge-hold list\n\nHeld for Matthew.\n\n"
                 "- CI and workflow files: `.github/actions/**`,\n    `.github/workflows/**`\n"
@@ -605,6 +618,16 @@ def t_cold_report_problems():
     r = gate()
     failed(r, "dispositions", "finding ID R2-7 is not R1-<n>", "R1-3 has severity 'urgent', not high, medium or low")
     assert verdict(r) == "gate: FAIL hold reasons none; fix first: dispositions", out(r)
+
+
+def t_finding_after_a_blank_line_needs_a_row():  # cold M3 R1-12
+    s = mission(findings1=[("R1-1", "low", "app.py:1"), ("R1-2", "high", "app.py:2")],
+                cold_rows=lambda s: [("R1-1", "low", "app.py", "dismissed: checked by the caller")])
+    start(base=s["head"])
+    report = cold_report(1, s["c1"], [("R1-1", "low", "app.py:1"), ("R1-2", "high", "app.py:2")])
+    commit("review: reflow round 1", {"reviews/cold/M3/round-1.md": report.replace("it breaks |\n| R1-2", "it breaks |\n\n| R1-2")})
+    publish()
+    failed(gate(), "dispositions", "reviews/cold/M3/DISPOSITIONS.md has no row for R1-2")
 
 
 def t_qodo_dispositions():

@@ -1386,20 +1386,31 @@ def md_cells(line):
 
 
 def md_tables(text):
-    """[(lowercased header cells, [row cells])] of every markdown table in text."""
-    out, rows, sep = [], None, False
-    for line in text.splitlines():
+    """[(lowercased header cells, [row cells])] of every markdown table in text. Blank lines inside a
+    table don't end it (so no row after one is lost); after blank lines, a table line starts a new
+    table only when a separator row follows it."""
+    def separator(cells):
+        return cells is not None and all(re.fullmatch(r":?-+:?", c) for c in cells)
+
+    lines = text.splitlines()
+    out, rows, sep, gap = [], None, False, False
+    for i, line in enumerate(lines):
+        if not line.strip():
+            gap = rows is not None
+            continue
         cells = md_cells(line)
         if cells is None:
-            rows = None
+            rows, gap = None, False
             continue
-        if rows is None:
+        header_next = not separator(cells) and separator(md_cells(lines[i + 1]) if i + 1 < len(lines) else None)
+        if rows is None or (gap and header_next):
             rows, sep = [], False
             out.append(([c.lower() for c in cells], rows))
-        elif not sep and not rows and all(re.fullmatch(r":?-+:?", c) for c in cells):
+        elif not sep and not rows and separator(cells):
             sep = True
         else:
             rows.append(cells)
+        gap = False
     return out
 
 
