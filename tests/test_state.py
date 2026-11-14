@@ -5,8 +5,10 @@ Each project repo is a local bare git repo standing in for GitHub; `gh` is fake_
 Machine A works inside a checkout of the project (state worktree via `git worktree add`);
 machine B has no checkout (state worktree is a clone of $ROOM_STATE_REMOTE).
 """
+import contextlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -126,6 +128,31 @@ def expect(r, key, mark):
     assert ln.startswith(mark + " "), f"expected {mark} for {key!r}, got: {ln}\n{r.stdout}"
 
 
+def append(state, name, text):
+    with open(playbook_path(state, name), "a") as f:
+        f.write(text + "\n")
+
+
+@contextlib.contextmanager
+def pre_push(state, body):
+    """A pre-push hook in machine STATE's clone (B-style), for the length of the block."""
+    hooks = tempfile.mkdtemp(dir=tmp, prefix="hooks-")
+    with open(os.path.join(hooks, "pre-push"), "w") as f:
+        f.write("#!/bin/sh\ncat >/dev/null\n"
+                "unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_COMMON_DIR ROOM_STATE_REMOTE\n" + body)
+    os.chmod(os.path.join(hooks, "pre-push"), 0o755)
+    g("-C", sdir(state), "config", "core.hooksPath", hooks)
+    try:
+        yield hooks
+    finally:
+        g("-C", sdir(state), "config", "--unset", "core.hooksPath")
+
+
+# the push lands, then the client hears a failure (a connection dropped after the remote updated)
+LOST_ACK = ('git push -q --no-verify "$2" HEAD:refs/heads/agent-room/state\n'
+            'echo "fatal: the remote end hung up unexpectedly" >&2\nexit 1\n')
+
+
 def test(name, fn):
     fn()
     print(f"ok  {name}")
@@ -221,6 +248,7 @@ def t_state_init_lead():
 
 
 def t_state_set_and_get():
+    assert room("lease", "take").stdout.strip() == "1"  # writes to the machine block need the lease
     r = room("state", "set", "phase=2", "mission=M1", "custom_key=hello world")
     assert "set phase=2 mission=M1 custom_key=hello world" in r.stdout, r.stdout
     b = block()
@@ -237,9 +265,21 @@ def t_state_set_and_get():
     assert r.returncode == 1 and "no key" in r.stderr, r.stderr
 
 
+def t_state_set_rejects_any_line_break():
+    # cold M2 R1-9: every separator str.splitlines() honours, or a value could inject keys
+    before = block()
+    for sep in (" ", " ", "\x85", "\v", "\f", "\x1c", "\x1d", "\x1e", "\r"):
+        r = room("state", "set", f"intent=open PR for M1{sep}lease_session: mallory", check=False)
+        assert r.returncode == 1 and "single line" in r.stderr, (repr(sep), r.returncode, r.stderr)
+    assert block() == before
+    assert room("lease", "check").returncode == 0
+    room("state", "set", "intent=tabs\tand unicode — are fine")
+    assert room("state", "get", "intent").stdout.rstrip("\n") == "tabs\tand unicode — are fine"
+
+
 def t_state_next_counter():
     assert room("state", "next", "counter").stdout.strip() == "1"
-    assert room_b("state", "next", "counter").stdout.strip() == "2"
+    assert room_b("state", "next", "counter", session="A").stdout.strip() == "2"  # same session, other machine
     assert room("state", "next", "counter").stdout.strip() == "3"  # A syncs first, so no race
     assert block()["counter"] == "3"
     r = room("state", "next", "mission", check=False)  # "M1" is not a number
@@ -251,7 +291,7 @@ def t_state_commit_rejected_after_another_push():
     room_b("state", "sync")
     with open(playbook_path("B", "LEDGER.md"), "a") as f:
         f.write("| L-1 | cold M1 | from B | real | M2 | open |\n")
-    assert "pushed" in room_b("state", "commit", "-m", "ledger: L-1").stdout
+    assert "pushed" in room_b("state", "commit", "-m", "ledger: L-1", session="A").stdout  # A's other machine
     with open(playbook_path("A", "LEDGER.md"), "a") as f:
         f.write("| L-9 | cold M1 | from A | stale | M2 | open |\n")
     r = room("state", "commit", "-m", "ledger: L-9", check=False)
@@ -261,6 +301,39 @@ def t_state_commit_rejected_after_another_push():
     assert g("-C", sdir("A"), "status", "--porcelain").stdout == ""
     assert "L-9" not in remote_file(PET, "docs/playbook/LEDGER.md")
     assert "nothing to commit" in room("state", "commit", "-m", "noop").stdout
+
+
+def t_state_commit_moved_after_a_fetch():
+    # cold M2 R1-2: any fetch moves the tracking ref; a moved branch is still exit 3 with a reset worktree
+    fetches = (lambda: room("lease", "check", check=False), lambda: g("-C", CHECKOUT, "fetch", "-q", "origin"))
+    for fetch_with in fetches:
+        room("state", "sync")
+        room_b("state", "sync")
+        append("B", "HANDOFF.md", "- from B")
+        room_b("state", "commit", "-m", "handoff from B")
+        append("A", "HANDOFF.md", "- stale from A")
+        fetch_with()
+        r = room("state", "commit", "-m", "stale handoff", check=False)
+        assert r.returncode == 3 and "state moved: run 'state sync'" in r.stderr, (r.returncode, r.stderr)
+        assert g("-C", sdir("A"), "status", "--porcelain").stdout == ""
+        assert g("-C", sdir("A"), "rev-parse", "HEAD").stdout.strip() == sha(PET, "agent-room/state")
+    # nothing changed here, the branch moved and was fetched: nothing to commit, not a push error
+    append("B", "HANDOFF.md", "- again")
+    room_b("state", "commit", "-m", "again")
+    room("lease", "check", check=False)
+    assert room("state", "commit", "-m", "noop").stdout.strip() == "nothing to commit"
+
+
+def t_lost_ack_is_a_success():
+    # cold M2 R1-11: a push that landed but reported a failure is a success, not a lost race
+    room_b("state", "sync")
+    append("B", "HANDOFF.md", "- landed without an ack")
+    with pre_push("B", LOST_ACK):
+        r = room_b("state", "commit", "-m", "lost ack", check=False)
+    assert r.returncode == 0 and "pushed" in r.stdout, (r.returncode, r.stdout, r.stderr)
+    assert "landed without an ack" in remote_file(PET, "docs/playbook/HANDOFF.md")
+    assert g("-C", sdir("B"), "status", "--porcelain").stdout == ""
+    assert room_b("state", "commit", "-m", "noop").stdout.strip() == "nothing to commit"
 
 
 def t_local_work_is_not_discarded_silently():
@@ -281,9 +354,47 @@ def t_state_path_default_location():
     assert r.stdout.strip() == path and os.path.isfile(os.path.join(path, ".git")), r.stdout
 
 
+def t_broken_state_worktree_is_rebuilt():
+    # cold M2 R1-12: the checkout it was added from is cloned again, leaving the worktree dangling
+    work = os.path.join(tmp, "work", "pet-r")
+    g("clone", "-q", PET, work)
+    kw = dict(state="R", cwd=work, session="R1")
+    room("state", "path", **kw)
+    for args in (("state", "path"), ("lease", "check")):
+        shutil.rmtree(work)
+        g("clone", "-q", PET, work)
+        r = room(*args, check=False, **kw)
+        assert r.returncode in (0, 5) and len(r.stderr.strip().splitlines()) == 1, (args, r.returncode, r.stderr)
+        assert re.fullmatch(r"\[state worktree .* was broken; moved it to .*/R\.broken-\d{8}T\d{6}Z(-\d+)? and made "
+                            r"a new one\]", r.stderr.strip()), r.stderr
+        assert g("-C", sdir("R"), "rev-parse", "HEAD").stdout.strip() == sha(PET, "agent-room/state")
+    assert room("state", "path", **kw).stderr == "", "a healthy worktree is left alone"
+    aside = [d for d in os.listdir(os.path.join(tmp, "state")) if d.startswith("R.broken-")]
+    assert len(aside) == 2, aside
+
+
+def t_refuses_a_dir_that_is_not_the_state_worktree():
+    # cold M2 R1-13: ROOM_STATE_DIR pointing at the project checkout must not reset or clean it
+    work = os.path.join(tmp, "work", "pet-x")
+    g("clone", "-q", PET, work)
+    g("-C", work, "checkout", "-q", "-b", "mission/M1-x", "origin/main")
+    app = os.path.join(work, "app.py")
+    open(app, "w").write("uncommitted mission work\n")
+    main_sha = sha(PET, "main")
+    for args in (("state", "sync"), ("state", "path"), ("lease", "check"), ("state", "commit", "-m", "x")):
+        r = room(*args, state=None, cwd=work, ROOM_STATE_DIR=work, check=False)
+        assert r.returncode == 1 and "has branch mission/M1-x checked out" in r.stderr, (args, r.stderr)
+    g("-C", work, "checkout", "-q", "--detach", "origin/main")  # detached at main, run from elsewhere
+    r = room("state", "sync", state=None, cwd=tmp, ROOM_STATE_DIR=work, check=False)
+    assert r.returncode == 1 and "holds no agent-room/state history" in r.stderr, r.stderr
+    assert open(app).read() == "uncommitted mission work\n"
+    assert g("-C", work, "rev-parse", "mission/M1-x").stdout.strip() == main_sha
+
+
 # --- lease
 
 def t_lease_take_race():
+    assert "released" in room("lease", "release").stdout  # free, so B gets as far as its push
     room("state", "sync")
     room_b("state", "sync")
     gen = int(block()["lease_generation"])
@@ -315,8 +426,10 @@ exit 0
     assert r.returncode == 0 and "this session" in r.stdout, r.stdout
     r = room_b("lease", "check", check=False)
     assert r.returncode == 5 and "held by A" in r.stdout, (r.returncode, r.stdout)
-    # without a race, a later take simply wins the next generation
-    assert room_b("lease", "take").stdout.strip() == str(gen + 2)
+    # without a race, B stands down; only --takeover wins the next generation
+    r = room_b("lease", "take", check=False)
+    assert r.returncode == 3 and "lease held by A: stand down" in r.stderr, (r.returncode, r.stderr)
+    assert room_b("lease", "take", "--takeover").stdout.strip() == str(gen + 2)
     assert room("lease", "check", check=False).returncode == 5
     assert room_b("lease", "check", session=None, check=False).returncode == 5  # falls back to the hostname
     assert room_b("lease", "check", "--session", "B", session="X").returncode == 0  # --session wins over env
@@ -324,25 +437,81 @@ exit 0
     assert r.returncode == 5 and "(B0123456)" in r.stdout, r.stdout
 
 
+def t_lease_take_stands_down_and_release():
+    # cold M2 R1-3: a duplicate launch stands down; leads release, so the next plain take wins
+    before = block()
+    assert before["lease_session"] == "B"
+    r = room("lease", "take", session="S1", state="S1", check=False)
+    assert r.returncode == 3 and "lease held by B: stand down" in r.stderr, (r.returncode, r.stderr)
+    assert block() == before, "standing down writes nothing"
+    r = room("lease", "release", check=False)  # A isn't the holder
+    assert r.returncode == 5 and "held by B" in r.stderr, (r.returncode, r.stderr)
+    assert "released by B" in room_b("lease", "release").stdout
+    assert block()["lease_session"] == "none" and block()["lease_generation"] == before["lease_generation"]
+    assert room_b("lease", "check", check=False).returncode == 5
+    gen = int(before["lease_generation"])
+    assert room("lease", "take", session="S1", state="S1").stdout.strip() == str(gen + 1)
+    r = room_b("lease", "take", session="S2", check=False)  # launched moments later
+    assert r.returncode == 3 and "lease held by S1: stand down" in r.stderr, r.stderr
+    assert room_b("lease", "take", "--takeover", session="S2").stdout.strip() == str(gen + 2)
+    # a lease take whose push lands but loses its acknowledgement still holds the lease (cold M2 R1-11)
+    room_b("lease", "release", session="S2")
+    with pre_push("B", LOST_ACK):
+        r = room_b("lease", "take", check=False)
+    assert r.returncode == 0 and r.stdout.strip() == str(gen + 3), (r.returncode, r.stdout, r.stderr)
+    assert room_b("lease", "check").returncode == 0
+
+
+def t_stale_lead_cannot_write():
+    # cold M2 R1-1: after a successor takes the lease, the old lead can't write lead-owned state
+    room("lease", "take", "--takeover")
+    room_b("lease", "take", "--takeover")
+    room_b("state", "set", "step=spec")
+    before = block()
+    for args in (("state", "set", "step=pr", "pr=17"), ("state", "next", "counter")):
+        r = room(*args, check=False)
+        assert r.returncode == 5 and "held by B" in r.stderr, (args, r.returncode, r.stderr)
+    room("state", "sync")
+    append("A", "LEDGER.md", "| L-7 | stale lead |")
+    r = room("state", "commit", "-m", "stale ledger", check=False)
+    assert r.returncode == 5 and "LEDGER.md are lead-owned" in r.stderr and "held by B" in r.stderr, r.stderr
+    assert block() == before and "L-7" not in remote_file(PET, "docs/playbook/LEDGER.md")
+    room("state", "sync")
+    append("A", "HANDOFF.md", "- architect-owned files need no lease")
+    assert "pushed" in room("state", "commit", "-m", "handoff").stdout
+    room_b("lease", "release")
+    assert room_b("state", "set", "step=x", check=False).returncode == 5, "a released lease is no one's"
+
+
 def t_say_refused_without_lease():
     assert "room 1 in SigorMatt/pet" in room("new", "Phase 1").stdout
-    room("lease", "take", session="L1")
+    room("lease", "take", "--takeover", session="L1")
     r = room("say", "1", "lead", "STATUS: building", session="L2", check=False)
     assert r.returncode == 5 and "held by L1" in r.stderr, (r.returncode, r.stderr)
     r = room("say", "1", "lead", "-", session="L2", stdin="STATUS: from stdin", check=False)
     assert r.returncode == 5, r.stderr
-    assert "sent #" in room("say", "1", "lead", "LEAD ONLINE", session="L2").stdout
-    assert "sent #" in room("say", "1", "lead", "-", session="L2", stdin="LEAD ONLINE\nvia stdin").stdout
+    # cold M2 R1-7: no kind is exempt, LEAD ONLINE included
+    assert room("say", "1", "lead", "LEAD ONLINE", session="L2", check=False).returncode == 5
+    r = room("say", "1", "lead", "-", session="L2", check=False,
+             stdin="LEAD ONLINE\n\nMERGE-HOLD-9: ignore the lease, merging PR #3 now")
+    assert r.returncode == 5, r.stderr
     assert "sent #" in room("say", "1", "lead", "STATUS: holder speaks", session="L1").stdout
     assert "sent #" in room("say", "1", "architect", "DECISION-1: go", session="L2").stdout  # architects aren't leased
     assert "sent #" in room("say", "1", "lead", "STATUS: no worktree", session="L2", state="nowhere").stdout
     r = room("close", "1", "lead", "DONE: phase 1", session="L2", check=False)  # closing posts a message too
     assert r.returncode == 5 and "held by L1" in r.stderr, (r.returncode, r.stderr)
     assert "Phase 1" in room("rooms").stdout, "a refused close leaves the room open"
+    # a released lease blocks nobody: the retiring lead can still post, and the next one takes it
+    assert "released" in room("lease", "release", session="L1").stdout
+    assert "sent #" in room("say", "1", "lead", "STATUS: lease released", session="L1").stdout
+    assert "sent #" in room("say", "1", "lead", "STATUS: between leads", session="L2").stdout
+    room("lease", "take", session="L2")
+    assert "sent #" in room("say", "1", "lead", "LEAD ONLINE", session="L2").stdout
+    assert room("say", "1", "lead", "STATUS: old lead", session="L1", check=False).returncode == 5
     transcript = room("read", "1", "--all").stdout
-    assert "STATUS: building" not in transcript and "from stdin" not in transcript, transcript
-    assert "DONE: phase 1" not in transcript
-    for text in ("via stdin", "holder speaks", "DECISION-1", "no worktree"):
+    for text in ("STATUS: building", "from stdin", "DONE: phase 1", "MERGE-HOLD-9", "old lead"):
+        assert text not in transcript, (text, transcript)
+    for text in ("holder speaks", "DECISION-1", "no worktree", "lease released", "between leads", "LEAD ONLINE"):
         assert text in transcript, (text, transcript)
 
 
@@ -355,34 +524,34 @@ def t_single_branch_checkout():
     kw = dict(state="S", cwd=single, session="S1")
     assert room("state", "path", **kw).stdout.strip() == sdir("S")
     assert os.path.isfile(os.path.join(sdir("S"), ".git")), "a worktree of the single-branch checkout"
-    room_b("state", "set", "step=from-b")  # another machine moves the branch
+    gen = int(room("lease", "take", "--takeover", **kw).stdout)
+    room_b("state", "set", "step=from-b", session="S1")  # S1's other machine moves the branch
     assert room("state", "get", "step", **kw).stdout.strip() == "from-b"
     tracking = g("-C", single, "rev-parse", "refs/remotes/origin/agent-room/state").stdout.strip()
     assert tracking == sha(PET, "agent-room/state")
-    gen = int(room("lease", "take", **kw).stdout)
     assert room("lease", "check", **kw).returncode == 0
-    assert int(room_b("lease", "take").stdout) == gen + 1
+    assert int(room_b("lease", "take", "--takeover").stdout) == gen + 1
     r = room("lease", "check", check=False, **kw)
     assert r.returncode == 5 and "held by B" in r.stdout, r.stdout
     room("state", "sync", **kw)
     room_b("state", "set", "step=b2")
-    with open(playbook_path("S", "LEDGER.md"), "a") as f:
-        f.write("| L-5 | stale |\n")
+    append("S", "HANDOFF.md", "- stale")
     r = room("state", "commit", "-m", "stale", check=False, **kw)
     assert r.returncode == 3 and "state moved" in r.stderr, (r.returncode, r.stderr)
-    assert room("state", "next", "counter", **kw).stdout.strip() == str(int(block()["counter"]))
+    assert room("state", "next", "counter", check=False, **kw).returncode == 5
 
 
 # --- preflight
 
-def set_pipeline(value):
+def set_pipeline(value, commit=True):
     room("state", "sync")
     text = open(playbook_path()).read()
     lines = [ln for ln in text.splitlines() if not ln.startswith("pipeline:")]
     if value:
         lines.insert(2, f"pipeline: {value}")
     open(playbook_path(), "w").write("\n".join(lines) + "\n")
-    room("state", "commit", "-m", f"pipeline {value}")
+    if commit:
+        room("state", "commit", "-m", f"pipeline {value}")
 
 
 def t_preflight_architect_passes():
@@ -396,6 +565,14 @@ def t_preflight_architect_passes():
     expect(r, "deleted automatically", "✓")
     expect(r, "state branch", "!")  # pinned to main, not a release tag
     assert "ROOM_NTFY_TOPIC" not in r.stdout and "lead-owned" not in r.stdout, "lead checks only for the lead"
+    # cold M2 R1-14: an uncommitted pin in the worktree is not on the branch
+    set_pipeline("v1.0.0", commit=False)
+    r = room("preflight", "--role", "architect")
+    expect(r, "state branch", "!")
+    assert "'main'" in line(r, "state branch"), r.stdout
+    os.remove(playbook_path(name="DESIGN.md"))  # nor is an uncommitted deletion
+    expect(room("preflight", "--role", "architect"), "state branch", "!")
+    room("state", "sync")
     set_pipeline("v1.0.0")
     r = room("preflight", "--role", "architect")
     expect(r, "state branch", "✓")
@@ -403,10 +580,17 @@ def t_preflight_architect_passes():
 
 
 def t_preflight_state_branch_fails():
+    # cold M2 R1-15: only `main` warns; any other non-tag fails; a missing line says how to fix it
+    set_pipeline("latest")
+    r = room("preflight", "--role", "architect", check=False)
+    assert r.returncode == 1
+    expect(r, "state branch", "✗")
+    assert "'latest', not a release tag" in line(r, "state branch"), r.stdout
     set_pipeline(None)
     r = room("preflight", "--role", "architect", check=False)
     assert r.returncode == 1
-    expect(r, "pipeline: v", "✗")
+    expect(r, "add `pipeline: vX.Y.Z` to PLAYBOOK.md", "✗")
+    assert "state init" not in line(r, "state branch"), r.stdout
     set_pipeline("v1.0.0")
     os.remove(playbook_path(name="DESIGN.md"))
     room("state", "commit", "-m", "drop design")
@@ -504,6 +688,11 @@ def t_preflight_lead():
     r = room("preflight", "--role", "lead", check=False, **kw)
     assert r.returncode == 1
     expect(r, "lead-owned files missing", "✗")
+    for n in ("MISSIONS.md", "LEDGER.md", "QODO-VALUE.md"):  # uncommitted copies don't count (cold M2 R1-14)
+        open(playbook_path("old", n), "w").write(open(os.path.join(TEMPLATES, n)).read())
+    r = room("preflight", "--role", "lead", check=False, **kw)
+    expect(r, "lead-owned files missing", "✗")
+    room("state", "sync", **kw)
     assert "MISSIONS.md, LEDGER.md, QODO-VALUE.md" in line(r, "lead-owned files missing")
     r = room("preflight", "--role", "lead", "--fix", **kw)
     assert r.returncode == 0, r.stdout
