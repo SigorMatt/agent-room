@@ -24,6 +24,7 @@ in Claude chat and cloud sessions, or `gh auth login` on your own machine.
   room.py watchdog N [--silent-after 3h]   the watchdog task: LEAD-SILENT (buzzes) when no progress; never writes
   room.py join-line N [--takeover]         print the line that starts a lead
   room.py handoff N --step STEP --cursor ID   post HANDOFF, record step and cursor, release the lease, print the join line
+  room.py intent N "INTENT"                record before acting (post KIND intents note the room's last comment)
   room.py reconcile N                      for a joining lead: the recorded state next to GitHub's facts
   room.py budget                           the mission's elapsed time against its budget (exit 6 over)
 
@@ -2102,12 +2103,12 @@ def add_gate_commands(sub, common):
 #   budget
 #
 # watchdog, reconcile and budget read the pushed state branch and never write it; the watchdog schedules nothing.
-# Intents reconcile recognizes: "merge PR #<n> at <sha>", "open PR <branch or M<k>>", "post <KIND>", "close room".
+# Intents reconcile recognizes: "merge PR #<n> at <sha>", "open PR <branch or M<k>>", "post <KIND> after #<id>" (as
+# 'intent' records it), "close room".
 
 WAITING_FOR_OWNER = "waiting for owner"
 QUIET_STATUSES = ("paused", "stopped", "done")
 DEFAULT_BUDGET_HOURS = 8
-INTENT_SKEW = 120  # seconds a room message may seem to predate the intent recorded before it (clock skew)
 
 
 def duration_arg(s):
@@ -2432,16 +2433,19 @@ def intent_hint(a, intent, path, msgs, pr):
             return (f"intent not done: redo it (PR #{p.get('number')} from {p['head']['ref']} was closed without "
                     f"merging; open a new one{ignored})")
         return f"intent not done: redo it (no PR from {ref}{ignored})"
-    m = re.fullmatch(r"post (.+)", intent)
+    m = re.fullmatch(r"post (.+?)(?: after #(\d+))?", intent)
     kind = message_kind(m.group(1)) if m else None
     if kind:
-        # a numbered kind is unique in the room; any other counts only if posted after the intent was recorded
-        since = None if re.search(r"-\d+$", kind) else last_change(path, lambda k: k == "intent")
-        hits = [x for x in leads if message_kind(x["text"]) == kind and
-                (since is None or (parse_time(x["at"]) or 0) >= since[1] - INTENT_SKEW)]
+        # 'intent' records the room's last comment ID with it: a later trusted lead message of the kind did it.
+        # Without one, only a numbered kind, unique in the room, can be judged. No clocks involved.
+        after = int(m.group(2)) if m.group(2) else None
+        if after is None and not re.search(r"-\d+$", kind):
+            return (f"intent unknown: which {kind}? Record post intents with '{ME} intent N \"post {kind}\"', "
+                    "which notes the room's last comment")
+        hits = [x for x in leads if message_kind(x["text"]) == kind and (after is None or x["id"] > after)]
         if hits:
             return f"intent done: clear it ({kind} is in the room: #{hits[-1]['id']})"
-        return f"intent not done: redo it (no {kind} in the room" + (" since the intent was recorded)" if since else ")")
+        return f"intent not done: redo it (no {kind} in the room" + (f" after #{after})" if after is not None else ")")
     if re.fullmatch(r"close (?:the )?room", intent):
         issue = gh(f"repos/{REPO}/issues/{a.room}") or {}
         if issue.get("state") != "closed":
@@ -2454,6 +2458,23 @@ def intent_hint(a, intent, path, msgs, pr):
         return f"intent not done: redo it (room {a.room} is closed, but no lead message came after it closed)"
     return ("intent unknown: check it by hand (reconcile knows: merge PR #<n> at <sha>, open PR <branch or M<k>>, "
             "post <KIND>, close room)")
+
+
+def cmd_intent(a):
+    """Record before acting: the intent, in its own state write. A post intent also records the room's last
+    comment ID (post KIND after #ID), so reconcile can tell a later post of that kind from an earlier one."""
+    text = single_line("intent", a.intent)
+    if not text:
+        raise StateError("say what is about to happen (merge PR #<n> at <sha>, open PR <branch>, post <KIND>, "
+                         "close room), or none")
+    m = re.fullmatch(r"post\s+(.+)", text)
+    if m:
+        kind = message_kind(m.group(1))
+        if not kind:
+            raise StateError(f"a post intent names the message kind: post ESCALATION-3, post PAUSED…, not {text!r}")
+        text = f"post {kind} after #{max((c['id'] for c in comments(a.room)), default=0)}"
+    change_state(a, f"intent: {text}", lambda v: {"intent": text})
+    print(f"intent: {text}")
 
 
 def cmd_reconcile(a):
@@ -2584,6 +2605,11 @@ def add_unattended_commands(sub, common):
     s.add_argument("--step", required=True, help="the step the successor starts at")
     s.add_argument("--cursor", required=True, type=from_arg, metavar="ID",
                    help="the last comment this lead acted on (from a [cursor: ID] line it handled), or none")
+    s = leaf("intent", cmd_intent, "record the intended outside action before taking it (needs the lease); a post "
+                                   "intent also records the room's last comment ID")
+    s.add_argument("room", type=int)
+    s.add_argument("intent", help='e.g. "post ESCALATION-3", "merge PR #12 at <sha>", "open PR mission/M2-x", '
+                                  '"close room", or none')
     s = leaf("reconcile", cmd_reconcile, "for a joining lead: the recorded state next to GitHub's facts, and a "
                                          "hint on the recorded intent; changes nothing")
     s.add_argument("room", type=int)
