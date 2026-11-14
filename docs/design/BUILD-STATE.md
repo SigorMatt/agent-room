@@ -81,3 +81,4 @@ Results of the eleven assumptions in `v1.md` ("To verify"). Evidence lives in is
 | ID | Item | Milestone | From |
 | --- | --- | --- | --- |
 | B-1 | The gate exempts only known review-record file patterns under `reviews/`, not the whole directory, so code placed there can't skip coverage | M3 | Qodo PR #5, "Review exemption by directory lets code skip coverage" |
+| B-2 | Stale state worktrees, from cold M2 scoped-1: say when local work is moved aside and keep its commits (S1-3); recognise the project checkout and stale state worktrees whatever the current directory, with a marker file in the worktree's git dir (S1-4, S1-5) | M4 | cold M2 S1-3, S1-4, S1-5 |
