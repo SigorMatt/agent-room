@@ -622,22 +622,32 @@ def refresh(path):
         reset_to_remote(path)
 
 
+def is_ancestor(path, a, b):
+    return git("merge-base", "--is-ancestor", a, b, cwd=path, check=False).returncode == 0
+
+
 def commit_and_push(path, msg):
     """Commit everything in the worktree and push it. Returns False when there was nothing to push.
 
-    Raises StateMoved, with the worktree reset to the remote, if the branch moved since the last sync."""
+    Raises StateMoved, with the worktree reset to the remote, if the branch moved under the work."""
     git("add", "-A", cwd=path)
     if git("diff", "--cached", "--quiet", cwd=path, check=False).returncode == 1:
         git(*identity(path), "commit", "-q", "-m", msg, cwd=path)
-    base = git_out("rev-parse", STATE_REF, cwd=path)
-    if git_out("rev-parse", "HEAD", cwd=path) == base:
-        return False
+    if git_out("rev-list", "--count", f"{STATE_REF}..HEAD", cwd=path) == "0":
+        return False  # no local commits; the remote may be ahead, which is not ours to push
+    head = git_out("rev-parse", "HEAD", cwd=path)
+    # the commit the work was built on: the new commit's parent, or the first of several unpushed ones.
+    # Taken from history, not from the tracking ref, which any fetch (lease check, git fetch) moves.
+    base = git_out("merge-base", "HEAD", STATE_REF, cwd=path)
     r = git("push", "-q", "origin", f"HEAD:refs/heads/{STATE_BRANCH}", cwd=path, check=False)
     if r.returncode == 0:
-        git("update-ref", STATE_REF, "HEAD", cwd=path)
+        git("update-ref", STATE_REF, head, cwd=path)
         return True
     fetch(path)
-    if git_out("rev-parse", STATE_REF, cwd=path) != base:
+    remote = git_out("rev-parse", STATE_REF, cwd=path)
+    if is_ancestor(path, head, remote):
+        return True  # the push landed and only its acknowledgement was lost
+    if remote != base:
         reset_to_remote(path)
         raise StateMoved()
     raise StateError(f"git push: {(r.stderr or r.stdout).strip()}")

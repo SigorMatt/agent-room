@@ -5,6 +5,7 @@ Each project repo is a local bare git repo standing in for GitHub; `gh` is fake_
 Machine A works inside a checkout of the project (state worktree via `git worktree add`);
 machine B has no checkout (state worktree is a clone of $ROOM_STATE_REMOTE).
 """
+import contextlib
 import json
 import os
 import shutil
@@ -124,6 +125,31 @@ def line(r, key):
 def expect(r, key, mark):
     ln = line(r, key)
     assert ln.startswith(mark + " "), f"expected {mark} for {key!r}, got: {ln}\n{r.stdout}"
+
+
+def append(state, name, text):
+    with open(playbook_path(state, name), "a") as f:
+        f.write(text + "\n")
+
+
+@contextlib.contextmanager
+def pre_push(state, body):
+    """A pre-push hook in machine STATE's clone (B-style), for the length of the block."""
+    hooks = tempfile.mkdtemp(dir=tmp, prefix="hooks-")
+    with open(os.path.join(hooks, "pre-push"), "w") as f:
+        f.write("#!/bin/sh\ncat >/dev/null\n"
+                "unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_COMMON_DIR ROOM_STATE_REMOTE\n" + body)
+    os.chmod(os.path.join(hooks, "pre-push"), 0o755)
+    g("-C", sdir(state), "config", "core.hooksPath", hooks)
+    try:
+        yield hooks
+    finally:
+        g("-C", sdir(state), "config", "--unset", "core.hooksPath")
+
+
+# the push lands, then the client hears a failure (a connection dropped after the remote updated)
+LOST_ACK = ('git push -q --no-verify "$2" HEAD:refs/heads/agent-room/state\n'
+            'echo "fatal: the remote end hung up unexpectedly" >&2\nexit 1\n')
 
 
 def test(name, fn):
@@ -261,6 +287,39 @@ def t_state_commit_rejected_after_another_push():
     assert g("-C", sdir("A"), "status", "--porcelain").stdout == ""
     assert "L-9" not in remote_file(PET, "docs/playbook/LEDGER.md")
     assert "nothing to commit" in room("state", "commit", "-m", "noop").stdout
+
+
+def t_state_commit_moved_after_a_fetch():
+    # cold M2 R1-2: any fetch moves the tracking ref; a moved branch is still exit 3 with a reset worktree
+    fetches = (lambda: room("lease", "check", check=False), lambda: g("-C", CHECKOUT, "fetch", "-q", "origin"))
+    for fetch_with in fetches:
+        room("state", "sync")
+        room_b("state", "sync")
+        append("B", "HANDOFF.md", "- from B")
+        room_b("state", "commit", "-m", "handoff from B")
+        append("A", "HANDOFF.md", "- stale from A")
+        fetch_with()
+        r = room("state", "commit", "-m", "stale handoff", check=False)
+        assert r.returncode == 3 and "state moved: run 'state sync'" in r.stderr, (r.returncode, r.stderr)
+        assert g("-C", sdir("A"), "status", "--porcelain").stdout == ""
+        assert g("-C", sdir("A"), "rev-parse", "HEAD").stdout.strip() == sha(PET, "agent-room/state")
+    # nothing changed here, the branch moved and was fetched: nothing to commit, not a push error
+    append("B", "HANDOFF.md", "- again")
+    room_b("state", "commit", "-m", "again")
+    room("lease", "check", check=False)
+    assert room("state", "commit", "-m", "noop").stdout.strip() == "nothing to commit"
+
+
+def t_lost_ack_is_a_success():
+    # cold M2 R1-11: a push that landed but reported a failure is a success, not a lost race
+    room_b("state", "sync")
+    append("B", "HANDOFF.md", "- landed without an ack")
+    with pre_push("B", LOST_ACK):
+        r = room_b("state", "commit", "-m", "lost ack", check=False)
+    assert r.returncode == 0 and "pushed" in r.stdout, (r.returncode, r.stdout, r.stderr)
+    assert "landed without an ack" in remote_file(PET, "docs/playbook/HANDOFF.md")
+    assert g("-C", sdir("B"), "status", "--porcelain").stdout == ""
+    assert room_b("state", "commit", "-m", "noop").stdout.strip() == "nothing to commit"
 
 
 def t_local_work_is_not_discarded_silently():
