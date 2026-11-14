@@ -76,6 +76,17 @@ Results of the eleven assumptions in `v1.md` ("To verify"). Evidence lives in is
 | 2026-11-14 | Mission PRs merge with a merge commit, not a squash | Keeps every `fixed in <sha>` reachable from `main` after the branch is deleted |
 | 2026-11-15 | The lease is released at `HANDOFF`, `PAUSED`, `STOPPED` and `DONE`; `lease take` fails while another session holds it, unless `--takeover`, which only a lead Matthew starts after `LEAD-SILENT` uses | Makes "only one successor can win the lease" hold for launches minutes apart, not only for simultaneous pushes (cold M2 R1-3) |
 
+## Assumptions while Matthew was away (from 2026-11-15 01:24)
+
+Calls the build lead made that Matthew would normally make. Each is reversible; Matthew reviews them on his return.
+
+| # | Assumption | Why | To reverse |
+| --- | --- | --- | --- |
+| A-1 | Lease release and `--takeover` (decision 2026-11-15) refine v1's lease rules without changing the design's intent | v1 requires a single winning successor; the cold review showed the plain rule doesn't give one | Drop `--takeover` and release; accept duplicate leads |
+| A-2 | Milestones M3 and M4 are built and reviewed in parallel with M2, each on the previous one's branch, and merged in order | Saves hours; each still gets its own cold reviews, PR, Qodo and merge | Build them one after another |
+| A-3 | Low-severity findings from a scoped review that touch rare edge paths may be deferred to the next milestone already in flight (B-2 to M4) instead of looping more scoped reviews | v1 allows deferral to a later mission; keeps reviews converging | Fix them in the same milestone |
+| A-4 | No buzz overnight unless the build is blocked | Matthew is asleep and asked to be told on return | — |
+
 ## Deferred to later milestones
 
 | ID | Item | Milestone | From |
