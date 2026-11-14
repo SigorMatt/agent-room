@@ -11,12 +11,12 @@ The build of the agent-room pipeline v1, as designed in [`v1.md`](v1.md). A fres
 
 | # | Milestone | Status |
 | --- | --- | --- |
-| M0 | Commit design and build state | In progress |
+| M0 | Commit design and build state | Done (#5) |
 | M1 | Platform check | In progress |
 | M2 | Core machinery | In progress (builders running; spec `m2-room-cli.md`) |
-| M3 | Reviews and merge gate | Not started |
-| M4 | Unattended operation | Not started |
-| M5 | Manuals and index | Not started |
+| M3 | Review records, `gate` and `merge` (spec `m3-reviews-gate.md`) | Not started |
+| M4 | Unattended operation (spec `m4-unattended.md`) | Not started |
+| M5 | Protocols (`ARCHITECT.md`, `LEAD.md`, briefs, thin skill), manuals and index | Not started |
 | M6 | Dress rehearsal on `pet-todo` (build lead plays the architect) | Not started |
 | M7 | Matthew's owner run, then tag `v1.0.0` | Not started |
 
@@ -38,7 +38,7 @@ Results of the eleven assumptions in `v1.md` ("To verify"). Evidence lives in is
 
 | # | Assumption | Result |
 | --- | --- | --- |
-| 1 | Merge a PR through the proxy, naming the expected head commit | Partly: the merge endpoint is reachable and rejects a wrong head sha (409). The real merge: pending (the M0 PR) |
+| 1 | Merge a PR through the proxy, naming the expected head commit | Pass: a wrong head sha gets 409; #5 merged naming its head sha |
 | 2 | Push `mission/*`, task branches and `agent-room/state` | Pass: no prefix needed. **Finding A** below |
 | 3 | Read branch protection, rulesets and bypass | Pass on a public repo. **Finding B** below |
 | 4 | A session schedules its successor; it gets the repo, runs without approvals, uses the right environment | Pass except the environment: the scheduled session started in auto mode with no approval prompts, had the caller's repos checked out with push access, and had `create_trigger`, `send_later`, `list_triggers` and `Agent`, but not `add_repo` (**Finding E**). It ran in the caller's environment, so a lead started from Matthew's `agent-room` environment getting its variables is checked in M6 |
@@ -69,6 +69,8 @@ Results of the eleven assumptions in `v1.md` ("To verify"). Evidence lives in is
 | 2026-11-14 | The lead pushes the mission branch after each merged task; the watchdog counts a step change or a mission-branch push as progress | Follows from builders never pushing (Qodo PR #5) |
 | 2026-11-14 | The platform check ran in this repo, not a scratch repo, and its results live here, not in the checkboxes of `v1.md` | The design's checklist stays the list of assumptions (Qodo PR #5) |
 | 2026-11-14 | Docs-only milestone PRs get Qodo but no cold review | The design's coverage rule covers code changes only; the design itself had two cold reviews |
+| 2026-11-14 | The protocols, briefs and thin skill move from the core milestone to M5, after the code they describe | Keeps each milestone PR reviewable; `v1.md` stays the authority meanwhile |
+| 2026-11-14 | Mission PRs merge with a merge commit, not a squash | Keeps every `fixed in <sha>` reachable from `main` after the branch is deleted |
 
 ## Deferred to later milestones
 
