@@ -13,7 +13,7 @@ The build of the agent-room pipeline v1, as designed in [`v1.md`](v1.md). A fres
 | --- | --- | --- |
 | M0 | Commit design and build state | In progress |
 | M1 | Platform check | In progress |
-| M2 | Core machinery | Not started |
+| M2 | Core machinery | In progress (builders running; spec `m2-room-cli.md`) |
 | M3 | Reviews and merge gate | Not started |
 | M4 | Unattended operation | Not started |
 | M5 | Manuals and index | Not started |
@@ -38,16 +38,16 @@ Results of the eleven assumptions in `v1.md` ("To verify"). Evidence lives in is
 
 | # | Assumption | Result |
 | --- | --- | --- |
-| 1 | Merge a PR through the proxy, naming the expected head commit | Pending (tested on the M0 PR) |
+| 1 | Merge a PR through the proxy, naming the expected head commit | Partly: the merge endpoint is reachable and rejects a wrong head sha (409). The real merge: pending (the M0 PR) |
 | 2 | Push `mission/*`, task branches and `agent-room/state` | Pass: no prefix needed. **Finding A** below |
 | 3 | Read branch protection, rulesets and bypass | Pass on a public repo. **Finding B** below |
-| 4 | A session schedules its successor; it gets the repo, runs without approvals, uses the right environment | Partly: a chat session created a one-time task with no approval prompt, in auto mode. Repo access and tools in the started session: pending (probe, issue #4) |
+| 4 | A session schedules its successor; it gets the repo, runs without approvals, uses the right environment | Pass except the environment: the scheduled session started in auto mode with no approval prompts, had the caller's repos checked out with push access, and had `create_trigger`, `send_later`, `list_triggers` and `Agent`, but not `add_repo` (**Finding E**). It ran in the caller's environment, so a lead started from Matthew's `agent-room` environment getting its variables is checked in M6 |
 | 5 | Recurring watchdog task, at acceptable cost | Pending |
 | 6 | The architect chat can start a subagent and create a scheduled task | Pass: the build lead is a Claude chat in a Project, and did both |
 | 7 | Resuming a subagent keeps its context | Pass |
 | 8 | Worktree isolation for parallel builders | Pass: worktrees under `.claude/worktrees/`, branch `worktree-agent-<id>` |
 | 9 | A waiter survives an idle hour | Pending (probe, 85 minutes) |
-| 10 | Qodo's bot login and comment format match `QODO-REVIEW.md` | Pending (tested on the M0 PR) |
+| 10 | Qodo's bot login and comment format match `QODO-REVIEW.md` | Pass: on the M0 PR, `qodo_review.py` found the Summary and Code Review comments from `qodo-code-review[bot]`, the commit marker equal to the head, and 5 findings matching the header counts |
 | 11 | A buzz reaches Matthew's phone | Sent from the build chat (HTTP 200). Receipt and the lead environment: pending |
 
 ### Findings that change the build
@@ -57,6 +57,8 @@ Results of the eleven assumptions in `v1.md` ("To verify"). Evidence lives in is
     - mission branches are removed by GitHub's "Automatically delete head branches" setting, which preflight checks and asks Matthew to turn on once per repo;
     - two probe branches remain in this repo (`mission/M0-probe`, `agent-room/state`) for Matthew to delete when convenient.
 - **B. Private repos on GitHub Free can't have branch protection or rulesets** (the API answers 403, "upgrade to GitHub Pro"). Preflight treats that answer as "no protection", which passes.
+- **D. Subagents can't read the Claude Project.** Builders, cold reviewers and Qodo readers can't load the Projects tool, so `QODO-REVIEW.md` is copied byte for byte into `docs/QODO-REVIEW.md`. The Project copy stays Matthew's master; changes reach the repo by PR.
+- **E. A scheduled session has no `add_repo`.** It inherits the repos of the session that scheduled it. So a lead schedules its successor from a session that already has the project repo, which every lead does.
 - **C. A new repo may be completely empty** (`pet-todo` has no commits). Preflight detects this, and the architect's kickoff creates the first commit on `main`; no protection can exist yet, so this is safe.
 
 ## Decisions taken during the build
@@ -64,3 +66,12 @@ Results of the eleven assumptions in `v1.md` ("To verify"). Evidence lives in is
 | Date | Decision | Why |
 | --- | --- | --- |
 | 2026-11-14 | Builders work in local worktrees and never push | Finding A; also removes stale-builder pushes after `STOP` |
+| 2026-11-14 | The lead pushes the mission branch after each merged task; the watchdog counts a step change or a mission-branch push as progress | Follows from builders never pushing (Qodo PR #5) |
+| 2026-11-14 | The platform check ran in this repo, not a scratch repo, and its results live here, not in the checkboxes of `v1.md` | The design's checklist stays the list of assumptions (Qodo PR #5) |
+| 2026-11-14 | Docs-only milestone PRs get Qodo but no cold review | The design's coverage rule covers code changes only; the design itself had two cold reviews |
+
+## Deferred to later milestones
+
+| ID | Item | Milestone | From |
+| --- | --- | --- | --- |
+| B-1 | The gate exempts only known review-record file patterns under `reviews/`, not the whole directory, so code placed there can't skip coverage | M3 | Qodo PR #5, "Review exemption by directory lets code skip coverage" |
