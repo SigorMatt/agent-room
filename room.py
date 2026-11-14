@@ -1937,10 +1937,6 @@ def cmd_gate(a):
     return run_gate(a)[0]
 
 
-class LeaseLost(Exception):
-    pass
-
-
 def http_status(err):
     m = re.search(r"HTTP (\d{3})", str(err))
     return int(m.group(1)) if m else 0
@@ -1950,23 +1946,13 @@ def cmd_merge(a):
     code, _ = run_gate(a, expect_sha=a.sha)
     if code:
         return code
-    sid = session_id(a)
-
-    def record(values):  # re-read the lease right before the merge, in the same write as the intent
-        if values.get("lease_session") != sid:
-            raise LeaseLost(values.get("lease_session"))
-        return {"intent": f"merge PR #{a.pr} at {a.sha}"}
-
-    try:
-        change_state(a, f"merge: intent PR #{a.pr} at {a.sha[:12]}", record)
-    except LeaseLost as e:
-        print(f"not merged: the lease is held by {e}, not this session ({sid})", file=sys.stderr)
-        return EXIT_LEASE
+    # change_state re-reads the lease right before the merge, in the same write as the intent (exit 5 if lost)
+    change_state(a, f"merge: intent PR #{a.pr} at {a.sha[:12]}", lambda v: {"intent": f"merge PR #{a.pr} at {a.sha}"})
 
     def clear(why):
         try:
             change_state(a, f"merge: PR #{a.pr} not merged ({why})", lambda v: {"intent": "none"})
-        except (StateError, StateMoved) as e:
+        except (StateError, StateMoved, StateExit) as e:
             print(f"[intent not cleared: {e or 'the state branch moved'}]", file=sys.stderr)
 
     try:
@@ -1984,13 +1970,12 @@ def cmd_merge(a):
         print(f"merge failed: {e}; intent left recorded for reconciliation", file=sys.stderr)
         return 1
     merged = res.get("sha") or "?"
-    print(f"merged PR #{a.pr}: {merged}")
     try:
         change_state(a, f"merge: PR #{a.pr} merged as {merged[:12]}", lambda v: {"intent": "none", "pr": f"merged:{a.pr}"})
-    except (StateError, StateMoved) as e:
-        print(f"state not updated: {e or 'the state branch moved'}; intent left recorded for reconciliation",
-              file=sys.stderr)
+    except (StateError, StateMoved, StateExit) as e:  # merged all the same: the intent stays for reconciliation
+        print(f"merged PR #{a.pr}: {merged}; state not updated ({e or 'the state branch moved'}): reconcile")
         return 1
+    print(f"merged PR #{a.pr}: {merged}")
     return 0
 
 

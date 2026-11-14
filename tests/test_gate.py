@@ -837,6 +837,31 @@ def t_merge():
     assert r.returncode == 2 and "40-hex" in r.stderr, out(r)
 
 
+
+def t_merge_state_not_updated_after_merging():  # cold M3 R1-16
+    s = mission()
+    shim = os.path.join(BIN, "gh")
+    original = open(shim).read()
+    with open(shim, "w") as f:  # another lead takes the lease while the merge call runs
+        f.write(f"""#!/bin/sh
+case "$*" in
+  *"-X PUT"*merge*) ROOM_SESSION=L2 "{sys.executable}" "{ROOM}" lease take --takeover >/dev/null 2>&1 ;;
+esac
+exec "{sys.executable}" "{os.path.join(HERE, 'fake_gh_state.py')}" "$@"
+""")
+    try:
+        r = room("merge", PR, "--sha", s["head"])
+    finally:
+        with open(shim, "w") as f:
+            f.write(original)
+    assert r.returncode == 1, out(r)
+    assert re.search(rf"^merged PR #{PR}: [0-9a-f]{{40}}; state not updated \(not written: the lease is held by L2 .*\): "
+                     r"reconcile$", r.stdout, re.M), out(r)
+    b = block()
+    assert b["intent"] == f"merge PR #{PR} at {s['head']}" and b["lease_session"] == "L2", b
+    room("lease", "take", "--takeover", check=True)
+    room("state", "set", "intent=none", check=True)
+
 setup()
 for name, fn in list(globals().items()):
     if name.startswith("t_"):
