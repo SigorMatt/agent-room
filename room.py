@@ -1710,9 +1710,10 @@ def row_files(cell):
     return out
 
 
-def judge(root, head, label, cell, top, file_cell, ledger, reported=None):
+def judge(root, head, label, cell, top, file_cell, ledger, reported=None, room=None):
     """What is wrong with one dispositions row: [(text, hold reason or None)]. REPORTED is the commit the
-    finding was reported against: a cold report's covers:, or the first Qodo fetch holding the title."""
+    finding was reported against: a cold report's covers:, or the first Qodo fetch holding the title.
+    ROOM (a RoomLog) answers whether an owner decision on a top-severity row is really Matthew's."""
     form, m = parse_disposition(cell)
     if form is None:
         return [(f"{label} is undecided" + (f" ('{cell}')" if cell.strip() else ""), 2)]
@@ -1720,6 +1721,8 @@ def judge(root, head, label, cell, top, file_cell, ledger, reported=None):
         return [(f"{label} waits on an open owner decision ({m.group(1)})", 1)]
     if top and form in ("dismissed", "deferred"):
         return [(f"{label} is top severity, so only a fix or an owner decision closes it, not '{form}'", 1)]
+    if top and form == "owner" and room is not None and not room.decision(m.group(2)):
+        return [(f"{label} cites {m.group(2)}, but {room.where()} has no trusted {m.group(2)}", 1)]
     if form == "deferred" and m.group(1) not in ledger:
         return [(f"{label}: {m.group(1)} is not in {PLAYBOOK_DIR}/LEDGER.md on {STATE_BRANCH}", None)]
     if form == "fixed":
@@ -1742,7 +1745,7 @@ def judge(root, head, label, cell, top, file_cell, ledger, reported=None):
     return []
 
 
-def check_dispositions(g, root, head, rec, ledger_text):
+def check_dispositions(g, root, head, rec, ledger_text, room):
     reasons, ledger = [], ledger_ids(ledger_text)
     # cold: a row for every finding ID of every report
     want, reported = {}, {}
@@ -1768,7 +1771,7 @@ def check_dispositions(g, root, head, rec, ledger_text):
             n_cold += 1
             top = TOP_COLD in (want.get(fid), row.get("severity", "").strip("` ").lower())
             reasons += judge(root, head, f"cold {fid}", row["disposition"], top, row.get("file", ""), ledger,
-                             reported.get(fid))
+                             reported.get(fid), room)
         missing = [fid for fid in want if fid not in seen]
         if rows is not None and missing:
             reasons.append((f"{rec['cold_path']} has no row for {', '.join(missing)}", None))
@@ -1801,7 +1804,8 @@ def check_dispositions(g, root, head, rec, ledger_text):
             t = titles.get(key) or {}
             top = TOP_QODO in ((t.get("severity") or "").lower(), row.get("severity", "").strip("` ").lower())
             label = f"Qodo #{row['#'].strip() or '?'} \"{' '.join(row['finding'].split())}\""
-            reasons += judge(root, head, label, row["disposition"], top, row.get("file", ""), ledger, t.get("first"))
+            reasons += judge(root, head, label, row["disposition"], top, row.get("file", ""), ledger, t.get("first"),
+                             room)
         if mode == "on" and q is None:
             reasons.append((f"{path} says qodo: on, but no Code Review comment is archived for this PR", None))
         elif mode == "on":
@@ -1916,16 +1920,39 @@ def room_number(playbook, missions):
     return n if n > 0 else None
 
 
-def find_decision(room, decision):
-    """The room's trusted comment from the architect, or untagged from Matthew, whose kind is DECISION."""
-    for c in comments(room):
-        m = parse(c)
-        if m["role"] in ("architect", "human") and trusted(m) and message_kind(m["text"]) == decision:
-            return m
-    return None
+class RoomLog:
+    """The room's trusted messages, read once, and only when a check needs them."""
+
+    def __init__(self, playbook, missions):
+        self.number = room_number(playbook, missions)
+        self._messages = None
+
+    def where(self):
+        return f"room {self.number}" if self.number else "the room (none is recorded in PLAYBOOK.md or MISSIONS.md)"
+
+    def messages(self):
+        if self._messages is None:
+            self._messages = [m for m in map(parse, comments(self.number)) if trusted(m)] if self.number else []
+        return self._messages
+
+    def decision(self, kind):
+        """The trusted message of KIND (DECISION-n) from the architect, or untagged from Matthew."""
+        return next((m for m in self.messages()
+                     if m["role"] in ("architect", "human") and message_kind(m["text"]) == kind), None)
+
+    def holds(self, kind):
+        """The lead's trusted messages of KIND (MERGE-HOLD-n)."""
+        return [m for m in self.messages() if m["role"] == "lead" and message_kind(m["text"]) == kind]
 
 
-def check_sensitive(g, root, head, playbook, missions, a):
+def hold_problems(text, pr, paths):
+    """What a MERGE-HOLD message lacks for a reason-5 hold of PR's PATHS: [] when it names them all."""
+    out = [] if re.search(rf"PR #{pr}(?!\d)", text) else [f"PR #{pr}"]
+    out += [] if re.search(r"\breason 5\b", text, re.I) else ["reason 5"]
+    return out + [p for p in paths if p not in text]
+
+
+def check_sensitive(g, root, head, playbook, a, room):
     rules = merge_hold_rules(playbook)
     if not rules:
         g.fail("sensitive paths", [(f"{PLAYBOOK_DIR}/PLAYBOOK.md on {STATE_BRANCH} has no merge-hold " +
@@ -1935,26 +1962,39 @@ def check_sensitive(g, root, head, playbook, missions, a):
     out = zsplit(git("diff", "--name-status", "--no-renames", "-z", f"refs/remotes/origin/main...{head}",
                      cwd=root).stdout)
     changes = list(zip(out[0::2], out[1::2]))
-    hits = []
+    hits = []  # (path, why)
     for status, path in changes:
         for label, glob, deleted_only, rx in rules:
             if (status == "D" or not deleted_only) and rx.fullmatch(path):
-                hits.append(f"{path} ({'deleted; ' if status == 'D' else ''}`{glob}`, {label})")
+                hits.append((path, f"{path} ({'deleted; ' if status == 'D' else ''}`{glob}`, {label})"))
                 break
     if not hits:
         g.ok("sensitive paths", f"{len(changes)} changed path(s), none on the merge-hold list")
         return
-    if a.allow_hold == "5":
-        room = room_number(playbook, missions)
-        found = find_decision(room, a.decision) if room else None
-        if found:
-            g.ok("sensitive paths", f"{'; '.join(hits)}: allowed by {a.decision} (comment #{found['id']})")
-            return
-        where = f"room {room} has no trusted architect comment {a.decision}" if room else \
-            "no room is recorded in PLAYBOOK.md or MISSIONS.md"
-        g.fail("sensitive paths", [(f"{'; '.join(hits)}; --allow-hold 5 names {a.decision}, but {where}", 5)])
+    held, paths = "; ".join(why for _, why in hits), [p for p, _ in hits]
+    form = f"MERGE-HOLD-<n>: PR #{a.pr}, reason 5 (sensitive paths): {', '.join(paths)}"
+    if a.allow_hold != "5":
+        g.fail("sensitive paths", [(f"on the merge-hold list: {held} (hold with {form})", 5)])
         return
-    g.fail("sensitive paths", [(f"on the merge-hold list: {'; '.join(hits)}", 5)])
+    # the decision must answer this PR's hold: the lead's MERGE-HOLD-n (same n) for reason 5 and these paths
+    n = a.decision.rsplit("-", 1)[1]
+    decision = room.decision(a.decision)
+    holds = room.holds(f"MERGE-HOLD-{n}")
+    lacking = [hold_problems(m["text"], a.pr, paths) for m in holds]
+    if decision and holds and [] in lacking:
+        hold = holds[lacking.index([])]
+        g.ok("sensitive paths", f"{held}: allowed by {a.decision} (comment #{decision['id']}), answering "
+                                f"MERGE-HOLD-{n} (comment #{hold['id']})")
+        return
+    why = []
+    if not decision:
+        why.append(f"no trusted {a.decision} from the architect or Matthew")
+    if not holds:
+        why.append(f"no trusted MERGE-HOLD-{n} from the lead")
+    elif [] not in lacking:
+        why.append(f"MERGE-HOLD-{n} doesn't name {', '.join(min(lacking, key=len))}")
+    g.fail("sensitive paths", [(f"{held}; --allow-hold 5 --decision {a.decision} needs {a.decision} to answer "
+                                f"{form.replace('<n>', n)}, but {room.where()} has {'; '.join(why)}", 5)])
 
 
 # --- gate and merge commands
@@ -2019,11 +2059,12 @@ def run_gate(a, expect_sha=None):
     playbook, ledger, missions = (blob(state, STATE_REF, f"{PLAYBOOK_DIR}/{n}")
                                   for n in ("PLAYBOOK.md", "LEDGER.md", "MISSIONS.md"))
 
+    room = RoomLog(playbook, missions)
     rec = review_records(root, sha, mission, a.pr)
     check_coverage(g, root, sha, rec)                         # 3
-    check_dispositions(g, root, sha, rec, ledger)             # 4
+    check_dispositions(g, root, sha, rec, ledger, room)       # 4
     check_checks(g, root, sha)                                # 5
-    check_sensitive(g, root, sha, playbook, missions, a)      # 6
+    check_sensitive(g, root, sha, playbook, a, room)          # 6
     return g.verdict(sha), sha
 
 
@@ -2105,7 +2146,8 @@ def add_gate_commands(sub, common):
             s.add_argument("--sha", type=sha_arg, required=True, help="the head commit the gate checked")
         s.add_argument("--mission", type=mission_arg, help="M<k> (default: from the head branch mission/M<k>-…)")
         s.add_argument("--allow-hold", choices=("5",), help="let a sensitive-path match pass, with --decision")
-        s.add_argument("--decision", type=decision_arg, help="the architect's DECISION-<n> in the room allowing it")
+        s.add_argument("--decision", type=decision_arg,
+                       help="the DECISION-<n> in the room that answers the lead's MERGE-HOLD-<n> for this PR")
 
 
 # --- end of review records, merge gate and merge
