@@ -4,7 +4,7 @@ Implements "Lead rotation, pausing and continuity" and the budget rules of `v1.m
 
 ## Machine block additions
 
-Two keys join the `agent-room-state` block in `MISSIONS.md` (the M2 template gains them; unknown keys were already kept):
+Two keys join the `agent-room-state` block in `MISSIONS.md` (the template in `templates/playbook/MISSIONS.md` gains them; unknown keys were already kept, and a missing `status` reads as `running`):
 
 ```
 status: running            # running | paused | stopped | done
@@ -27,13 +27,14 @@ Exit 0 unless an error (1). It never schedules anything.
 
 ## Handover and joining helpers
 
+- The watchdog, `handoff` and `reconcile` all work from a checkout of the project repo or without one (the state commands' `ROOM_STATE_REMOTE`/clone path), because the watchdog's scheduled session may start anywhere.
 - `room.py join-line N [--takeover]` prints the line that starts a lead: `Join agent room N in OWNER/NAME as lead, pipeline <VERSION>. Follow LEAD.md: https://github.com/SigorMatt/agent-room/blob/<VERSION>/LEAD.md`. With `--takeover` it adds `Take over the lease (lease take --takeover): the previous lead stopped without handing over.`, for the lead Matthew starts after `LEAD-SILENT`.
 - `room.py handoff N --step STEP` posts `HANDOFF: mission <mission>, next step <STEP>` while it still holds the lease, then in one state write records `step`, the room cursor and `intent=none`, and releases the lease (`lease_session: none`). It prints the join line for the scheduled task, and the agent schedules it. If scheduling fails, the agent posts `NEXT-LEAD-NEEDED` (it buzzes); a released lease doesn't block that post. The successor's plain `lease take` wins, and a duplicate launch finds the lease held and stands down.
 - `room.py reconcile N` prints, for a joining lead, the recorded state next to GitHub's facts: the machine block; the recorded PR's state (open, merged with its merge sha, closed); whether the room holds the recorded `ESCALATION-n`/`MERGE-HOLD-n`/`HANDOFF`; and the recorded `intent`, with a one-line hint (`intent done: clear it`, `intent not done: redo it`). It changes nothing.
 
 ## Budgets
 
-- `room.py budget` prints the mission's elapsed time against `mission_budget:` in `PLAYBOOK.md` (default `8h`) and exits 6 when over. Task attempts stay in the `MISSIONS.md` body, kept by the lead.
+- `room.py budget` prints the mission's elapsed time (now minus `mission_started`) against the budget of the current phase: the `Mission budget: <n> hours` phrase under the `### Phase <phase>:` heading of `PLAYBOOK.md` (the template's form), else 8 hours. Exit 0 under budget, 6 over, 1 when `mission_started` is `none`. Task attempts stay in the `MISSIONS.md` body, kept by the lead.
 
 ## Pause, stop, done
 
