@@ -988,8 +988,12 @@ def cmd_state_commit(a):
     if touched:  # lead-owned files need the lease, read from the freshly fetched branch
         fetch(path)
         text = pushed_text(path, "MISSIONS.md")
-        values = read_block(text) if text is not None else {}
-        require_lease(values, session_id(a), f"not committed ({', '.join(touched)} are lead-owned)")
+        try:
+            if text is None:
+                raise BlockUnreadable(f"{PLAYBOOK_DIR}/MISSIONS.md is missing on {STATE_BRANCH}")
+            require_lease(read_block(text), session_id(a), f"not committed ({', '.join(touched)} are lead-owned)")
+        except BlockUnreadable as e:  # no one holds a lease that can't be read; let the repair through
+            print(f"[lease unreadable, committing anyway: {e}]", file=sys.stderr)
     if commit_and_push(path, a.message):
         print(f"pushed {git_out('rev-parse', '--short', 'HEAD', cwd=path)} to {STATE_BRANCH}")
     else:

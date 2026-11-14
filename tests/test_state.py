@@ -458,6 +458,23 @@ def t_unreadable_lease_does_not_block_posting():
     assert "STATUS: held" not in transcript
 
 
+def t_broken_block_can_be_repaired():
+    # cold M2 R2-4: state commit of MISSIONS.md goes ahead, with a warning, while the pushed block is broken
+    room("state", "sync", session="L1", **AGAIN)
+    missions = playbook_path("GA", "MISSIONS.md")
+    text = open(missions).read()
+    assert BREAK_FENCE[1] in text and "lease_session: L1" in text, text
+    open(missions, "w").write(text.replace(BREAK_FENCE[1], BREAK_FENCE[0], 1))
+    r = room("state", "commit", "-m", "repair the block", session="L1", **AGAIN)
+    assert "pushed" in r.stdout and len(r.stderr.strip().splitlines()) == 1, (r.stdout, r.stderr)
+    assert r.stderr.startswith("[lease unreadable, committing anyway: ") and "no agent-room-state block" in r.stderr
+    assert room("lease", "check", session="L1", **AGAIN).returncode == 0, "the repaired block holds L1's lease"
+    room("state", "sync", session="L2", **AGAIN)
+    append("GA", "LEDGER.md", "| L-1 | not L2's to write |")
+    r = room("state", "commit", "-m", "ledger", session="L2", check=False, **AGAIN)
+    assert r.returncode == 5 and "held by L1" in r.stderr, (r.returncode, r.stderr)
+
+
 # --- lease
 
 def t_lease_take_race():
