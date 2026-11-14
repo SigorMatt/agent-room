@@ -1564,18 +1564,18 @@ def zsplit(out):
     return [p for p in out.split("\0") if p]
 
 
-def is_ancestor(root, commit, head):
-    return git("merge-base", "--is-ancestor", commit, head, cwd=root, check=False).returncode == 0
-
-
 def resolve_commit(root, rev):
     r = git("rev-parse", "--verify", "-q", f"{rev}^{{commit}}", cwd=root, check=False)
     return r.stdout.strip() if r.returncode == 0 else None
 
 
 def commit_files(root, sha):
-    return set(zsplit(git("diff-tree", "--no-commit-id", "--name-only", "-r", "-m", "--root", "-z", sha,
-                          cwd=root).stdout))
+    """The paths a commit changed against its first parent (every path, for a root commit), so that a
+    lead's merge of a builder branch touches what the merge brought in, not what the other side did."""
+    parents = git_out("rev-list", "--parents", "-n", "1", sha, cwd=root).split()[1:]
+    if parents:
+        return set(zsplit(git("diff", "--name-only", "--no-renames", "-z", parents[0], sha, cwd=root).stdout))
+    return set(zsplit(git("diff-tree", "--no-commit-id", "--name-only", "-r", "--root", "-z", sha, cwd=root).stdout))
 
 
 def parse_cold_report(path, kind, number, text):
@@ -1710,8 +1710,9 @@ def row_files(cell):
     return out
 
 
-def judge(root, head, label, cell, top, file_cell, ledger):
-    """What is wrong with one dispositions row: [(text, hold reason or None)]."""
+def judge(root, head, label, cell, top, file_cell, ledger, reported=None):
+    """What is wrong with one dispositions row: [(text, hold reason or None)]. REPORTED is the commit the
+    finding was reported against: a cold report's covers:, or the first Qodo fetch holding the title."""
     form, m = parse_disposition(cell)
     if form is None:
         return [(f"{label} is undecided" + (f" ('{cell}')" if cell.strip() else ""), 2)]
@@ -1728,6 +1729,11 @@ def judge(root, head, label, cell, top, file_cell, ledger):
             return [(f"{label}: fixed in {short}: no such commit", None)]
         if not is_ancestor(root, full, head):
             return [(f"{label}: fixed in {short}, which is not an ancestor of HEAD", None)]
+        if is_ancestor(root, full, "refs/remotes/origin/main"):
+            return [(f"{label}: fixed in {short}, which is already on main", None)]
+        if reported and is_ancestor(root, full, reported):
+            return [(f"{label}: fixed in {short}, which the review that found it had already seen "
+                     f"({reported[:12]})", None)]
         files = row_files(file_cell)
         touched = commit_files(root, full) if files else set()
         if files and not any(f in touched or (f.endswith("/") and any(t.startswith(f) for t in touched))
@@ -1739,10 +1745,11 @@ def judge(root, head, label, cell, top, file_cell, ledger):
 def check_dispositions(g, root, head, rec, ledger_text):
     reasons, ledger = [], ledger_ids(ledger_text)
     # cold: a row for every finding ID of every report
-    want = {}
+    want, reported = {}, {}
     for r in rec["cold"]:
         reasons += [(e, None) for e in r["errors"]]
         want.update(r["findings"])
+        reported.update({fid: r["covers"] for fid in r["findings"]})
     n_cold = n_qodo = 0
     if rec["cold_dispositions"] is None:
         reasons.append((f"{rec['cold_path']} is missing", None))
@@ -1760,7 +1767,8 @@ def check_dispositions(g, root, head, rec, ledger_text):
             seen.add(fid)
             n_cold += 1
             top = TOP_COLD in (want.get(fid), row.get("severity", "").strip("` ").lower())
-            reasons += judge(root, head, f"cold {fid}", row["disposition"], top, row.get("file", ""), ledger)
+            reasons += judge(root, head, f"cold {fid}", row["disposition"], top, row.get("file", ""), ledger,
+                             reported.get(fid))
         missing = [fid for fid in want if fid not in seen]
         if rows is not None and missing:
             reasons.append((f"{rec['cold_path']} has no row for {', '.join(missing)}", None))
@@ -1793,7 +1801,7 @@ def check_dispositions(g, root, head, rec, ledger_text):
             t = titles.get(key) or {}
             top = TOP_QODO in ((t.get("severity") or "").lower(), row.get("severity", "").strip("` ").lower())
             label = f"Qodo #{row['#'].strip() or '?'} \"{' '.join(row['finding'].split())}\""
-            reasons += judge(root, head, label, row["disposition"], top, row.get("file", ""), ledger)
+            reasons += judge(root, head, label, row["disposition"], top, row.get("file", ""), ledger, t.get("first"))
         if mode == "on" and q is None:
             reasons.append((f"{path} says qodo: on, but no Code Review comment is archived for this PR", None))
         elif mode == "on":

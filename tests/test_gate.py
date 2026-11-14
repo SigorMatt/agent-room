@@ -276,8 +276,9 @@ def default_qodo_rows(s):
 
 def mission(extra=None, findings1=None, findings2=(), cold_rows=default_cold_rows, qodo_findings=None,
             qodo_rows=default_qodo_rows, qodo="on", qodo_file=True, branch=BRANCH):
-    """A mission branch: code (C1), cold round 1 on C1, a fix (C2), cold round 2 on C2, Qodo's fetch 1 on C2
-    and both dispositions tables, committed after C2 (a record-only commit). Published as PR #12."""
+    """A mission branch: code (C1), cold round 1 on C1, a fix (C2), cold round 2 on C2, Qodo's fetch 1 on C1
+    and both dispositions tables, committed after C2 (a record-only commit). Qodo's fetch 1 reviewed C1,
+    so a fix in C2 comes after the review that found it. Published as PR #12."""
     start(branch=branch)
     s = {"c1": commit("feat: greet", dict({"app.py": APP1}, **(extra or {})))}
     findings1 = [("R1-1", "high", "app.py:2"), ("R1-2", "low", "app.py:1")] if findings1 is None else findings1
@@ -286,10 +287,10 @@ def mission(extra=None, findings1=None, findings2=(), cold_rows=default_cold_row
     files = {"reviews/cold/M3/round-2.md": cold_report(2, s["c2"], findings2),
              "reviews/cold/M3/DISPOSITIONS.md": cold_dispositions(cold_rows(s))}
     if qodo == "on":
-        files.update(qodo_archive(1, QODO_FINDINGS if qodo_findings is None else qodo_findings, s["c2"]))
+        files.update(qodo_archive(1, QODO_FINDINGS if qodo_findings is None else qodo_findings, s["c1"]))
     if qodo_file:
         files[f"reviews/qodo/PR-{PR}/DISPOSITIONS.md"] = qodo_dispositions(
-            qodo_rows(s) if qodo == "on" else [], qodo=qodo, reviewed=s["c2"] if qodo == "on" else "")
+            qodo_rows(s) if qodo == "on" else [], qodo=qodo, reviewed=s["c1"] if qodo == "on" else "")
     commit("review: cold round 2, qodo fetch 1, dispositions", files)
     s["head"] = publish(branch)
     return s
@@ -621,6 +622,48 @@ def t_every_disposition_form_passes():
     assert r.returncode == 0, out(r)
     assert "6 cold and 3 Qodo row(s)" in line(r, "dispositions")
 
+
+
+def t_fixed_in_must_come_after_the_finding():  # cold M3 R1-2
+    on_main = g("log", "-1", "--format=%H", "origin/main", "--", "app.py").stdout.strip()
+    mission(cold_rows=lambda s: [("R1-1", "high", "app.py", f"fixed in {s['c1'][:7]}"),
+                                 ("R1-2", "low", "app.py", f"fixed in {on_main[:7]}")],
+            qodo_rows=lambda s: [("1", "Action required", "Crash when the name is missing", "app.py", f"fixed in {s['c1']}"),
+                                 ("2", "Informational", "Greeting text is hard-coded", "app.py", "dismissed: by design")])
+    r = gate()
+    failed(r, "dispositions", "cold R1-1: fixed in", "which the review that found it had already seen",
+           f"cold R1-2: fixed in {on_main[:7]}, which is already on main",
+           'Qodo #1 "Crash when the name is missing": fixed in')
+    assert verdict(r) == "gate: FAIL hold reasons none; fix first: dispositions", out(r)
+    # fixes that arrive as the lead's merges of builder branches: a merge touches what it brought in
+    start()
+    c1 = commit("feat", {"app.py": APP1})
+    commit("review: cold round 1", {"reviews/cold/M3/round-1.md": cold_report(
+        1, c1, [("R1-1", "high", "app.py:2"), ("R1-2", "low", "lib/util.py:1")])})
+    base = head()
+    g("checkout", "-q", "-B", "builder-a", base)
+    commit("fix: greet without a name", {"app.py": APP2})
+    g("checkout", "-q", "-B", "builder-b", base)
+    commit("fix: util", {"lib/util.py": "X = 2\n"})
+    g("checkout", "-q", BRANCH)
+    g("merge", "-q", "--no-ff", "-m", "merge task a", "builder-a")
+    ma = head()
+    g("merge", "-q", "--no-ff", "-m", "merge task b", "builder-b")
+    mb = head()
+
+    def records(util_file):
+        return {"reviews/cold/M3/round-2.md": cold_report(2, mb),
+                "reviews/cold/M3/DISPOSITIONS.md": cold_dispositions([
+                    ("R1-1", "high", "app.py", f"fixed in {ma[:7]}"), ("R1-2", "low", util_file, f"fixed in {mb[:7]}")]),
+                f"reviews/qodo/PR-{PR}/DISPOSITIONS.md": qodo_dispositions([], qodo="no first review")}
+
+    commit("review: records", records("app.py"))
+    publish()
+    failed(gate(), "dispositions", f"cold R1-2: fixed in {mb[:7]}, which doesn't touch app.py")
+    commit("review: records", records("lib/util.py"))
+    publish()
+    r = gate()
+    assert r.returncode == 0, out(r)
 
 def t_disposition_failures():
     g("checkout", "-q", "-B", "side", "origin/main")
