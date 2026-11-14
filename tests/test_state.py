@@ -264,6 +264,18 @@ def t_state_set_and_get():
     assert r.returncode == 1 and "no key" in r.stderr, r.stderr
 
 
+def t_state_set_rejects_any_line_break():
+    # cold M2 R1-9: every separator str.splitlines() honours, or a value could inject keys
+    before = block()
+    for sep in (" ", " ", "\x85", "\v", "\f", "\x1c", "\x1d", "\x1e", "\r"):
+        r = room("state", "set", f"intent=open PR for M1{sep}lease_session: mallory", check=False)
+        assert r.returncode == 1 and "single line" in r.stderr, (repr(sep), r.returncode, r.stderr)
+    assert block() == before
+    assert room("lease", "check").returncode == 0
+    room("state", "set", "intent=tabs\tand unicode — are fine")
+    assert room("state", "get", "intent").stdout.rstrip("\n") == "tabs\tand unicode — are fine"
+
+
 def t_state_next_counter():
     assert room("state", "next", "counter").stdout.strip() == "1"
     assert room_b("state", "next", "counter", session="A").stdout.strip() == "2"  # same session, other machine

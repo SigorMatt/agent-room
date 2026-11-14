@@ -901,8 +901,8 @@ def cmd_state_set(a):
         key, sep, value = pair.partition("=")
         if not sep or not STATE_KEY.fullmatch(key):
             raise StateError(f"expected KEY=VALUE with a lowercase key, got {pair!r}")
-        if "\n" in value or "\r" in value:
-            raise StateError(f"the value of {key} must be a single line")
+        if f"x{value}x".splitlines() != [f"x{value}x"]:  # every break read_block's splitlines() honours
+            raise StateError(f"the value of {key} must be a single line (no line or paragraph separators)")
         updates[key] = value.strip()
     change_state(a, f"state: set {', '.join(updates)}", lambda values: updates)
     print("set " + " ".join(f"{k}={v}" for k, v in updates.items()))
