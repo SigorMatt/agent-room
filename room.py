@@ -19,6 +19,8 @@ in Claude chat and cloud sessions, or `gh auth login` on your own machine.
   room.py state init|init-lead|path|sync|commit|get|set|next   the playbook on agent-room/state
   room.py lease take|check        the lead lease (exit 3: another session won; 5: not the holder)
   room.py preflight --role architect|lead [--fix]              check repo, state branch, environment
+  room.py gate  PR [--mission M<k>] [--allow-hold 5 --decision DECISION-<n>]   the merge gate
+  room.py merge PR --sha SHA [--allow-hold 5 --decision DECISION-<n>]        gate, then merge naming SHA
 
 Every room command takes --repo OWNER/NAME. Without it: $ROOM_REPO, else the
 GitHub remote of the current checkout. --session SID names this participant;
@@ -36,6 +38,10 @@ room, never the content.
 wait exits 0 with new messages (its last line is [cursor: ID]), 3 on timeout
 (re-arm it), 4 if the room is closed.
 
+gate prints one line per check and a verdict: exit 0 PASS, 3 WAIT (checks pending),
+5 lease lost, 6 FAIL with the hold reasons. merge exits 3 if the head moved (re-run
+the gate) and 6 if GitHub finds the PR not mergeable.
+
 Environment:
   ROOM_REPO         default repo for rooms
   ROOM_SESSION      this participant's session ID (see --session)
@@ -48,6 +54,7 @@ Environment:
   ROOM_NTFY_TOKEN   optional ntfy access token (only raises limits on a paid ntfy.sh tier)
 """
 import argparse
+import html
 import json
 import os
 import re
@@ -1115,6 +1122,733 @@ def add_state_commands(sub, common):
 # --- end of state branch, lease, preflight
 
 
+# --- review records, merge gate and merge
+#
+# Review records travel with the code on the mission branch, under reviews/. Only the record files
+# below are exempt from the coverage rule (deferral B-1): anything else under reviews/ is a change
+# that needs a review like any other. Formats: docs/design/m3-reviews-gate.md, "Review records".
+#
+#   gate PR [--mission M<k>] [--allow-hold 5 --decision DECISION-<n>]
+#   merge PR --sha SHA [--mission M<k>] [--allow-hold 5 --decision DECISION-<n>]
+#
+# Exit codes: 0 pass (or merged), 3 wait (checks pending, or the head moved), 5 lease lost,
+# 6 fail (hold reasons) or not mergeable, 1 errors.
+
+EXIT_WAIT, EXIT_FAIL = 3, 6
+REVIEW_EXEMPT = tuple(re.compile(p) for p in (
+    r"reviews/cold/M\d+/round-\d+\.md",  # rounds 1 and 2, plus any extra round a DECISION grants
+    r"reviews/cold/M\d+/scoped-\d+\.md",
+    r"reviews/cold/M\d+/DISPOSITIONS\.md",
+    r"reviews/qodo/PR-\d+/DISPOSITIONS\.md",
+    r"reviews/qodo/PR-\d+/\d+/(?:issue-comment|review|review-comment)-\d+\.(?:md|json)",
+))
+SHA40 = re.compile(r"[0-9a-f]{40}")
+COLD_SEVERITIES = ("high", "medium", "low")
+TOP_COLD, TOP_QODO = "high", "action required"
+BLANK = ("", "-", "—", "n/a", "none")  # cells that name nothing
+DISPOSITIONS = (  # the disposition grammar shared by both tables; anything else is undecided
+    ("fixed", re.compile(r"fixed in ([0-9a-fA-F]{7,40})")),
+    ("dismissed", re.compile(r"dismissed:\s*(\S.*)")),
+    ("deferred", re.compile(r"deferred:\s*(L-\d+) to (M\d+|phase \d+ backlog)")),
+    ("pending", re.compile(r"owner decision:\s*pending \((ESCALATION-\d+)\)")),
+    ("owner", re.compile(r"owner decision:\s*(\S.*?),\s*Matthew \((DECISION-\d+)\)")),
+)
+
+# Copied unchanged from qodo_review.py, the appendix of docs/QODO-REVIEW.md, so that room.py reads an
+# archived Code Review comment exactly as the tool does (tests/test_gate.py checks they still match).
+_HEADING = re.compile(r"<h\d>([^<]*)</h\d>")
+_FINDING = re.compile(r"<summary>[ \t]*(\d+)\.[ \t]+([^\n]*?)[ \t]*</summary>")
+_SEVERITY = re.compile(r'<img src="https://img\.shields\.io/badge/[^"]*"[^>]*alt="([^"]+)"')
+_REVIEWED = re.compile(r"<!--\s*https://[^\s]+/commit/([0-9a-f]{40})\s*-->")
+_RESOLVED_MARK = re.compile(r"✓\s*Resolved")
+
+
+def plain(title):
+    """A finding title without markup, code spans or the resolved mark: qodo_review.py's plain()
+    (with its text_of()), copied from docs/QODO-REVIEW.md."""
+    text = re.sub(r"<code>.*?</code>", "", title)
+    text = html.unescape(re.sub(r"<[^>]+>", "", text)).replace("~~", "")
+    text = _RESOLVED_MARK.sub("", text)
+    return " ".join(text.replace("\\", "").split())
+
+
+def title_key(title):
+    """How finding titles are compared: plain text, case-folded (backticks of a table cell dropped)."""
+    return plain(title.replace("`", "")).casefold()
+
+
+def is_code_review(text):
+    """qodo_review.py's is_code_review(): the comment's first heading names the Code Review."""
+    m = _HEADING.search(text)
+    return "Code Review" in (m.group(1) if m else (text.strip().splitlines() or [""])[0])
+
+
+def qodo_findings(text):
+    """[{number, title, key, severity}] of a Code Review comment, severity from the badge above each."""
+    badges = [(m.start(), m.group(1)) for m in _SEVERITY.finditer(text)]
+    out = []
+    for m in _FINDING.finditer(text):
+        severity = None
+        for position, label in badges:
+            if position < m.start():
+                severity = label
+        title = plain(m.group(2).strip())
+        out.append({"number": m.group(1), "title": title, "key": title.casefold(), "severity": severity})
+    return out
+
+
+def exempt(path):
+    """A review record that the coverage rule exempts: the whole path matches one of REVIEW_EXEMPT."""
+    return any(p.fullmatch(path) for p in REVIEW_EXEMPT)
+
+
+def parse_disposition(cell):
+    """(form, match) for a disposition cell, or (None, None) when it is undecided."""
+    text = " ".join(cell.replace("`", "").split())
+    for form, rx in DISPOSITIONS:
+        m = rx.fullmatch(text)
+        if m:
+            return form, m
+    return None, None
+
+
+def md_cells(line):
+    """The cells of a markdown table row, or None for a line that isn't one."""
+    s = line.strip()
+    if not s.startswith("|"):
+        return None
+    s = s[1:]
+    if s.endswith("|") and not s.endswith("\\|"):
+        s = s[:-1]
+    return [c.strip().replace("\\|", "|") for c in re.split(r"(?<!\\)\|", s)]
+
+
+def md_tables(text):
+    """[(lowercased header cells, [row cells])] of every markdown table in text."""
+    out, rows, sep = [], None, False
+    for line in text.splitlines():
+        cells = md_cells(line)
+        if cells is None:
+            rows = None
+            continue
+        if rows is None:
+            rows, sep = [], False
+            out.append(([c.lower() for c in cells], rows))
+        elif not sep and not rows and all(re.fullmatch(r":?-+:?", c) for c in cells):
+            sep = True
+        else:
+            rows.append(cells)
+    return out
+
+
+def find_table(text, required, optional=()):
+    """Rows, as {column: cell}, of the first table whose header has every REQUIRED column; None if none.
+    A column is named by its header cell or a prefix of it ('finding' for 'finding (title as…)')."""
+    for header, rows in md_tables(text or ""):
+        idx = {}
+        for col in (*required, *optional):
+            i = next((j for j, h in enumerate(header) if h == col), None)
+            i = next((j for j, h in enumerate(header) if h.startswith(col)), None) if i is None else i
+            if i is not None:
+                idx[col] = i
+        if all(c in idx for c in required):
+            return [{c: (r[i] if i < len(r) else "") for c, i in idx.items()} for r in rows]
+    return None
+
+
+def machine_lines(text):
+    """The `key: value` lines that open a record, up to its first table or ## heading."""
+    values = {}
+    for line in text.splitlines():
+        if line.startswith("## ") or line.lstrip().startswith("|"):
+            break
+        key, sep, value = line.partition(":")
+        if sep and re.fullmatch(r"[a-z][a-z -]*", key.strip()):
+            values[key.strip()] = re.sub(r"\s+#.*$", "", value).strip()
+    return values
+
+
+def ledger_ids(text):
+    return {r[0].strip("` ") for _, rows in md_tables(text or "") for r in rows
+            if r and re.fullmatch(r"L-\d+", r[0].strip("` "))}
+
+
+def glob_regex(glob):
+    """A merge-hold glob as a regex on the whole path: '*' within a segment, '**' across segments."""
+    out, i = [], 0
+    while i < len(glob):
+        if glob.startswith("**/", i):
+            out.append("(?:.*/)?")
+            i += 3
+        elif glob.startswith("**", i):
+            out.append(".*")
+            i += 2
+        elif glob[i] == "*":
+            out.append("[^/]*")
+            i += 1
+        elif glob[i] == "?":
+            out.append("[^/]")
+            i += 1
+        else:
+            out.append(re.escape(glob[i]))
+            i += 1
+    return re.compile("".join(out))
+
+
+def merge_hold_rules(playbook):
+    """[(label, glob, deleted_only, regex)] from the "## Merge-hold list" section of PLAYBOOK.md, one
+    bullet per area (- <label>: `glob`, `glob`). None when the section is missing. A label containing
+    "deleted" matches only deleted paths."""
+    m = re.search(r"^##[ \t]+Merge-hold list[^\n]*\n(.*?)(?=^##[ \t]|\Z)", playbook or "", re.M | re.S | re.I)
+    if not m:
+        return None
+    rules = []
+    for line in m.group(1).splitlines():
+        b = re.match(r"\s*[-*+][ \t]+(.*)", line)
+        if not b:
+            continue
+        label = b.group(1).split("`", 1)[0].strip().rstrip(":").strip()
+        for glob in re.findall(r"`([^`]+)`", b.group(1)):
+            rules.append((label, glob.strip(), "deleted" in label.lower(), glob_regex(glob.strip())))
+    return rules
+
+
+# --- reading the mission branch
+
+def project_root():
+    """The top of the project checkout the gate runs in; an error when this isn't a checkout of REPO."""
+    here = repo_from_checkout()
+    r = git("rev-parse", "--show-toplevel", check=False)
+    if not here or here.lower() != REPO.lower() or r.returncode != 0:
+        raise StateError(f"run this inside a checkout of {REPO}")
+    return r.stdout.strip()
+
+
+def blob(root, rev, path):
+    r = git("show", f"{rev}:{path}", cwd=root, check=False)
+    return r.stdout if r.returncode == 0 else None
+
+
+def zsplit(out):
+    return [p for p in out.split("\0") if p]
+
+
+def is_ancestor(root, commit, head):
+    return git("merge-base", "--is-ancestor", commit, head, cwd=root, check=False).returncode == 0
+
+
+def resolve_commit(root, rev):
+    r = git("rev-parse", "--verify", "-q", f"{rev}^{{commit}}", cwd=root, check=False)
+    return r.stdout.strip() if r.returncode == 0 else None
+
+
+def commit_files(root, sha):
+    return set(zsplit(git("diff-tree", "--no-commit-id", "--name-only", "-r", "-m", "--root", "-z", sha,
+                          cwd=root).stdout))
+
+
+def parse_cold_report(path, kind, number, text):
+    """A cold report: the commit it covers, its findings {ID: severity} and what's wrong with it."""
+    covers = machine_lines(text).get("covers", "").lower()
+    prefix = ("R" if kind == "round" else "S") + str(number)
+    rows = find_table(text, ("id", "severity"))
+    findings, errors = {}, []
+    if rows is None:
+        errors.append(f"{path} has no findings table (| ID | severity | …)")
+    for row in rows or []:
+        fid = row["id"].strip("` ")
+        if fid.lower() in BLANK:
+            continue
+        sev = row["severity"].strip("` ").lower()
+        if not re.fullmatch(rf"{prefix}-\d+", fid):
+            errors.append(f"{path}: finding ID {fid} is not {prefix}-<n>")
+        if sev not in COLD_SEVERITIES:
+            errors.append(f"{path}: {fid} has severity '{row['severity']}', not high, medium or low")
+        if fid in findings:
+            errors.append(f"{path}: {fid} appears twice")
+        findings[fid] = sev
+    return {"path": path, "covers": covers if SHA40.fullmatch(covers) else None, "findings": findings,
+            "errors": errors}
+
+
+def review_records(root, sha, mission, pr):
+    """The mission's cold records and the PR's Qodo records, as committed at sha."""
+    paths = zsplit(git("ls-tree", "-r", "--name-only", "-z", sha, "--", "reviews", cwd=root).stdout)
+    cold, fetches = [], {}
+    for p in sorted(paths):
+        m = re.fullmatch(rf"reviews/cold/{re.escape(mission)}/(round|scoped)-(\d+)\.md", p)
+        if m:
+            cold.append(parse_cold_report(p, m.group(1), int(m.group(2)), blob(root, sha, p) or ""))
+        m = re.fullmatch(rf"reviews/qodo/PR-{pr}/(\d+)/issue-comment-(\d+)\.md", p)
+        if m:
+            fetches.setdefault(int(m.group(1)), []).append((int(m.group(2)), p))
+    qodo = None  # the latest archive holding a Code Review comment (the newest comment if several)
+    for k in sorted(fetches, reverse=True):
+        reviews = [(cid, p, text) for cid, p in fetches[k]
+                   for text in [blob(root, sha, p) or ""] if is_code_review(text)]
+        if reviews:
+            _, p, text = max(reviews)
+            hits = _REVIEWED.findall(text)
+            qodo = {"fetch": k, "path": p, "reviewed": hits[-1] if hits else None, "findings": qodo_findings(text)}
+            break
+    return {"cold": cold, "qodo": qodo,
+            "cold_path": f"reviews/cold/{mission}/DISPOSITIONS.md",
+            "cold_dispositions": blob(root, sha, f"reviews/cold/{mission}/DISPOSITIONS.md"),
+            "qodo_path": f"reviews/qodo/PR-{pr}/DISPOSITIONS.md",
+            "qodo_dispositions": blob(root, sha, f"reviews/qodo/PR-{pr}/DISPOSITIONS.md")}
+
+
+class Gate:
+    """The gate's check lines, and the verdict they add up to."""
+
+    def __init__(self):
+        self.holds, self.fixes, self.waits = set(), [], []
+
+    def ok(self, name, text):
+        print(f"✓ {name}: {text}", flush=True)
+
+    def wait(self, name, text):
+        print(f"… {name}: {text}", flush=True)
+        self.waits.append(f"{name}: {text}")
+
+    def fail(self, name, reasons):
+        """reasons: [(text, hold reason or None)]. None: the lead fixes it; it is no reason to hold."""
+        print(f"✗ {name}: {'; '.join(t for t, _ in reasons)}", flush=True)
+        self.holds |= {h for _, h in reasons if h}
+        if any(h is None for _, h in reasons):
+            self.fixes.append(name)
+
+    def verdict(self, head):
+        if self.holds or self.fixes:
+            line = "gate: FAIL hold reasons " + (", ".join(str(h) for h in sorted(self.holds)) or "none")
+            print(line + (f"; fix first: {', '.join(self.fixes)}" if self.fixes else ""))
+            return EXIT_FAIL
+        if self.waits:
+            print("gate: WAIT " + "; ".join(self.waits))
+            return EXIT_WAIT
+        print(f"gate: PASS {head}")
+        return 0
+
+
+# --- the checks
+
+def check_coverage(g, root, head, rec):
+    covered, errors = [], []
+    for r in rec["cold"]:
+        if r["covers"]:
+            covered.append((r["covers"], r["path"]))
+        else:
+            errors.append(f"{r['path']}: 'covers:' must name the reviewed commit's 40-hex sha")
+    q = rec["qodo"]
+    if q and q["reviewed"]:
+        covered.append((q["reviewed"], f"Qodo fetch {q['fetch']}"))
+    elif q:
+        errors.append(f"{q['path']}: no reviewed-commit marker in the Code Review comment")
+    best = None  # (commit, source, uncovered paths, commits since) of the review closest to covering HEAD
+    for commit, source in covered:
+        if is_ancestor(root, commit, head):
+            changed = zsplit(git("diff", "--name-only", "--no-renames", "-z", commit, head, cwd=root).stdout)
+            uncovered = [p for p in changed if not exempt(p)]
+            since = int(git_out("rev-list", "--count", f"{commit}..{head}", cwd=root))
+            if best is None or (len(uncovered), since) < (len(best[2]), best[3]):
+                best = (commit, source, uncovered, since)
+    if not covered:
+        errors.append("no recorded review: no cold report of this mission and no archived Qodo review of this PR")
+    elif best is None:
+        errors.append("no recorded review covers a commit of this branch: " +
+                      ", ".join(f"{s} covers {c[:12]}" for c, s in covered))
+    elif best[2]:
+        errors.append(f"changed since the closest review ({best[1]}, {best[0][:12]}): {', '.join(best[2])}; "
+                      "a scoped cold review must cover them")
+    if errors:
+        g.fail("coverage", [(e, None) for e in errors])
+    else:
+        note = "it is HEAD" if best[0] == head else "only review records changed since"
+        g.ok("coverage", f"{best[1]} covers {best[0][:12]}; {note}")
+
+
+def row_files(cell):
+    """The paths named in a table's file cell, line numbers dropped."""
+    out = []
+    for item in re.split(r"[,\s]+", cell.replace("`", "")):
+        item = re.sub(r":\d+(?:-\d+)?$", "", item.strip())
+        if item.lower() not in BLANK:
+            out.append(item)
+    return out
+
+
+def judge(root, head, label, cell, top, file_cell, ledger):
+    """What is wrong with one dispositions row: [(text, hold reason or None)]."""
+    form, m = parse_disposition(cell)
+    if form is None:
+        return [(f"{label} is undecided" + (f" ('{cell}')" if cell.strip() else ""), 2)]
+    if form == "pending":
+        return [(f"{label} waits on an open owner decision ({m.group(1)})", 1)]
+    if top and form in ("dismissed", "deferred"):
+        return [(f"{label} is top severity, so only a fix or an owner decision closes it, not '{form}'", 1)]
+    if form == "deferred" and m.group(1) not in ledger:
+        return [(f"{label}: {m.group(1)} is not in {PLAYBOOK_DIR}/LEDGER.md on {STATE_BRANCH}", None)]
+    if form == "fixed":
+        short = m.group(1).lower()
+        full = resolve_commit(root, short)
+        if not full:
+            return [(f"{label}: fixed in {short}: no such commit", None)]
+        if not is_ancestor(root, full, head):
+            return [(f"{label}: fixed in {short}, which is not an ancestor of HEAD", None)]
+        files = row_files(file_cell)
+        touched = commit_files(root, full) if files else set()
+        if files and not any(f in touched or (f.endswith("/") and any(t.startswith(f) for t in touched))
+                             for f in files):
+            return [(f"{label}: fixed in {short}, which doesn't touch {', '.join(files)}", None)]
+    return []
+
+
+def check_dispositions(g, root, head, rec, ledger_text):
+    reasons, ledger = [], ledger_ids(ledger_text)
+    # cold: a row for every finding ID of every report
+    want = {}
+    for r in rec["cold"]:
+        reasons += [(e, None) for e in r["errors"]]
+        want.update(r["findings"])
+    n_cold = n_qodo = 0
+    if rec["cold_dispositions"] is None:
+        reasons.append((f"{rec['cold_path']} is missing", None))
+    else:
+        rows = find_table(rec["cold_dispositions"], ("id", "disposition"), ("severity", "file"))
+        if rows is None:
+            reasons.append((f"{rec['cold_path']} has no | ID | … | disposition | table", None))
+        seen = set()
+        for row in rows or []:
+            fid = row["id"].strip("` ")
+            if fid.lower() in BLANK:
+                continue
+            if fid in seen:
+                reasons.append((f"{rec['cold_path']}: {fid} has two rows", None))
+            seen.add(fid)
+            n_cold += 1
+            top = TOP_COLD in (want.get(fid), row.get("severity", "").strip("` ").lower())
+            reasons += judge(root, head, f"cold {fid}", row["disposition"], top, row.get("file", ""), ledger)
+        missing = [fid for fid in want if fid not in seen]
+        if rows is not None and missing:
+            reasons.append((f"{rec['cold_path']} has no row for {', '.join(missing)}", None))
+    # Qodo: with QODO_REVIEW=on the file exists; with qodo: on, a row for every finding of the latest archive
+    switch = os.environ.get("QODO_REVIEW", "").strip()
+    if switch not in ("on", "off"):
+        reasons.append((f"QODO_REVIEW must be on or off, not {switch!r}", None))
+    text, path, q = rec["qodo_dispositions"], rec["qodo_path"], rec["qodo"]
+    if text is None and switch == "on":
+        reasons.append((f"{path} is missing (QODO_REVIEW=on)", None))
+    if text is not None:
+        mode = machine_lines(text).get("qodo")
+        if mode not in ("on", "off", "no first review"):
+            reasons.append((f"{path}: its 'qodo:' line must be on, off or no first review", None))
+        rows = find_table(text, ("#", "finding", "disposition"), ("severity", "file"))
+        if rows is None and mode == "on":
+            reasons.append((f"{path} has no | # | … | finding | … | disposition | table", None))
+        comment = {f["key"]: f for f in (q["findings"] if q else [])}
+        seen = set()
+        for row in rows or []:
+            key = title_key(row["finding"])
+            if not key and not row["disposition"].strip():
+                continue
+            seen.add(key)
+            n_qodo += 1
+            f = comment.get(key) or {}
+            top = TOP_QODO in ((f.get("severity") or "").lower(), row.get("severity", "").strip("` ").lower())
+            label = f"Qodo #{row['#'].strip() or '?'} \"{plain(row['finding'].replace('`', ''))}\""
+            reasons += judge(root, head, label, row["disposition"], top, row.get("file", ""), ledger)
+        if mode == "on" and q is None:
+            reasons.append((f"{path} says qodo: on, but no Code Review comment is archived for this PR", None))
+        elif mode == "on":
+            missing = [f["title"] for f in q["findings"] if f["key"] not in seen]
+            if missing:
+                reasons.append((f"{path} has no row for: {'; '.join(missing)} (archive fetch {q['fetch']})", None))
+    if reasons:
+        g.fail("dispositions", reasons)
+    else:
+        g.ok("dispositions", f"{n_cold} cold and {n_qodo} Qodo row(s), every finding decided")
+
+
+def required_contexts():
+    """(set of required status contexts on main, or None, error text)."""
+    req = set()
+    status, prot = gh_try(f"repos/{REPO}/branches/main/protection")
+    if status == 200 and isinstance(prot, dict):
+        rsc = prot.get("required_status_checks") or {}
+        req |= set(rsc.get("contexts") or [])
+        req |= {c["context"] for c in rsc.get("checks") or [] if c.get("context")}
+    elif not unprotected(status, prot):
+        return None, f"can't read main's protection: {prot}"
+    status, rules = gh_try(f"repos/{REPO}/rules/branches/main")
+    if status == 200 and isinstance(rules, list):
+        for rule in rules:
+            if rule.get("type") == "required_status_checks":
+                params = rule.get("parameters") or {}
+                req |= {c["context"] for c in params.get("required_status_checks") or [] if c.get("context")}
+    elif status != 200 and not unprotected(status, rules):
+        return None, f"can't read main's rules: {rules}"
+    return req, None
+
+
+def gh_pages(path, key):
+    out, page = [], 1
+    while True:
+        batch = (gh(f"{path}{'&' if '?' in path else '?'}per_page=100&page={page}") or {}).get(key) or []
+        out += batch
+        if len(batch) < 100:
+            return out
+        page += 1
+
+
+def check_checks(g, head):
+    required, err = required_contexts()
+    if err:
+        g.fail("checks", [(err, None)])
+        return
+    rank = {"ok": 0, "pending": 1, "failed": 2}
+    runs = {}  # name -> the newest run of that name: a re-run replaces an older one
+    for run in gh_pages(f"repos/{REPO}/commits/{head}/check-runs?filter=latest", "check_runs"):
+        if run.get("name") and run.get("id", 0) >= runs.get(run["name"], {}).get("id", 0):
+            runs[run["name"]] = run
+    state = {name: "pending" if run.get("status") != "completed" else
+             "ok" if run.get("conclusion") in ("success", "neutral", "skipped") else "failed"
+             for name, run in runs.items()}
+    for s in gh_pages(f"repos/{REPO}/commits/{head}/status", "statuses"):
+        if s.get("context"):  # a context reported both ways counts at its worst
+            v = {"success": "ok", "pending": "pending"}.get(s.get("state"), "failed")
+            state[s["context"]] = max(state.get(s["context"], v), v, key=rank.get)
+    failed = sorted(c for c, v in state.items() if v == "failed")
+    missing = sorted(required - set(state))
+    pending = sorted(c for c, v in state.items() if v == "pending")
+    if failed or missing:
+        g.fail("checks", [(t, 3) for t in (f"failed: {', '.join(failed)}" if failed else None,
+                                            f"required but missing: {', '.join(missing)}" if missing else None) if t])
+    elif pending:
+        g.wait("checks", f"pending: {', '.join(pending)}")
+    elif not state:
+        g.ok("checks", "no checks configured")
+    else:
+        g.ok("checks", f"{len(state)} passed" + (f" (required: {', '.join(sorted(required))})" if required else ""))
+
+
+def room_number(playbook, missions):
+    m = re.search(r"^room:[ \t]*(\d+)", playbook or "", re.M)
+    if m and int(m.group(1)) > 0:
+        return int(m.group(1))
+    try:
+        n = int(read_block(missions or "").get("room", "0"))
+    except (StateError, ValueError):
+        return None
+    return n if n > 0 else None
+
+
+def find_decision(room, decision):
+    """The room's trusted comment from the architect, or untagged from Matthew, whose kind is DECISION."""
+    for c in comments(room):
+        m = parse(c)
+        if m["role"] in ("architect", "human") and trusted(m) and message_kind(m["text"]) == decision:
+            return m
+    return None
+
+
+def check_sensitive(g, root, head, playbook, missions, a):
+    rules = merge_hold_rules(playbook)
+    if not rules:
+        g.fail("sensitive paths", [(f"{PLAYBOOK_DIR}/PLAYBOOK.md on {STATE_BRANCH} has no merge-hold " +
+                                    ("list" if rules is None else "globs") + "; the gate never runs without it",
+                                    None)])
+        return
+    out = zsplit(git("diff", "--name-status", "--no-renames", "-z", f"refs/remotes/origin/main...{head}",
+                     cwd=root).stdout)
+    changes = list(zip(out[0::2], out[1::2]))
+    hits = []
+    for status, path in changes:
+        for label, glob, deleted_only, rx in rules:
+            if (status == "D" or not deleted_only) and rx.fullmatch(path):
+                hits.append(f"{path} ({'deleted; ' if status == 'D' else ''}`{glob}`, {label})")
+                break
+    if not hits:
+        g.ok("sensitive paths", f"{len(changes)} changed path(s), none on the merge-hold list")
+        return
+    if a.allow_hold == "5":
+        room = room_number(playbook, missions)
+        found = find_decision(room, a.decision) if room else None
+        if found:
+            g.ok("sensitive paths", f"{'; '.join(hits)}: allowed by {a.decision} (comment #{found['id']})")
+            return
+        where = f"room {room} has no trusted architect comment {a.decision}" if room else \
+            "no room is recorded in PLAYBOOK.md or MISSIONS.md"
+        g.fail("sensitive paths", [(f"{'; '.join(hits)}; --allow-hold 5 names {a.decision}, but {where}", 5)])
+        return
+    g.fail("sensitive paths", [(f"on the merge-hold list: {'; '.join(hits)}", 5)])
+
+
+# --- gate and merge commands
+
+def run_gate(a, expect_sha=None):
+    """The gate's checks, one line each, then the verdict. Returns (exit code, the PR's head sha or None)."""
+    try:
+        sys.stdout.reconfigure(errors="backslashreplace")
+    except AttributeError:
+        pass
+    if bool(a.allow_hold) != bool(a.decision):
+        raise StateError("--allow-hold 5 and --decision DECISION-<n> go together")
+    root = project_root()
+    g = Gate()
+
+    # 1. the PR, and its head fetched from origin
+    pr = gh(f"repos/{REPO}/pulls/{a.pr}") or {}
+    head = pr.get("head") or {}
+    ref, sha = head.get("ref") or "", (head.get("sha") or "").lower()
+    problems = []
+    if pr.get("state") != "open":
+        problems.append("is merged" if pr.get("merged") else f"is {pr.get('state')}, not open")
+    if (pr.get("base") or {}).get("ref") != "main":
+        problems.append(f"has base {(pr.get('base') or {}).get('ref')}, not main")
+    head_repo = (head.get("repo") or {}).get("full_name") or ""
+    if head_repo.lower() != REPO.lower():
+        problems.append(f"has its head in {head_repo or 'an unknown repo'}, not {REPO}")
+    m = re.fullmatch(r"mission/(M\d+)(?:-.+)?", ref)
+    if not ref.startswith("mission/") or not (m or a.mission):
+        problems.append(f"has head {ref or '?'}, not a mission/M<k>-… branch")
+    if not SHA40.fullmatch(sha):
+        problems.append("has no head sha")
+    if problems:
+        g.fail("PR", [(f"PR #{a.pr} " + ", ".join(problems), None)])
+        return g.verdict(None), None
+    mission = a.mission or m.group(1)
+    if expect_sha and sha != expect_sha:
+        print(f"✗ PR: PR #{a.pr} head is {sha}, not {expect_sha}")
+        print("head moved: re-run gate")
+        return EXIT_WAIT, sha
+    git("fetch", "-q", "origin", f"+refs/heads/{ref}:refs/remotes/origin/{ref}",
+        "+refs/heads/main:refs/remotes/origin/main", cwd=root)
+    fetched = git_out("rev-parse", f"refs/remotes/origin/{ref}", cwd=root)
+    if fetched != sha:
+        g.fail("PR", [(f"origin's {ref} is at {fetched}, the PR's head at {sha}: it moved; run the gate again",
+                       None)])
+        return g.verdict(None), None
+    g.ok("PR", f"PR #{a.pr} is open into main from {ref} at {sha} (mission {mission})")
+
+    # 2. the lease
+    sid = session_id(a)
+    holder, gen = lease_holder()
+    if holder != sid:
+        print(f"✗ lease: held by {holder} (generation {gen}), not this session ({sid})")
+        print("gate: lease lost")
+        return EXIT_LEASE, sha
+    g.ok("lease", f"held by this session ({sid}, generation {gen})")
+    state = ensure_worktree()  # lease_holder just fetched it; read the pushed state, not local edits
+    playbook, ledger, missions = (blob(state, STATE_REF, f"{PLAYBOOK_DIR}/{n}")
+                                  for n in ("PLAYBOOK.md", "LEDGER.md", "MISSIONS.md"))
+
+    rec = review_records(root, sha, mission, a.pr)
+    check_coverage(g, root, sha, rec)                         # 3
+    check_dispositions(g, root, sha, rec, ledger)             # 4
+    check_checks(g, sha)                                      # 5
+    check_sensitive(g, root, sha, playbook, missions, a)      # 6
+    return g.verdict(sha), sha
+
+
+def cmd_gate(a):
+    return run_gate(a)[0]
+
+
+class LeaseLost(Exception):
+    pass
+
+
+def http_status(err):
+    m = re.search(r"HTTP (\d{3})", str(err))
+    return int(m.group(1)) if m else 0
+
+
+def cmd_merge(a):
+    code, _ = run_gate(a, expect_sha=a.sha)
+    if code:
+        return code
+    sid = session_id(a)
+
+    def record(values):  # re-read the lease right before the merge, in the same write as the intent
+        if values.get("lease_session") != sid:
+            raise LeaseLost(values.get("lease_session"))
+        return {"intent": f"merge PR #{a.pr} at {a.sha}"}
+
+    try:
+        change_state(f"merge: intent PR #{a.pr} at {a.sha[:12]}", record)
+    except LeaseLost as e:
+        print(f"not merged: the lease is held by {e}, not this session ({sid})", file=sys.stderr)
+        return EXIT_LEASE
+
+    def clear(why):
+        try:
+            change_state(f"merge: PR #{a.pr} not merged ({why})", lambda v: {"intent": "none"})
+        except (StateError, StateMoved) as e:
+            print(f"[intent not cleared: {e or 'the state branch moved'}]", file=sys.stderr)
+
+    try:
+        res = gh(f"repos/{REPO}/pulls/{a.pr}/merge", "PUT", {"sha": a.sha, "merge_method": "merge"}) or {}
+    except GhError as e:
+        status = http_status(e)
+        if status == 409:
+            clear("head moved")
+            print("head moved: re-run gate")
+            return EXIT_WAIT
+        if status == 405:
+            clear("not mergeable")
+            print(f"not mergeable: {e}")
+            return EXIT_FAIL
+        print(f"merge failed: {e}; intent left recorded for reconciliation", file=sys.stderr)
+        return 1
+    merged = res.get("sha") or "?"
+    print(f"merged PR #{a.pr}: {merged}")
+    try:
+        change_state(f"merge: PR #{a.pr} merged as {merged[:12]}", lambda v: {"intent": "none", "pr": f"merged:{a.pr}"})
+    except (StateError, StateMoved) as e:
+        print(f"state not updated: {e or 'the state branch moved'}; intent left recorded for reconciliation",
+              file=sys.stderr)
+        return 1
+    return 0
+
+
+def mission_arg(s):
+    if not re.fullmatch(r"M\d+", s):
+        raise argparse.ArgumentTypeError("--mission takes M<k>, e.g. M3")
+    return s
+
+
+def decision_arg(s):
+    if not re.fullmatch(r"DECISION-\d+", s):
+        raise argparse.ArgumentTypeError("--decision takes DECISION-<n>")
+    return s
+
+
+def sha_arg(s):
+    if not SHA40.fullmatch(s.lower()):
+        raise argparse.ArgumentTypeError("--sha takes the full 40-hex head commit the gate checked")
+    return s.lower()
+
+
+def add_gate_commands(sub, common):
+    """argparse wiring for gate and merge."""
+    for name, fn, help in (
+            ("gate", cmd_gate, "the merge gate: PR, lease, coverage, dispositions, checks, sensitive paths "
+                               "(exit 0 pass, 3 wait, 5 lease lost, 6 fail)"),
+            ("merge", cmd_merge, "run the gate, record the intent, merge naming the head sha "
+                                 "(exit 3: head moved, 6: held or not mergeable)")):
+        s = sub.add_parser(name, parents=[common], help=help, description=help)
+        s.set_defaults(fn=state_command(fn))
+        s.add_argument("pr", type=int)
+        if name == "merge":
+            s.add_argument("--sha", type=sha_arg, required=True, help="the head commit the gate checked")
+        s.add_argument("--mission", type=mission_arg, help="M<k> (default: from the head branch mission/M<k>-…)")
+        s.add_argument("--allow-hold", choices=("5",), help="let a sensitive-path match pass, with --decision")
+        s.add_argument("--decision", type=decision_arg, help="the architect's DECISION-<n> in the room allowing it")
+
+
+# --- end of review records, merge gate and merge
+
+
 def from_arg(s):
     if s != "none" and not s.isdigit():
         raise argparse.ArgumentTypeError("--from takes a comment ID, or none for the room's start")
@@ -1157,6 +1891,7 @@ def main():
     s.add_argument("text", nargs="?")
     sub.add_parser("ping").set_defaults(fn=cmd_ping, repo=None)
     add_state_commands(sub, common)  # M2-B: state, lease, preflight
+    add_gate_commands(sub, common)   # M3: gate, merge
 
     a = p.parse_args()
     SESSION_OPT = getattr(a, "session", None)
