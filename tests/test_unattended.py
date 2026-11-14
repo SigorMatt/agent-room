@@ -662,9 +662,9 @@ def t_reconcile_state_and_room():
     assert "\n  step: cold round 1\n" in r.stdout and "\nPR: none recorded\n" in r.stdout, out(r)
 
 
-def pull(n, ref, state="open", merged=False, sha="b" * 40, **extra):
-    return dict({"number": n, "state": state, "merged": merged, "base": {"ref": "main"},
-                 "head": {"ref": ref, "sha": sha, "repo": {"full_name": "SigorMatt/pet"}}}, **extra)
+def pull(n, ref, state="open", merged=False, sha="b" * 40, repo="SigorMatt/pet", author="SigorMatt", **extra):
+    return dict({"number": n, "state": state, "merged": merged, "base": {"ref": "main"}, "user": {"login": author},
+                 "head": {"ref": ref, "sha": sha, "repo": {"full_name": repo}}}, **extra)
 
 
 def t_reconcile_merge_intent():
@@ -683,7 +683,17 @@ def t_reconcile_merge_intent():
     gh_cfg(pulls={"12": pull(12, "mission/M2-unattended", state="closed")})
     r = reconcile()
     assert "\nPR: #12 closed without merging\n" in r.stdout, out(r)
-    assert hint(r).startswith("intent not done: redo it (PR #12 is closed without merging"), out(r)
+    # cold M4 R1-11: a closed PR can't be merged, so "redo it" would be wrong
+    assert hint(r) == ("intent not done: PR #12 was closed without merging, so it can't be merged: clear the "
+                       "intent, and reopen the PR or escalate"), out(r)
+    # cold M4 R1-4: a PR from another repo, or by an untrusted author, isn't the lead's
+    for kw, why in ((dict(repo="mallory/pet", author="mallory"), "its head is in mallory/pet, not SigorMatt/pet"),
+                    (dict(author="mallory"), "its author mallory is not trusted")):
+        gh_cfg(pulls={"12": pull(12, "mission/M2-unattended", state="closed", merged=True, merge_commit_sha=merge,
+                                 **kw)})
+        r = reconcile()
+        assert f"\nPR: #12 ignored: {why}\n" in r.stdout, out(r)
+        assert hint(r) == f"intent unknown: PR #12 doesn't count ({why}); check it by hand", out(r)
 
 
 def t_reconcile_open_pr_intent():
@@ -697,6 +707,22 @@ def t_reconcile_open_pr_intent():
     assert hint(r).startswith("intent done: clear it (PR #13 from mission/M2-unattended is open at"), out(r)
     set_state("intent=open PR mission/M2-unattended")
     assert hint(reconcile()).startswith("intent done: clear it (PR #13 ")
+    # cold M4 R1-4: an outsider's PR from a fork branch of the same name doesn't count, in either form
+    fork = pull(40, "mission/M2-unattended", repo="mallory/pet", author="mallory", sha="d" * 40)
+    gh_cfg(pulls={"40": fork, "41": pull(41, "mission/M2-unattended", author="mallory")})
+    for intent in ("open PR mission/M2-unattended", "open PR for M2"):
+        set_state(f"intent={intent}")
+        ref = intent.split()[-1]
+        assert hint(reconcile()) == f"intent not done: redo it (no PR from {ref}; ignored 2 from another repo or author)"
+    # cold M4 R1-11: a PR closed without merging doesn't do it; a merged one does
+    gh_cfg(pulls={"40": fork, "13": pull(13, "mission/M2-unattended", state="closed")})
+    assert hint(reconcile()) == ("intent not done: redo it (PR #13 from mission/M2-unattended was closed without "
+                                 "merging; open a new one; ignored 1 from another repo or author)")
+    gh_cfg(pulls={"13": pull(13, "mission/M2-unattended", state="closed"),
+                  "14": pull(14, "mission/M2-unattended", state="closed", merged=True, merge_commit_sha="e" * 40)})
+    assert hint(reconcile()) == ("intent done: clear it (PR #14 from mission/M2-unattended is merged as " + "e" * 40 +
+                                 "; record it)")
+    gh_cfg()
 
 
 def t_reconcile_post_intent():

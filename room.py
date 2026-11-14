@@ -2364,12 +2364,30 @@ def cmd_handoff(a):
     print(join_line(a.room, version=pinned_version(path)))
 
 
+def is_merged(p):
+    return bool(p.get("merged") or p.get("merged_at"))
+
+
 def pr_state(p):
-    if p.get("merged") or p.get("merged_at"):
+    if is_merged(p):
         return f"merged as {p.get('merge_commit_sha') or '?'}"
     if p.get("state") == "open":
         return f"open at {(p.get('head') or {}).get('sha') or '?'}"
     return "closed without merging"
+
+
+def pr_problem(p):
+    """Why reconcile doesn't count PR object P as the lead's, or None. On a public repo anyone can open a PR,
+    even from a branch named like the mission's: it counts only from this repo, by a trusted author, into main."""
+    head_repo = ((p.get("head") or {}).get("repo") or {}).get("full_name") or ""
+    author = (p.get("user") or {}).get("login") or ""
+    if head_repo.lower() != REPO.lower():
+        return f"its head is in {head_repo or 'an unknown repo'}, not {REPO}"
+    if author.lower() not in TRUST:
+        return f"its author {author or '?'} is not trusted"
+    if (p.get("base") or {}).get("ref") != "main":
+        return f"its base is {(p.get('base') or {}).get('ref') or '?'}, not main"
+    return None
 
 
 def pull_requests():
@@ -2387,21 +2405,33 @@ def intent_hint(a, intent, path, msgs, pr):
     leads = [m for m in msgs if m["role"] == "lead"]
     m = re.fullmatch(r"merge PR #(\d+) at ([0-9a-fA-F]{7,40})", intent)
     if m:
-        p = pr(int(m.group(1)))
+        n, p = m.group(1), pr(int(m.group(1)))
         if p is None:
-            return f"intent unknown: PR #{m.group(1)} can't be read; check it by hand"
-        if p.get("merged") or p.get("merged_at"):
-            return f"intent done: clear it (PR #{m.group(1)} is {pr_state(p)}; finish the bookkeeping)"
-        return f"intent not done: redo it (PR #{m.group(1)} is {pr_state(p)}; run the gate, then merge)"
+            return f"intent unknown: PR #{n} can't be read; check it by hand"
+        if pr_problem(p):
+            return f"intent unknown: PR #{n} doesn't count ({pr_problem(p)}); check it by hand"
+        if is_merged(p):
+            return f"intent done: clear it (PR #{n} is {pr_state(p)}; finish the bookkeeping)"
+        if p.get("state") == "open":
+            return f"intent not done: redo it (PR #{n} is {pr_state(p)}; run the gate, then merge)"
+        return (f"intent not done: PR #{n} was closed without merging, so it can't be merged: clear the intent, "
+                "and reopen the PR or escalate")
     m = re.fullmatch(r"open PR (?:for |from )?(\S+)", intent)
     if m:
         ref = m.group(1)
         want = re.compile(re.escape(ref) if ref.startswith("mission/") else rf"mission/{re.escape(ref)}(?:-.+)?")
-        hits = [p for p in pull_requests() if want.fullmatch((p.get("head") or {}).get("ref") or "")]
+        named = [p for p in pull_requests() if want.fullmatch((p.get("head") or {}).get("ref") or "")]
+        hits = [p for p in named if not pr_problem(p)]
+        ignored = f"; ignored {len(named) - len(hits)} from another repo or author" if len(named) > len(hits) else ""
+        live = [p for p in hits if is_merged(p) or p.get("state") == "open"]
+        if live:
+            p = max(live, key=lambda p: p.get("number", 0))
+            return f"intent done: clear it (PR #{p.get('number')} from {p['head']['ref']} is {pr_state(p)}; record it)"
         if hits:
             p = max(hits, key=lambda p: p.get("number", 0))
-            return f"intent done: clear it (PR #{p.get('number')} from {p['head']['ref']} is {pr_state(p)}; record it)"
-        return f"intent not done: redo it (no PR from {ref})"
+            return (f"intent not done: redo it (PR #{p.get('number')} from {p['head']['ref']} was closed without "
+                    f"merging; open a new one{ignored})")
+        return f"intent not done: redo it (no PR from {ref}{ignored})"
     m = re.fullmatch(r"post (.+)", intent)
     kind = message_kind(m.group(1)) if m else None
     if kind:
@@ -2441,7 +2471,8 @@ def cmd_reconcile(a):
     n = re.search(r"\d+", recorded) if recorded != "none" else None
     if n:
         p = pr(int(n.group()))
-        print(f"PR: #{n.group()} {pr_state(p) if p is not None else 'unreadable'}")
+        print(f"PR: #{n.group()} " + ("unreadable" if p is None else
+                                      f"ignored: {pr_problem(p)}" if pr_problem(p) else pr_state(p)))
     else:
         print("PR: none recorded")
 
