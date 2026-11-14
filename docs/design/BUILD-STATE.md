@@ -46,7 +46,7 @@ Results of the eleven assumptions in `v1.md` ("To verify"). Evidence lives in is
 | 6 | The architect chat can start a subagent and create a scheduled task | Pass: the build lead is a Claude chat in a Project, and did both |
 | 7 | Resuming a subagent keeps its context | Pass |
 | 8 | Worktree isolation for parallel builders | Pass: worktrees under `.claude/worktrees/`, branch `worktree-agent-<id>` |
-| 9 | A waiter survives an idle hour | Pending (probe, 85 minutes) |
+| 9 | A waiter survives an idle hour | Fail for detached processes: about two minutes after the probe session's turn ended, its container was suspended and restarted (uptime 0 at the check), killing a `nohup` logger. The disk survived, and a `send_later` wake-up arrived on time. The pre-approved fallback applies (**Finding H**). Whether a command started with the harness's own background option survives: second probe pending |
 | 10 | Qodo's bot login and comment format match `QODO-REVIEW.md` | Pass: on the M0 PR, `qodo_review.py` found the Summary and Code Review comments from `qodo-code-review[bot]`, the commit marker equal to the head, and 5 findings matching the header counts |
 | 11 | A buzz reaches Matthew's phone | Sent from the build chat (HTTP 200). Receipt and the lead environment: pending |
 
@@ -61,6 +61,7 @@ Results of the eleven assumptions in `v1.md` ("To verify"). Evidence lives in is
 - **E. A scheduled session has no `add_repo`.** It inherits the repos of the session that scheduled it. So a lead schedules its successor from a session that already has the project repo, which every lead does.
 - **F. Builder worktrees start from the default branch,** not from the lead's current branch. A builder on a mission first merges the mission branch into its worktree branch, and every brief says so.
 - **G. Deleting a scheduled task deletes every session it started.** So a successor's one-time task is never deleted (it disables itself after firing), and a session started by a task can't delete that task (`update_trigger` with `enabled=false` stops it instead). The watchdog's runs are short, so deleting it at `DONE` is safe; the lead that deletes it was not started by it.
+- **H. An idle session's container is suspended within minutes.** Detached processes die; files survive; `send_later` wakes the session. So the lead never relies on a waiter alone: whenever it ends a turn waiting (for Matthew, Qodo or anything slow), it schedules a `send_later` check-in, and the watchdog catches the rest. This is the pre-approved fallback for check 9.
 - **C. A new repo may be completely empty** (`pet-todo` has no commits). Preflight detects this, and the architect's kickoff creates the first commit on `main`; no protection can exist yet, so this is safe.
 
 ## Decisions taken during the build
