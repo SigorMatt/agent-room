@@ -727,6 +727,29 @@ def t_qodo_counts_must_agree():  # cold M3 R1-7
     publish()
     failed(gate(), "dispositions", "Qodo comment did not parse: read it", "no header counts, 1 parsed open")
 
+
+def t_an_archived_qodo_review_needs_qodo_on():  # cold M3 R1-6
+    start()
+    c1 = commit("feat", {"app.py": APP1})
+    commit("records", dict(qodo_archive(1, QODO_FINDINGS, c1), **{
+        "reviews/cold/M3/round-1.md": cold_report(1, c1), "reviews/cold/M3/DISPOSITIONS.md": cold_dispositions([]),
+        f"reviews/qodo/PR-{PR}/DISPOSITIONS.md": qodo_dispositions([], qodo="no first review")}))
+    publish()
+    r = gate()
+    failed(r, "dispositions", f"Qodo's review of this PR is archived (fetches 1), so reviews/qodo/PR-{PR}/DISPOSITIONS.md "
+                              "must exist and say qodo: on, not no first review")
+    # with the switch off and no Qodo dispositions, the archived review covers nothing
+    start()
+    c1 = commit("feat", {"app.py": APP1})
+    commit("review: cold round 1", {"reviews/cold/M3/round-1.md": cold_report(1, c1),
+                                    "reviews/cold/M3/DISPOSITIONS.md": cold_dispositions([])})
+    c2 = commit("feat: run things", {"app.py": APP1 + "import os\nos.system('make')\n"})
+    commit("review: qodo fetch 1", qodo_archive(1, QODO_FINDINGS, c2))
+    publish()
+    r = gate(QODO_REVIEW="off")
+    failed(r, "coverage", f"changed since the closest review (reviews/cold/M3/round-1.md, {c1[:12]}): app.py")
+    failed(r, "dispositions", "so reviews/qodo/PR-12/DISPOSITIONS.md must exist and say qodo: on")
+
 def t_qodo_dispositions():
     mission(qodo="off", qodo_file=False)
     r = gate(QODO_REVIEW="off")

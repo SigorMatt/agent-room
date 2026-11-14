@@ -1622,11 +1622,13 @@ def review_records(root, sha, mission, pr):
             hits = _REVIEWED.findall(text)
             archived.append({"fetch": k, "path": p, "reviewed": hits[-1] if hits else None,
                              "findings": qodo_findings(text), "header": header_total(text)})
+    qodo_text = blob(root, sha, f"reviews/qodo/PR-{pr}/DISPOSITIONS.md")
     return {"cold": cold, "qodo": archived[-1] if archived else None, "qodo_fetches": archived,
             "cold_path": f"reviews/cold/{mission}/DISPOSITIONS.md",
             "cold_dispositions": blob(root, sha, f"reviews/cold/{mission}/DISPOSITIONS.md"),
             "qodo_path": f"reviews/qodo/PR-{pr}/DISPOSITIONS.md",
-            "qodo_dispositions": blob(root, sha, f"reviews/qodo/PR-{pr}/DISPOSITIONS.md")}
+            "qodo_dispositions": qodo_text,
+            "qodo_mode": machine_lines(qodo_text).get("qodo") if qodo_text is not None else None}
 
 
 class Gate:
@@ -1670,10 +1672,10 @@ def check_coverage(g, root, head, rec):
             covered.append((r["covers"], r["path"]))
         else:
             errors.append(f"{r['path']}: 'covers:' must name the reviewed commit's 40-hex sha")
-    q = rec["qodo"]
-    if q and q["reviewed"]:
+    q = rec["qodo"]  # Qodo's review covers code only when its findings are decided: qodo: on
+    if q and rec["qodo_mode"] == "on" and q["reviewed"]:
         covered.append((q["reviewed"], f"Qodo fetch {q['fetch']}"))
-    elif q:
+    elif q and rec["qodo_mode"] == "on":
         errors.append(f"{q['path']}: no reviewed-commit marker in the Code Review comment")
     best = None  # (commit, source, uncovered paths, commits since) of the review closest to covering HEAD
     for commit, source in covered:
@@ -1767,7 +1769,11 @@ def check_dispositions(g, root, head, rec, ledger_text):
     if switch not in ("on", "off"):
         reasons.append((f"QODO_REVIEW must be on or off, not {switch!r}", None))
     text, path, q = rec["qodo_dispositions"], rec["qodo_path"], rec["qodo"]
-    if text is None and switch == "on":
+    if rec["qodo_fetches"] and rec["qodo_mode"] != "on":  # an archived review is never ignored
+        fetched = ", ".join(str(f["fetch"]) for f in rec["qodo_fetches"])
+        reasons.append((f"Qodo's review of this PR is archived (fetches {fetched}), so {path} must exist and "
+                        f"say qodo: on" + (f", not {rec['qodo_mode']}" if rec["qodo_mode"] else ""), None))
+    elif text is None and switch == "on":
         reasons.append((f"{path} is missing (QODO_REVIEW=on)", None))
     if text is not None:
         mode = machine_lines(text).get("qodo")
