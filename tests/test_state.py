@@ -453,13 +453,15 @@ def t_unreadable_lease_does_not_block_posting():
     room("lease", "take", session="L1", **AGAIN)
     assert room("say", "1", "lead", "STATUS: held", session="L2", check=False, **AGAIN).returncode == 5
     push_edit(os.path.join(tmp, "git", "SigorMatt", "again.git"), "MISSIONS.md", lambda t: t.replace(*BREAK_FENCE, 1))
-    for session in ("L1", "L2"):
-        r = room("say", "1", "lead", f"ESCALATION-2: MISSIONS.md block broken ({session})", session=session, **AGAIN)
-        assert "sent #" in r.stdout and "has no agent-room-state block" in r.stderr, (r.stdout, r.stderr)
+    r = room("say", "1", "lead", "ESCALATION-2: MISSIONS.md block broken (L1)", session="L1", **AGAIN)
+    assert "sent #" in r.stdout and "has no agent-room-state block" in r.stderr, (r.stdout, r.stderr)
+    # the broken text still names L1, so L2 is refused as before (cold M2 S1-2)
+    r = room("say", "1", "lead", "ESCALATION-2: MISSIONS.md block broken (L2)", session="L2", check=False, **AGAIN)
+    assert r.returncode == 5 and "still names L1 as the holder" in r.stderr, (r.returncode, r.stderr)
     r = room("lease", "check", session="L1", check=False, **AGAIN)
     assert r.returncode == 1 and "has no agent-room-state block" in r.stderr, "lease check still reports it"
     transcript = room("read", "1", "--all", **AGAIN).stdout
-    assert "preflight fails" in transcript and "(L1)" in transcript and "(L2)" in transcript
+    assert "preflight fails" in transcript and "(L1)" in transcript and "(L2)" not in transcript
     assert "STATUS: held" not in transcript
 
 
@@ -478,6 +480,65 @@ def t_broken_block_can_be_repaired():
     append("GA", "LEDGER.md", "| L-1 | not L2's to write |")
     r = room("state", "commit", "-m", "ledger", session="L2", check=False, **AGAIN)
     assert r.returncode == 5 and "held by L1" in r.stderr, (r.returncode, r.stderr)
+
+
+MANGLE = ("```agent-room-state\n", "```agent-room-state  # machine block\n")
+
+
+def t_broken_fence_still_names_the_holder():
+    # cold M2 S1-1, S1-2: a block that won't parse doesn't free the lease; its last lease_session line counts
+    repo = bare("fence")
+    work = os.path.join(tmp, "work", "fence")
+    g("clone", "-q", repo, work)
+    K = dict(cwd=work, ROOM_REPO="SigorMatt/fence")
+    room("state", "init", session="arch", state="FA", **K)
+    room("state", "init-lead", session="L0", state="FA", **K)
+    room("lease", "take", session="L0", state="FA", **K)
+    room("lease", "take", "--takeover", session="L1", state="FL1", **K)  # L1 succeeds L0, generation 2
+    for _ in range(3):
+        room("state", "next", "counter", session="L1", state="FL1", **K)
+    assert "room 1 in SigorMatt/fence" in room("new", "Phase 1", session="arch", state="FA", **K).stdout
+    # the holder mangles the fence while editing; allowed, as the pushed block was still readable
+    missions = playbook_path("FL1", "MISSIONS.md")
+    text = open(missions).read()
+    open(missions, "w").write(text.replace(*MANGLE, 1))
+    assert "pushed" in room("state", "commit", "-m", "notes", session="L1", state="FL1", **K).stdout
+    before = remote_file(repo, "docs/playbook/MISSIONS.md")
+    assert "lease_session: L1" in before and "lease_generation: 2" in before and "counter: 3" in before
+    # e8: the superseded lead can't close the room or post
+    for args in (("close", "1", "lead", "DONE: phase 1"), ("say", "1", "lead", "MERGE-HOLD-1: stale lead's hold")):
+        r = room(*args, session="L0", state="FA", check=False, **K)
+        assert r.returncode == 5 and "still names L1 as the holder" in r.stderr, (args, r.returncode, r.stderr)
+    assert "Phase 1" in room("rooms", session="arch", state="FA", **K).stdout, "the room stays open"
+    # e4: nor can it, or the architect, write lead-owned files
+    room("state", "sync", session="L0", state="FA", **K)
+    append("FA", "LEDGER.md", "| L-7 | stale lead's row |")
+    r = room("state", "commit", "-m", "ledger", session="L0", state="FA", check=False, **K)
+    assert r.returncode == 5 and "LEDGER.md are lead-owned" in r.stderr and "names L1" in r.stderr, r.stderr
+    room("state", "sync", session="arch", state="FA", **K)
+    open(playbook_path("FA", "MISSIONS.md"), "w").write(open(os.path.join(TEMPLATES, "MISSIONS.md")).read())
+    r = room("state", "commit", "-m", "repair MISSIONS.md", session="arch", state="FA", check=False, **K)
+    assert r.returncode == 5 and "names L1" in r.stderr, (r.returncode, r.stderr)
+    room("state", "sync", session="arch", state="FA", **K)
+    assert remote_file(repo, "docs/playbook/MISSIONS.md") == before
+    assert "L-7" not in remote_file(repo, "docs/playbook/LEDGER.md")
+    # the holder can still post and repair the fence
+    r = room("say", "1", "lead", "ESCALATION-1: MISSIONS.md fence broken", session="L1", state="FL1", **K)
+    assert "sent #" in r.stdout and "[lease unreadable, posting anyway: " in r.stderr, (r.stdout, r.stderr)
+    room("state", "sync", session="L1", state="FL1", **K)
+    text = open(missions).read()
+    open(missions, "w").write(text.replace(MANGLE[1], MANGLE[0], 1))
+    r = room("state", "commit", "-m", "repair the fence", session="L1", state="FL1", **K)
+    assert "pushed" in r.stdout and "[lease unreadable, committing anyway: " in r.stderr, (r.stdout, r.stderr)
+    assert room("lease", "check", session="L1", state="FL1", **K).returncode == 0
+    assert room("state", "get", "counter", session="L1", state="FL1", **K).stdout.strip() == "3"
+    transcript = room("read", "1", "--all", session="arch", state="FA", **K).stdout
+    assert "DONE: phase 1" not in transcript and "MERGE-HOLD-1" not in transcript and "fence broken" in transcript
+    # a broken block that names no holder at all blocks no one
+    push_edit(repo, "MISSIONS.md", lambda t: "\n".join(
+        ln for ln in t.replace(*MANGLE, 1).splitlines() if not ln.startswith("lease_session:")) + "\n")
+    r = room("say", "1", "lead", "STATUS: no holder named", session="L0", state="FA", **K)
+    assert "sent #" in r.stdout and "[lease unreadable, posting anyway: " in r.stderr, (r.stdout, r.stderr)
 
 
 # --- lease
