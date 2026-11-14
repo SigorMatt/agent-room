@@ -821,14 +821,20 @@ def change_state(a, msg, fn, need_lease=True):
     return updates
 
 
+def pushed_text(path, name):
+    """A playbook file as last fetched from the state branch, or None if it isn't there."""
+    r = git("show", f"{STATE_REF}:{PLAYBOOK_DIR}/{name}", cwd=path, check=False)
+    return r.stdout if r.returncode == 0 else None
+
+
 def lease_holder():
     """(session, generation) of the lease on the remote state branch, freshly fetched."""
     path = ensure_worktree()
     fetch(path)
-    r = git("show", f"{STATE_REF}:{PLAYBOOK_DIR}/MISSIONS.md", cwd=path, check=False)
-    if r.returncode != 0:
+    text = pushed_text(path, "MISSIONS.md")
+    if text is None:
         raise StateError(f"{PLAYBOOK_DIR}/MISSIONS.md is missing on {STATE_BRANCH}: run '{ME} state init-lead'")
-    return lease_of(read_block(r.stdout))
+    return lease_of(read_block(text))
 
 
 def lease_guard(a, kind=None):
@@ -903,8 +909,8 @@ def cmd_state_commit(a):
     touched = sorted(changed_paths(path) & LEAD_PATHS)
     if touched:  # lead-owned files need the lease, read from the freshly fetched branch
         fetch(path)
-        r = git("show", f"{STATE_REF}:{PLAYBOOK_DIR}/MISSIONS.md", cwd=path, check=False)
-        values = read_block(r.stdout) if r.returncode == 0 else {}
+        text = pushed_text(path, "MISSIONS.md")
+        values = read_block(text) if text is not None else {}
         require_lease(values, session_id(a), f"not committed ({', '.join(touched)} are lead-owned)")
     if commit_and_push(path, a.message):
         print(f"pushed {git_out('rev-parse', '--short', 'HEAD', cwd=path)} to {STATE_BRANCH}")
@@ -1106,36 +1112,42 @@ def cmd_preflight(a):
                   "Matthew: turn on 'Automatically delete head branches' (repo Settings > General > "
                   "Pull Requests), so merged mission branches are removed")
 
-    # the state branch, with the architect's files and a pinned version
+    # the state branch, with the architect's files and a pinned version: read from the pushed
+    # branch after a fetch, so uncommitted edits in the worktree can't pass for it
     path = None
     try:
         path = ensure_worktree()
-        refresh(path)
+        fetch(path)
     except StateError as e:
         path = None
         check("✗", f"state branch: {e}")
     if path:
-        missing = [n for n in ("PLAYBOOK.md", "DESIGN.md") if not os.path.isfile(os.path.join(path, PLAYBOOK_DIR, n))]
-        fix = f"run '{ME} state init'" if architect else "the architect commits them"
+        missing = [n for n in ("PLAYBOOK.md", "DESIGN.md") if pushed_text(path, n) is None]
+        who = "" if architect else " (the architect)"
         if missing:
+            fix = f"run '{ME} state init'" if architect else "the architect commits them"
             check("✗", f"state branch lacks {', '.join(missing)}: {fix}")
         else:
-            with open(os.path.join(path, PLAYBOOK_DIR, "PLAYBOOK.md")) as f:
-                m = re.search(r"^pipeline:[ \t]*(\S+)", f.read(), re.M)
-            if not m:
-                check("✗", f"state branch: PLAYBOOK.md has no 'pipeline: v…' line: {fix}")
-            elif re.fullmatch(r"v\d+(\.\d+)*(-[\w.]+)?", m.group(1)):
-                check("✓", f"state branch has PLAYBOOK.md and DESIGN.md, pinned to {m.group(1)}")
-            else:
-                check("!", f"state branch has PLAYBOOK.md and DESIGN.md, but the pipeline is '{m.group(1)}', "
+            m = re.search(r"^pipeline:[ \t]*(\S*)", pushed_text(path, "PLAYBOOK.md"), re.M)
+            value = m.group(1) if m else ""
+            if not value:
+                check("✗", f"state branch: PLAYBOOK.md has no pipeline version: add `pipeline: vX.Y.Z` to "
+                           f"PLAYBOOK.md{who}")
+            elif re.fullmatch(r"v\d+(\.\d+)*(-[\w.]+)?", value):
+                check("✓", f"state branch has PLAYBOOK.md and DESIGN.md, pinned to {value}")
+            elif value == "main":
+                check("!", "state branch has PLAYBOOK.md and DESIGN.md, but the pipeline is 'main', "
                            "not a release tag (fine while agent-room itself is in development)")
+            else:
+                check("✗", f"state branch: PLAYBOOK.md pins the pipeline to '{value}', not a release tag: "
+                           f"make it `pipeline: vX.Y.Z`{who}")
 
     if not architect:
         # lead-owned files
         if not path:
             check("✗", "lead-owned files: can't check without the state branch")
         else:
-            missing = [n for n in LEAD_FILES if not os.path.isfile(os.path.join(path, PLAYBOOK_DIR, n))]
+            missing = [n for n in LEAD_FILES if pushed_text(path, n) is None]
             if missing and a.fix:
                 try:
                     path, added = add_missing(LEAD_FILES, "agent-room: add lead files")
@@ -1147,7 +1159,7 @@ def cmd_preflight(a):
                            "or preflight --fix")
             else:
                 try:
-                    read_block(missions_text(path))
+                    read_block(pushed_text(path, "MISSIONS.md"))
                     check("✓", "lead-owned files exist")
                 except StateError as e:
                     check("✗", f"lead-owned files: {e}")

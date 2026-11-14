@@ -543,14 +543,15 @@ def t_single_branch_checkout():
 
 # --- preflight
 
-def set_pipeline(value):
+def set_pipeline(value, commit=True):
     room("state", "sync")
     text = open(playbook_path()).read()
     lines = [ln for ln in text.splitlines() if not ln.startswith("pipeline:")]
     if value:
         lines.insert(2, f"pipeline: {value}")
     open(playbook_path(), "w").write("\n".join(lines) + "\n")
-    room("state", "commit", "-m", f"pipeline {value}")
+    if commit:
+        room("state", "commit", "-m", f"pipeline {value}")
 
 
 def t_preflight_architect_passes():
@@ -564,6 +565,14 @@ def t_preflight_architect_passes():
     expect(r, "deleted automatically", "✓")
     expect(r, "state branch", "!")  # pinned to main, not a release tag
     assert "ROOM_NTFY_TOPIC" not in r.stdout and "lead-owned" not in r.stdout, "lead checks only for the lead"
+    # cold M2 R1-14: an uncommitted pin in the worktree is not on the branch
+    set_pipeline("v1.0.0", commit=False)
+    r = room("preflight", "--role", "architect")
+    expect(r, "state branch", "!")
+    assert "'main'" in line(r, "state branch"), r.stdout
+    os.remove(playbook_path(name="DESIGN.md"))  # nor is an uncommitted deletion
+    expect(room("preflight", "--role", "architect"), "state branch", "!")
+    room("state", "sync")
     set_pipeline("v1.0.0")
     r = room("preflight", "--role", "architect")
     expect(r, "state branch", "✓")
@@ -571,10 +580,17 @@ def t_preflight_architect_passes():
 
 
 def t_preflight_state_branch_fails():
+    # cold M2 R1-15: only `main` warns; any other non-tag fails; a missing line says how to fix it
+    set_pipeline("latest")
+    r = room("preflight", "--role", "architect", check=False)
+    assert r.returncode == 1
+    expect(r, "state branch", "✗")
+    assert "'latest', not a release tag" in line(r, "state branch"), r.stdout
     set_pipeline(None)
     r = room("preflight", "--role", "architect", check=False)
     assert r.returncode == 1
-    expect(r, "pipeline: v", "✗")
+    expect(r, "add `pipeline: vX.Y.Z` to PLAYBOOK.md", "✗")
+    assert "state init" not in line(r, "state branch"), r.stdout
     set_pipeline("v1.0.0")
     os.remove(playbook_path(name="DESIGN.md"))
     room("state", "commit", "-m", "drop design")
@@ -672,6 +688,11 @@ def t_preflight_lead():
     r = room("preflight", "--role", "lead", check=False, **kw)
     assert r.returncode == 1
     expect(r, "lead-owned files missing", "✗")
+    for n in ("MISSIONS.md", "LEDGER.md", "QODO-VALUE.md"):  # uncommitted copies don't count (cold M2 R1-14)
+        open(playbook_path("old", n), "w").write(open(os.path.join(TEMPLATES, n)).read())
+    r = room("preflight", "--role", "lead", check=False, **kw)
+    expect(r, "lead-owned files missing", "✗")
+    room("state", "sync", **kw)
     assert "MISSIONS.md, LEDGER.md, QODO-VALUE.md" in line(r, "lead-owned files missing")
     r = room("preflight", "--role", "lead", "--fix", **kw)
     assert r.returncode == 0, r.stdout
