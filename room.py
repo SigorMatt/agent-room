@@ -1037,19 +1037,30 @@ def cmd_state_next(a):
 
 def cmd_lease_take(a):
     sid = session_id(a)
+    seen = []  # the lease as each try found it
 
     def take(values):
         holder, gen = lease_of(values)
+        seen.append((holder, gen))
         if holder not in ("none", sid) and not a.takeover:
             raise StateExit(EXIT_MOVED, f"lease held by {holder}: stand down (generation {gen}; "
                                         "--takeover only for a lead Matthew starts after LEAD-SILENT)")
         return {"lease_session": sid, "lease_generation": next_int(values, "lease_generation")}
-    try:
-        new = change_state(a, f"lease: {sid} takes the lead lease", take, need_lease=False)
-    except StateMoved:
-        print("lease not taken: another session pushed first; stand down, or see 'lease check'", file=sys.stderr)
-        return EXIT_MOVED
-    print(new["lease_generation"])
+
+    for _ in range(2):
+        try:
+            new = change_state(a, f"lease: {sid} takes the lead lease", take, need_lease=False)
+            print(new["lease_generation"])
+            return 0
+        except StateMoved:
+            # the push lost to some other write; only a lease that another session took means stand down
+            holder, gen = lease_holder()
+            if holder not in ("none", sid) and (holder, gen) != seen[-1]:
+                print(f"lease not taken: {holder} took it first (generation {gen}); stand down", file=sys.stderr)
+                return EXIT_MOVED
+    print(f"lease not taken: {STATE_BRANCH} moved under both tries, and no session took the lease; "
+          "run 'lease take' again", file=sys.stderr)
+    return 1
 
 
 def cmd_lease_release(a):

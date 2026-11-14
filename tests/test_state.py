@@ -135,11 +135,13 @@ def append(state, name, text):
 
 @contextlib.contextmanager
 def pre_push(state, body):
-    """A pre-push hook in machine STATE's clone (B-style), for the length of the block."""
+    """A pre-push hook in machine STATE's clone (B-style), for the length of the block.
+    {hooks} in BODY stands for the hook's own directory."""
     hooks = tempfile.mkdtemp(dir=tmp, prefix="hooks-")
     with open(os.path.join(hooks, "pre-push"), "w") as f:
         f.write("#!/bin/sh\ncat >/dev/null\n"
-                "unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_COMMON_DIR ROOM_STATE_REMOTE\n" + body)
+                "unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_COMMON_DIR ROOM_STATE_REMOTE\n"
+                + body.replace("{hooks}", hooks))
     os.chmod(os.path.join(hooks, "pre-push"), 0o755)
     g("-C", sdir(state), "config", "core.hooksPath", hooks)
     try:
@@ -147,6 +149,9 @@ def pre_push(state, body):
     finally:
         g("-C", sdir(state), "config", "--unset", "core.hooksPath")
 
+
+# the hook acts on the first push only
+ONCE = '[ -e "{hooks}/fired" ] && exit 0\ntouch "{hooks}/fired"\n'
 
 # the push lands, then the client hears a failure (a connection dropped after the remote updated)
 LOST_ACK = ('git push -q --no-verify "$2" HEAD:refs/heads/agent-room/state\n'
@@ -502,7 +507,8 @@ exit 0
         g("-C", sdir("B"), "config", "--unset", "core.hooksPath")
     assert os.path.exists(os.path.join(hooks, "fired")), "the race hook did not run"
     assert open(out).read().strip() == str(gen + 1), open(out).read()
-    assert r.returncode == 3 and "lease not taken" in r.stderr, (r.returncode, r.stdout, r.stderr)
+    assert r.returncode == 3 and "lease not taken: A took it first" in r.stderr and "stand down" in r.stderr, \
+        (r.returncode, r.stdout, r.stderr)
     b = block()
     assert b["lease_session"] == "A" and b["lease_generation"] == str(gen + 1), b
     assert "lease_session: A" in open(playbook_path("B", "MISSIONS.md")).read(), "loser is reset to the remote"
@@ -544,6 +550,33 @@ def t_lease_take_stands_down_and_release():
         r = room_b("lease", "take", check=False)
     assert r.returncode == 0 and r.stdout.strip() == str(gen + 3), (r.returncode, r.stdout, r.stderr)
     assert room_b("lease", "check").returncode == 0
+
+
+def t_lease_take_retries_after_an_unrelated_write():
+    # cold M2 R2-5: a push lost to another write retries; only a lease another session took means stand down
+    room_b("lease", "release")
+    gen = int(block()["lease_generation"])
+    room_b("state", "sync")
+    note = (f'cd "{CHECKOUT}" && export ROOM_SESSION=arch ROOM_STATE_DIR="{sdir("A")}" ROOM_REPO=SigorMatt/pet\n'
+            f'"{sys.executable}" "{ROOM}" state sync >/dev/null 2>&1\n'
+            f'echo "- architect note" >> "{playbook_path("A", "HANDOFF.md")}"\n'
+            f'"{sys.executable}" "{ROOM}" state commit -m "handoff note" > "{{hooks}}/out" 2>&1\n')
+    with pre_push("B", ONCE + note) as hooks:
+        r = room_b("lease", "take", check=False)
+        out = open(os.path.join(hooks, "out")).read()
+    assert "pushed" in out, out
+    assert r.returncode == 0 and r.stdout.strip() == str(gen + 1), (r.returncode, r.stdout, r.stderr)
+    assert block()["lease_session"] == "B" and "architect note" in remote_file(PET, "docs/playbook/HANDOFF.md")
+    # a --takeover that overlaps the stale holder's own release still takes the lease
+    release = (f'cd "{tmp}" && ROOM_SESSION=B ROOM_STATE_REMOTE="{PET}" ROOM_STATE_DIR="{sdir("B2")}" '
+               f'ROOM_REPO=SigorMatt/pet "{sys.executable}" "{ROOM}" lease release > "{{hooks}}/out" 2>&1\n')
+    with pre_push("B", ONCE + release) as hooks:
+        r = room_b("lease", "take", "--takeover", session="S9", check=False)
+        out = open(os.path.join(hooks, "out")).read()
+    assert "released by B" in out, out
+    assert r.returncode == 0 and r.stdout.strip() == str(gen + 2), (r.returncode, r.stdout, r.stderr)
+    assert block()["lease_session"] == "S9"
+    room_b("lease", "take", "--takeover")
 
 
 def t_stale_lead_cannot_write():
