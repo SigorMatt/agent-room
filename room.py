@@ -16,6 +16,9 @@ in Claude chat and cloud sessions, or `gh auth login` on your own machine.
   room.py cursor N ROLE           print the last comment ID this role has read, or none
   room.py close N ROLE [TEXT]     post a closing note and close the room
   room.py ping                    send a test phone notification
+  room.py state init|init-lead|path|sync|commit|get|set|next   the playbook on agent-room/state
+  room.py lease take|check        the lead lease (exit 3: another session won; 5: not the holder)
+  room.py preflight --role architect|lead [--fix]              check repo, state branch, environment
 
 Every room command takes --repo OWNER/NAME. Without it: $ROOM_REPO, else the
 GitHub remote of the current checkout. --session SID names this participant;
@@ -38,6 +41,8 @@ Environment:
   ROOM_SESSION      this participant's session ID (see --session)
   ROOM_TRUST        comma-separated GitHub logins whose comments count (default: your gh login)
   ROOM_STATE        where read cursors live (default ~/.agent-room)
+  ROOM_STATE_DIR    the state branch's worktree (default ~/agent-room-state/OWNER__NAME)
+  ROOM_STATE_REMOTE git URL to clone the state branch from when not run inside the project's checkout
   ROOM_NTFY_TOPIC   ntfy topic your phone subscribes to (needed for buzzes and ping)
   ROOM_NTFY_SERVER  ntfy server (default https://ntfy.sh)
   ROOM_NTFY_TOKEN   optional ntfy access token (only raises limits on a paid ntfy.sh tier)
@@ -49,6 +54,7 @@ import re
 import socket
 import subprocess
 import sys
+import tempfile
 import time
 
 VERSION = "main"  # a release sets this to its tag (v1.0.0); every link room.py writes points at it
@@ -95,11 +101,32 @@ def gh(path, method="GET", body=None):
     return json.loads(r.stdout) if r.stdout.strip() else None
 
 
+class StateError(RuntimeError):
+    """A git command or the state branch failed."""
+
+
+def git(*args, cwd=None, check=True, timeout=180):
+    # a hook or another git command may have set these; they would override -C / cwd
+    env = {k: v for k, v in os.environ.items()
+           if k not in ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR")}
+    env["GIT_TERMINAL_PROMPT"] = "0"
+    try:
+        r = subprocess.run(["git", *args], cwd=cwd, env=env, capture_output=True, text=True, timeout=timeout)
+    except (OSError, subprocess.TimeoutExpired) as e:
+        raise StateError(f"git {args[0]}: {e}")
+    if check and r.returncode != 0:
+        raise StateError(f"git {args[0]}: {(r.stderr or r.stdout).strip() or f'exited {r.returncode}'}")
+    return r
+
+
+def git_out(*args, cwd=None):
+    return git(*args, cwd=cwd).stdout.strip()
+
+
 def repo_from_checkout():
     try:
-        url = subprocess.run(["git", "remote", "get-url", "origin"], capture_output=True,
-                             text=True, timeout=10).stdout.strip()
-    except (OSError, subprocess.TimeoutExpired):
+        url = git("remote", "get-url", "origin", check=False, timeout=10).stdout.strip()
+    except StateError:
         return None
     m = re.search(r"(?:github\.com[:/]+|/git/)([\w.-]+)/([\w.-]+?)(?:\.git)?/?$", url)
     return f"{m.group(1)}/{m.group(2)}" if m else None
@@ -119,10 +146,10 @@ def doc_url(path):
 
 # --- identity
 
-def session_id():
-    """This participant's session: --session, else $ROOM_SESSION, else the first 8 characters
-    of $CLAUDE_CODE_SESSION_ID, else the hostname."""
-    given = SESSION_OPT or os.environ.get("ROOM_SESSION", "").strip()
+def session_id(a=None):
+    """This participant's session: --session (from the parsed arguments a, else as main stored it),
+    else $ROOM_SESSION, else the first 8 characters of $CLAUDE_CODE_SESSION_ID, else the hostname."""
+    given = getattr(a, "session", None) or SESSION_OPT or os.environ.get("ROOM_SESSION", "").strip()
     if given:
         if not re.fullmatch(SESSION_RE, given):
             sys.exit(f"bad session {given!r}: use up to 64 letters, digits, '.', '_' or '-'")
@@ -369,6 +396,7 @@ def cmd_say(a):
     text = message_text(a.text)
     kind = message_kind(text)
     check_role(a.role, kind)
+    lease_guard(a, kind)
     c = post(a.room, a.role, text)
     print(f"sent #{c['id']}")
     if wants_buzz(a.buzz, kind):
@@ -437,7 +465,9 @@ def cmd_wait(a):
 
 def cmd_close(a):
     text = message_text(a.text or "Closing the room.")
-    check_role(a.role, message_kind(text))
+    kind = message_kind(text)
+    check_role(a.role, kind)
+    lease_guard(a, kind)
     # close first, so a waiter woken by the closing note already sees the room as closed
     gh(f"repos/{REPO}/issues/{a.room}", "PATCH", {"state": "closed"})
     post(a.room, a.role, text)
@@ -454,6 +484,635 @@ def repo_arg(s):
     if not re.fullmatch(r"[\w.-]+/[\w.-]+", s):
         raise argparse.ArgumentTypeError("repo must look like OWNER/NAME")
     return s
+
+
+# --- state branch, lease, preflight
+#
+# The playbook and pipeline state live on branch agent-room/state of the project repo, under
+# docs/playbook/. room.py keeps a git worktree of that branch at $ROOM_STATE_DIR (default
+# ~/agent-room-state/OWNER__NAME): `git worktree add` from the project checkout when run inside
+# one, else a shallow clone of the branch from $ROOM_STATE_REMOTE (default the GitHub URL).
+# Every state write is a push that fails if anyone else pushed first; the lead lease rests on that.
+#
+#   state init | init-lead | path | sync | commit -m MSG | get KEY | set KEY=VALUE... | next KEY
+#   lease take | check          preflight --role architect|lead [--fix]
+#
+# Exit codes: 3 the state branch moved under us (re-read and re-apply), 5 lease held by another session.
+
+STATE_BRANCH = "agent-room/state"
+STATE_REF = f"refs/remotes/origin/{STATE_BRANCH}"
+PLAYBOOK_DIR = "docs/playbook"
+ARCHITECT_FILES = ("PLAYBOOK.md", "DESIGN.md", "HANDOFF.md")
+LEAD_FILES = ("MISSIONS.md", "LEDGER.md", "QODO-VALUE.md")
+STATE_BLOCK = re.compile(r"^```agent-room-state[ \t]*\n(.*?)^```[ \t]*$", re.M | re.S)
+STATE_KEY = re.compile(r"[a-z][a-z0-9_]*")
+TEMPLATE_URL = "https://raw.githubusercontent.com/{repo}/{version}/templates/playbook/{name}"
+FIRST_GITIGNORE = "__pycache__/\n*.pyc\n.venv/\nnode_modules/\n.env\n.DS_Store\n"
+EXIT_MOVED, EXIT_LEASE = 3, 5
+
+
+class StateMoved(Exception):
+    """A push to the state branch was rejected because someone else pushed first."""
+
+
+def identity(cwd):
+    """-c options for a commit identity, only where git has none configured."""
+    out = []
+    for key, value in (("user.name", "agent-room"), ("user.email", "agent-room@users.noreply.github.com")):
+        if not git("config", key, cwd=cwd, check=False).stdout.strip():
+            out += ["-c", f"{key}={value}"]
+    return out
+
+
+def state_checkout():
+    """The project checkout to add the state worktree to, or None to clone instead."""
+    if os.environ.get("ROOM_STATE_REMOTE"):
+        return None
+    here = repo_from_checkout()
+    if not here or here.lower() != REPO.lower():
+        return None
+    r = git("rev-parse", "--show-toplevel", check=False)
+    return r.stdout.strip() if r.returncode == 0 and r.stdout.strip() else None
+
+
+def remote_url():
+    return os.environ.get("ROOM_STATE_REMOTE") or f"https://github.com/{REPO}.git"
+
+
+def state_path():
+    default = os.path.join("~", "agent-room-state", REPO.replace("/", "__"))
+    return os.path.abspath(os.path.expanduser(os.environ.get("ROOM_STATE_DIR") or default))
+
+
+def state_worktree_exists():
+    return os.path.exists(os.path.join(state_path(), ".git"))
+
+
+def remote_heads():
+    """{branch: sha} of the project repo's branches."""
+    root = state_checkout()
+    out = git("ls-remote", "--heads", "origin", cwd=root).stdout if root else \
+        git("ls-remote", "--heads", remote_url()).stdout
+    heads = {}
+    for line in out.splitlines():
+        sha, _, ref = line.partition("\t")
+        if ref.startswith("refs/heads/"):
+            heads[ref[len("refs/heads/"):]] = sha
+    return heads
+
+
+def ensure_worktree():
+    """Path of the state worktree, created if missing."""
+    path = state_path()
+    if os.path.exists(os.path.join(path, ".git")):
+        return path
+    if STATE_BRANCH not in remote_heads():
+        raise StateError(f"{STATE_BRANCH} doesn't exist in {REPO} yet: the architect runs '{ME} state init'")
+    if os.path.isdir(path) and os.listdir(path):
+        raise StateError(f"{path} exists and is not a git checkout: move it, or set ROOM_STATE_DIR")
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    root = state_checkout()
+    if root:
+        git("fetch", "-q", "origin", f"+refs/heads/{STATE_BRANCH}:{STATE_REF}", cwd=root)
+        git("worktree", "prune", cwd=root)
+        # detached, so two state worktrees of one checkout never share a branch that moves under the other
+        git("worktree", "add", "-q", "--detach", path, STATE_REF, cwd=root)
+    else:
+        git("clone", "-q", "--depth", "1", "--single-branch", "--branch", STATE_BRANCH, remote_url(), path)
+    return path
+
+
+def fetch(path):
+    git("fetch", "-q", "origin", f"+refs/heads/{STATE_BRANCH}:{STATE_REF}", cwd=path)
+
+
+def pending(path):
+    """What the worktree holds beyond the remote branch: '' when nothing."""
+    out = []
+    if git_out("status", "--porcelain", cwd=path):
+        out.append("uncommitted changes")
+    if git_out("rev-list", "--count", f"{STATE_REF}..HEAD", cwd=path) != "0":
+        out.append("unpushed commits")
+    return " and ".join(out)
+
+
+def reset_to_remote(path):
+    git("reset", "-q", "--hard", STATE_REF, cwd=path)
+    git("clean", "-q", "-fd", cwd=path)
+
+
+def sync(path, discard=True):
+    """Fetch and reset the worktree to the remote branch. With discard=False, refuse to drop local work."""
+    fetch(path)
+    if not discard:
+        p = pending(path)
+        if p:
+            raise StateError(f"the state worktree {path} has {p}: push them with '{ME} state commit -m MSG', "
+                             f"or drop them with '{ME} state sync'")
+    reset_to_remote(path)
+
+
+def refresh(path):
+    """Sync if the worktree holds no local work; otherwise only fetch, and say so."""
+    fetch(path)
+    p = pending(path)
+    if p:
+        print(f"[state worktree has {p}; not synced]", file=sys.stderr)
+    else:
+        reset_to_remote(path)
+
+
+def commit_and_push(path, msg):
+    """Commit everything in the worktree and push it. Returns False when there was nothing to push.
+
+    Raises StateMoved, with the worktree reset to the remote, if the branch moved since the last sync."""
+    git("add", "-A", cwd=path)
+    if git("diff", "--cached", "--quiet", cwd=path, check=False).returncode == 1:
+        git(*identity(path), "commit", "-q", "-m", msg, cwd=path)
+    base = git_out("rev-parse", STATE_REF, cwd=path)
+    if git_out("rev-parse", "HEAD", cwd=path) == base:
+        return False
+    r = git("push", "-q", "origin", f"HEAD:refs/heads/{STATE_BRANCH}", cwd=path, check=False)
+    if r.returncode == 0:
+        git("update-ref", STATE_REF, "HEAD", cwd=path)
+        return True
+    fetch(path)
+    if git_out("rev-parse", STATE_REF, cwd=path) != base:
+        reset_to_remote(path)
+        raise StateMoved()
+    raise StateError(f"git push: {(r.stderr or r.stdout).strip()}")
+
+
+def push_new_branch(branch, files, msg):
+    """Push a root commit holding files {path: text} as a new branch. False if the branch appeared meanwhile."""
+    root = state_checkout()
+    with tempfile.TemporaryDirectory() as t:
+        git("init", "-q", t)
+        for rel, text in files.items():
+            os.makedirs(os.path.dirname(os.path.join(t, rel)), exist_ok=True)
+            with open(os.path.join(t, rel), "w") as f:
+                f.write(text)
+        git("add", "-A", cwd=t)
+        git(*identity(t), "commit", "-q", "-m", msg, cwd=t)
+        if root:  # push through the checkout, so it uses the checkout's remote and credentials
+            sha = git_out("rev-parse", "HEAD", cwd=t)
+            git("fetch", "-q", t, "HEAD", cwd=root)
+            r = git("push", "-q", "origin", f"{sha}:refs/heads/{branch}", cwd=root, check=False)
+        else:
+            r = git("push", "-q", remote_url(), f"HEAD:refs/heads/{branch}", cwd=t, check=False)
+    if r.returncode == 0:
+        return True
+    if branch in remote_heads():
+        return False
+    raise StateError(f"git push {branch}: {(r.stderr or r.stdout).strip()}")
+
+
+def template(name):
+    """A playbook template: from templates/playbook/ beside this file, else downloaded at VERSION."""
+    local = os.path.join(os.path.dirname(os.path.abspath(__file__)), "templates", "playbook", name)
+    if os.path.isfile(local):
+        with open(local) as f:
+            return f.read()
+    url = TEMPLATE_URL.format(repo=HOME_REPO, version=VERSION, name=name)
+    try:
+        r = subprocess.run(["curl", "-fsSL", "-m", "30", url], capture_output=True, text=True, timeout=60)
+    except (OSError, subprocess.TimeoutExpired) as e:
+        raise StateError(f"downloading {url}: {e}")
+    if r.returncode != 0 or not r.stdout.strip():
+        raise StateError(f"downloading {url}: {r.stderr.strip() or 'empty response'}")
+    return r.stdout
+
+
+def render(name):
+    text = template(name)
+    if name == "PLAYBOOK.md":
+        text = re.sub(r"^pipeline:.*$", f"pipeline: {VERSION}", text, count=1, flags=re.M)
+        text = re.sub(r"^repo:.*$", f"repo: {REPO}", text, count=1, flags=re.M)
+    return text
+
+
+def add_missing(names, msg):
+    """Sync, add the named playbook files that are missing, commit and push. Returns (path, added)."""
+    path = ensure_worktree()
+    sync(path, discard=False)
+    missing = [n for n in names if not os.path.exists(os.path.join(path, PLAYBOOK_DIR, n))]
+    texts = {n: render(n) for n in missing}  # render all first, so a failed download writes nothing
+    for n, text in texts.items():
+        os.makedirs(os.path.join(path, PLAYBOOK_DIR), exist_ok=True)
+        with open(os.path.join(path, PLAYBOOK_DIR, n), "w") as f:
+            f.write(text)
+    if missing:
+        commit_and_push(path, f"{msg}: {', '.join(missing)}")
+    return path, missing
+
+
+# the machine block at the top of MISSIONS.md: `key: value` lines that only room.py edits
+
+def read_block(text):
+    m = STATE_BLOCK.search(text)
+    if not m:
+        raise StateError(f"{PLAYBOOK_DIR}/MISSIONS.md has no agent-room-state block")
+    values = {}
+    for line in m.group(1).splitlines():
+        key, sep, value = line.partition(":")
+        if sep and STATE_KEY.fullmatch(key.strip()):
+            values[key.strip()] = value.strip()
+    return values
+
+
+def write_block(text, updates):
+    m = STATE_BLOCK.search(text)
+    if not m:
+        raise StateError(f"{PLAYBOOK_DIR}/MISSIONS.md has no agent-room-state block")
+    lines, done = [], set()
+    for line in m.group(1).splitlines():
+        key, sep, _ = line.partition(":")
+        if sep and key.strip() in updates:
+            lines.append(f"{key.strip()}: {updates[key.strip()]}")
+            done.add(key.strip())
+        else:
+            lines.append(line)
+    lines += [f"{k}: {v}" for k, v in updates.items() if k not in done]
+    return text[:m.start(1)] + "".join(line + "\n" for line in lines) + text[m.end(1):]
+
+
+def missions_text(path):
+    f = os.path.join(path, PLAYBOOK_DIR, "MISSIONS.md")
+    if not os.path.isfile(f):
+        raise StateError(f"{PLAYBOOK_DIR}/MISSIONS.md is missing: the lead runs '{ME} state init-lead'")
+    with open(f) as fh:
+        return fh.read()
+
+
+def change_state(msg, fn):
+    """Sync, apply fn(values) -> {key: value} to the machine block, commit and push. Returns the updates."""
+    path = ensure_worktree()
+    sync(path, discard=False)
+    text = missions_text(path)
+    updates = fn(read_block(text))
+    with open(os.path.join(path, PLAYBOOK_DIR, "MISSIONS.md"), "w") as f:
+        f.write(write_block(text, updates))
+    commit_and_push(path, msg)
+    return updates
+
+
+def lease_holder():
+    """(session, generation) of the lease on the remote state branch, freshly fetched."""
+    path = ensure_worktree()
+    fetch(path)
+    r = git("show", f"{STATE_REF}:{PLAYBOOK_DIR}/MISSIONS.md", cwd=path, check=False)
+    if r.returncode != 0:
+        raise StateError(f"{PLAYBOOK_DIR}/MISSIONS.md is missing on {STATE_BRANCH}: run '{ME} state init-lead'")
+    v = read_block(r.stdout)
+    return v.get("lease_session", "none"), v.get("lease_generation", "0")
+
+
+def lease_guard(a, kind):
+    """Lease check on send: a lead with a state worktree must hold the lease to post, except
+    LEAD ONLINE, which it posts right after taking the lease. Exits 5 if the lease is lost."""
+    if a.role != "lead" or kind == "LEAD ONLINE" or not state_worktree_exists():
+        return
+    sid = session_id(a)
+    try:
+        holder, gen = lease_holder()
+    except StateError as e:
+        sys.exit(f"not sent: lease check failed: {e}")
+    if holder != sid:
+        print(f"not sent: the lease is held by {holder} (generation {gen}), not this session ({sid})",
+              file=sys.stderr)
+        sys.exit(EXIT_LEASE)
+
+
+# --- state, lease and preflight commands
+
+def cmd_state_init(a):
+    heads = remote_heads()
+    # templates first, so a failed download changes nothing
+    files = {} if STATE_BRANCH in heads else {f"{PLAYBOOK_DIR}/{n}": render(n) for n in ARCHITECT_FILES}
+    if "main" not in heads:
+        others = sorted(h for h in heads if h != STATE_BRANCH)
+        if others:
+            raise StateError(f"{REPO} has no main branch but has {', '.join(others)}; agent-room builds on main")
+        if push_new_branch("main", {"README.md": f"# {REPO.split('/')[1]}\n", ".gitignore": FIRST_GITIGNORE},
+                           "Initial commit"):
+            print(f"created main in {REPO} with a first commit")
+    if files:
+        if push_new_branch(STATE_BRANCH, files, "agent-room: start the playbook from templates"):
+            print(f"created {STATE_BRANCH} with {', '.join(ARCHITECT_FILES)}")
+    path, added = add_missing(ARCHITECT_FILES, "agent-room: add missing architect files")
+    if added:
+        print(f"added {', '.join(added)}")
+    print(f"state branch ready: {path}")
+
+
+def cmd_state_init_lead(a):
+    path, added = add_missing(LEAD_FILES, "agent-room: add lead files")
+    print(f"added {', '.join(added)}" if added else "lead files already present")
+    print(f"state branch ready: {path}")
+
+
+def cmd_state_path(a):
+    path = ensure_worktree()
+    refresh(path)
+    print(path)
+
+
+def cmd_state_sync(a):
+    path = ensure_worktree()
+    sync(path)
+    print(f"synced {path} to {STATE_BRANCH} at {git_out('rev-parse', '--short', 'HEAD', cwd=path)}")
+
+
+def cmd_state_commit(a):
+    path = ensure_worktree()
+    if commit_and_push(path, a.message):
+        print(f"pushed {git_out('rev-parse', '--short', 'HEAD', cwd=path)} to {STATE_BRANCH}")
+    else:
+        print("nothing to commit")
+
+
+def cmd_state_get(a):
+    path = ensure_worktree()
+    refresh(path)
+    values = read_block(missions_text(path))
+    if a.key not in values:
+        raise StateError(f"no key '{a.key}' in the state block")
+    print(values[a.key])
+
+
+def cmd_state_set(a):
+    updates = {}
+    for pair in a.pairs:
+        key, sep, value = pair.partition("=")
+        if not sep or not STATE_KEY.fullmatch(key):
+            raise StateError(f"expected KEY=VALUE with a lowercase key, got {pair!r}")
+        if "\n" in value or "\r" in value:
+            raise StateError(f"the value of {key} must be a single line")
+        updates[key] = value.strip()
+    change_state(f"state: set {', '.join(updates)}", lambda values: updates)
+    print("set " + " ".join(f"{k}={v}" for k, v in updates.items()))
+
+
+def next_int(values, key):
+    try:
+        return str(int(values.get(key) or "0") + 1)
+    except ValueError:
+        raise StateError(f"{key} is {values[key]!r}, not a number")
+
+
+def cmd_state_next(a):
+    if not STATE_KEY.fullmatch(a.key):
+        raise StateError(f"bad key {a.key!r}")
+    print(change_state(f"state: next {a.key}", lambda v: {a.key: next_int(v, a.key)})[a.key])
+
+
+def cmd_lease_take(a):
+    sid = session_id(a)
+    try:
+        new = change_state(f"lease: {sid} takes the lead lease", lambda v: {
+            "lease_session": sid, "lease_generation": next_int(v, "lease_generation")})
+    except StateMoved:
+        print("lease not taken: another session pushed first; stand down, or see 'lease check'", file=sys.stderr)
+        return EXIT_MOVED
+    print(new["lease_generation"])
+
+
+def cmd_lease_check(a):
+    sid = session_id(a)
+    holder, gen = lease_holder()
+    if holder == sid:
+        print(f"lease held by this session ({sid}, generation {gen})")
+        return 0
+    print(f"lease held by {holder} (generation {gen}), not this session ({sid})")
+    return EXIT_LEASE
+
+
+def gh_try(path):
+    """(200, body), or (HTTP status from gh's error or 0, message)."""
+    try:
+        return 200, gh(path)
+    except GhError as e:
+        m = re.search(r"HTTP (\d{3})", str(e))
+        return (int(m.group(1)) if m else 0), str(e)
+
+
+def unprotected(status, msg):
+    # 404: no protection; 403 "upgrade": a private repo on GitHub Free, which can't have any
+    return status == 404 or (status == 403 and "upgrad" in msg.lower())
+
+
+def cmd_preflight(a):
+    try:
+        sys.stdout.reconfigure(errors="backslashreplace")
+    except AttributeError:
+        pass
+    architect = a.role == "architect"
+    marks = []
+
+    def check(mark, text):
+        marks.append(mark)
+        print(f"{mark} {text}", flush=True)
+
+    # push access, and the repo settings read with it
+    status, repo = gh_try(f"repos/{REPO}")
+    if status != 200:
+        check("✗", f"push access: can't read {REPO}: {repo}")
+        repo = None
+    elif (repo.get("permissions") or {}).get("push"):
+        check("✓", f"push access to {REPO}")
+    else:
+        check("✗", f"push access: this account can't push to {REPO}; approve repo access, and make sure no "
+                   f"ruleset covers mission/*, task branches or {STATE_BRANCH}")
+
+    # main has commits
+    heads = None
+    try:
+        heads = remote_heads()
+    except StateError as e:
+        check("✗", f"main has commits: can't list branches: {e}")
+    if heads is not None:
+        if "main" in heads:
+            check("✓", "main has commits")
+        else:
+            check("✗", "main has no commits: " + (f"run '{ME} state init'" if architect
+                                                  else "the architect's kickoff ('state init') creates the first commit"))
+
+    # approving reviews on main, in classic protection or rules
+    errors, notes, where = [], [], []
+    status, classic = gh_try(f"repos/{REPO}/branches/main/protection")
+    if status != 200:
+        if not unprotected(status, classic):
+            errors.append(f"classic protection: {classic}")
+        elif status == 403:
+            notes.append("private repo on GitHub Free: no protection possible")
+        classic = None
+    status, rules = gh_try(f"repos/{REPO}/rules/branches/main")
+    if status != 200 or not isinstance(rules, list):
+        if status != 200 and not unprotected(status, rules):
+            errors.append(f"rules: {rules}")
+        rules = []
+    rulesets = {}
+    for rule in rules:
+        rid = rule.get("ruleset_id")
+        if rid is not None and rid not in rulesets:
+            s, rs = gh_try(f"repos/{REPO}/rulesets/{rid}")
+            rulesets[rid] = rs if s == 200 and isinstance(rs, dict) else {}
+
+    def ruleset_name(rid, rule=None):
+        name = rulesets.get(rid, {}).get("name")
+        src = (rule or {}).get("ruleset_source") or ""
+        return f"ruleset '{name}' (id {rid})" if name else f"ruleset {rid}" + (f" from {src}" if src else "")
+
+    if classic:
+        n = (classic.get("required_pull_request_reviews") or {}).get("required_approving_review_count") or 0
+        if n:
+            where.append(f"classic branch protection ({n} approving)")
+    for rule in rules:
+        if rule.get("type") == "pull_request":
+            n = (rule.get("parameters") or {}).get("required_approving_review_count") or 0
+            if n:
+                where.append(f"{ruleset_name(rule.get('ruleset_id'), rule)} ({n} approving)")
+    if errors:
+        check("✗", "approving reviews: can't read the rules for main: " + "; ".join(errors))
+    elif where:
+        check("✗", "main requires approving reviews in " + ", ".join(where) + "; remove only that rule, "
+                   "keep required status checks and force-push protection")
+    else:
+        check("✓", "main requires no approving reviews" + (f" ({'; '.join(notes)})" if notes else ""))
+
+    # admin bypass: report only
+    bypass = []
+    if classic and not (classic.get("enforce_admins") or {}).get("enabled"):
+        bypass.append("admins can bypass classic protection (enforce_admins off)")
+    for rid, rs in rulesets.items():
+        actors = rs.get("bypass_actors") or []
+        if actors:
+            who = ", ".join(f"{x.get('actor_type', '?')} {x.get('actor_id', '')}".strip() for x in actors)
+            bypass.append(f"{ruleset_name(rid)} has bypass actors: {who}")
+    if bypass:
+        check("!", "admin bypass: " + "; ".join(bypass) + " (report only: the lead never pushes to main)")
+    elif errors:
+        check("!", "admin bypass: unknown, the rules for main couldn't be read (report only)")
+    elif not classic and not rules:
+        check("!", "admin bypass: main has no protection or rules, so anyone with push access can push to it "
+                   "(report only: the lead never pushes to main)")
+    else:
+        check("✓", "admin bypass: none")
+
+    # automatic deletion of merged head branches (agents can't delete branches themselves)
+    if repo is not None:
+        dbm = repo.get("delete_branch_on_merge")
+        if dbm is True:
+            check("✓", "merged head branches are deleted automatically")
+        else:
+            check("!", ("couldn't read delete_branch_on_merge; " if dbm is None else "") +
+                  "Matthew: turn on 'Automatically delete head branches' (repo Settings > General > "
+                  "Pull Requests), so merged mission branches are removed")
+
+    # the state branch, with the architect's files and a pinned version
+    path = None
+    try:
+        path = ensure_worktree()
+        refresh(path)
+    except StateError as e:
+        path = None
+        check("✗", f"state branch: {e}")
+    if path:
+        missing = [n for n in ("PLAYBOOK.md", "DESIGN.md") if not os.path.isfile(os.path.join(path, PLAYBOOK_DIR, n))]
+        fix = f"run '{ME} state init'" if architect else "the architect commits them"
+        if missing:
+            check("✗", f"state branch lacks {', '.join(missing)}: {fix}")
+        else:
+            with open(os.path.join(path, PLAYBOOK_DIR, "PLAYBOOK.md")) as f:
+                m = re.search(r"^pipeline:[ \t]*(\S+)", f.read(), re.M)
+            if not m:
+                check("✗", f"state branch: PLAYBOOK.md has no 'pipeline: v…' line: {fix}")
+            elif re.fullmatch(r"v\d+(\.\d+)*(-[\w.]+)?", m.group(1)):
+                check("✓", f"state branch has PLAYBOOK.md and DESIGN.md, pinned to {m.group(1)}")
+            else:
+                check("!", f"state branch has PLAYBOOK.md and DESIGN.md, but the pipeline is '{m.group(1)}', "
+                           "not a release tag (fine while agent-room itself is in development)")
+
+    if not architect:
+        # lead-owned files
+        if not path:
+            check("✗", "lead-owned files: can't check without the state branch")
+        else:
+            missing = [n for n in LEAD_FILES if not os.path.isfile(os.path.join(path, PLAYBOOK_DIR, n))]
+            if missing and a.fix:
+                try:
+                    path, added = add_missing(LEAD_FILES, "agent-room: add lead files")
+                    check("✓", f"lead-owned files exist (--fix created {', '.join(added) or 'none'})")
+                except (StateError, StateMoved) as e:
+                    check("✗", f"lead-owned files: --fix failed: {e or 'the state branch moved; run it again'}")
+            elif missing:
+                check("✗", f"lead-owned files missing: {', '.join(missing)}: run '{ME} state init-lead', "
+                           "or preflight --fix")
+            else:
+                try:
+                    read_block(missions_text(path))
+                    check("✓", "lead-owned files exist")
+                except StateError as e:
+                    check("✗", f"lead-owned files: {e}")
+        # environment
+        if os.environ.get("ROOM_NTFY_TOPIC", "").strip():
+            check("✓", "ROOM_NTFY_TOPIC is set")
+        else:
+            check("✗", "ROOM_NTFY_TOPIC is not set: add it to the agent-room environment")
+        q = os.environ.get("QODO_REVIEW", "").strip()
+        if q in ("on", "off"):
+            check("✓", f"QODO_REVIEW is {q}")
+        else:
+            check("✗", f"QODO_REVIEW must be 'on' or 'off', not {q!r}: set it in the agent-room environment")
+
+    fails, warns = marks.count("✗"), marks.count("!")
+    print(f"preflight {'failed' if fails else 'passed'}: {fails} failed, {warns} warning(s)")
+    return 1 if fails else 0
+
+
+def state_command(fn):
+    def run(a):
+        try:
+            return fn(a)
+        except StateMoved:
+            print("state moved: run 'state sync', re-read, re-apply", file=sys.stderr)
+            return EXIT_MOVED
+        except StateError as e:
+            sys.exit(str(e))
+    return run
+
+
+def add_state_commands(sub, common):
+    """argparse wiring for state, lease and preflight (options go after the leaf command)."""
+    def leaf(group, name, fn, help):
+        s = group.add_parser(name, parents=[common], help=help, description=help)
+        s.set_defaults(fn=state_command(fn))
+        return s
+
+    st = sub.add_parser("state", help=f"the playbook and pipeline state on {STATE_BRANCH}")
+    ss = st.add_subparsers(dest="state_cmd", required=True)
+    leaf(ss, "init", cmd_state_init, "architect: first commit on an empty main, state branch from templates")
+    leaf(ss, "init-lead", cmd_state_init_lead, "lead: add missing lead-owned files from templates")
+    leaf(ss, "path", cmd_state_path, "print the state worktree's path, creating or syncing it first")
+    leaf(ss, "sync", cmd_state_sync, f"fetch and hard-reset the worktree to origin/{STATE_BRANCH}")
+    leaf(ss, "commit", cmd_state_commit, "commit all changes in the worktree and push (exit 3 if the branch "
+         "moved)").add_argument("-m", dest="message", required=True)
+    leaf(ss, "get", cmd_state_get, "print a value from the machine block of MISSIONS.md").add_argument("key")
+    leaf(ss, "set", cmd_state_set, "sync, set values, commit and push (exit 3 on a lost race)").add_argument(
+        "pairs", nargs="+", metavar="KEY=VALUE")
+    leaf(ss, "next", cmd_state_next, "increment a counter, push, print the new value").add_argument("key")
+
+    ls = sub.add_parser("lease", help="the lead lease in MISSIONS.md")
+    lss = ls.add_subparsers(dest="lease_cmd", required=True)
+    leaf(lss, "take", cmd_lease_take, "take the lead lease: next generation, this session (exit 3 if beaten)")
+    leaf(lss, "check", cmd_lease_check, "exit 0 if this session holds the lease, else 5")
+
+    s = leaf(sub, "preflight", cmd_preflight, "check the repo, the state branch and the environment")
+    s.add_argument("--role", choices=("architect", "lead"), required=True)
+    s.add_argument("--fix", action="store_true", help="lead: create missing lead-owned files")
+
+
+# --- end of state branch, lease, preflight
 
 
 def from_arg(s):
@@ -497,6 +1156,7 @@ def main():
     s = cmd("close", cmd_close); s.add_argument("room", type=int); s.add_argument("role", type=role_arg)
     s.add_argument("text", nargs="?")
     sub.add_parser("ping").set_defaults(fn=cmd_ping, repo=None)
+    add_state_commands(sub, common)  # M2-B: state, lease, preflight
 
     a = p.parse_args()
     SESSION_OPT = getattr(a, "session", None)

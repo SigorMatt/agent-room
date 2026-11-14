@@ -23,7 +23,8 @@ CURL_LOG = os.path.join(tmp, "curl.log")
 
 ENV = {k: v for k, v in os.environ.items() if not k.startswith("ROOM_") and k != "CLAUDE_CODE_SESSION_ID"}
 ENV.update(PATH=os.path.dirname(shim) + os.pathsep + os.environ["PATH"], FAKE_GH_DB=os.path.join(tmp, "db.json"),
-           FAKE_CURL_LOG=CURL_LOG, ROOM_REPO="SigorMatt/agent-room")
+           FAKE_CURL_LOG=CURL_LOG, ROOM_REPO="SigorMatt/agent-room",
+           ROOM_STATE_DIR=os.path.join(tmp, "no-state-worktree"))  # no lease check here; see test_state.py
 
 
 def env_for(role):  # each participant gets its own cursor dir, like two separate machines
