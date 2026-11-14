@@ -113,16 +113,17 @@ def state_sha():
     return g("--git-dir", PET, "rev-parse", "agent-room/state").stdout.strip()
 
 
-def edit_state(name, fn, hours=None):
+def edit_state(name, fn, hours=None, **env):
     """Edit a playbook file in the state worktree and commit it (dated HOURS ago if given); returns the text
     before."""
-    room("state", "sync", check=True)
+    room("state", "sync", check=True, **env)
     path = os.path.join(STATE_DIR, "docs", "playbook", name)
     with open(path) as f:
         text = f.read()
     with open(path, "w") as f:
         f.write(fn(text))
-    room("state", "commit", "-m", f"test: edit {name}", check=True, **(ago(hours)[1] if hours is not None else {}))
+    room("state", "commit", "-m", f"test: edit {name}", check=True, **(ago(hours)[1] if hours is not None else {}),
+         **env)
     return text
 
 
@@ -365,10 +366,18 @@ def t_pause_flow():
     assert block()["lease_session"] == "none" and block()["status"] == "paused"
     assert watchdog().stdout.strip() == "quiet: status is paused"
     gen = int(block()["lease_generation"])
+    # cold M4 R1-2: the next lead's plain take sets status back to running, in the same write
+    before = state_sha()
     assert room("lease", "take", check=True, ROOM_SESSION="L2").stdout.strip() == str(gen + 1)
-    room("state", "set", "status=running", check=True, ROOM_SESSION="L2")
-    room("lease", "release", check=True, ROOM_SESSION="L2")
-    room("lease", "take", check=True)
+    b, prev = block(), block("agent-room/state~1")
+    assert b["status"] == "running" and b["lease_session"] == "L2" and prev["status"] == "paused", (b, prev)
+    assert g("--git-dir", PET, "rev-parse", "agent-room/state~1").stdout.strip() == before, "one write"
+    # so does a takeover, and a block without the key gains it
+    set_state("status=done", ROOM_SESSION="L2")
+    edit_state("MISSIONS.md", lambda t: t.replace("status: done\n", "", 1), ROOM_SESSION="L2")
+    assert "status" not in block()
+    room("lease", "take", "--takeover", check=True)
+    assert block()["status"] == "running" and block()["lease_session"] == "L1"
 
 
 def t_watchdog_status_values():
@@ -699,7 +708,7 @@ def t_reconcile_unknown_intent_status_and_drill():
     set_state("intent=schedule the successor")
     assert hint(reconcile()).startswith("intent unknown: check it by hand")
     set_state("status=paused")
-    assert re.search(r"^status: paused: a lead that resumes the work sets it back", reconcile().stdout, re.M)
+    assert re.search(r"^status: paused: lease take sets it back to running", reconcile().stdout, re.M)
     original = edit_state("PLAYBOOK.md", lambda t: t.replace("test: <command>\n", "test: <command>\ndrill: stop-after-merge\n"))
     try:
         assert "\ndrill: stop-after-merge\n" in reconcile().stdout

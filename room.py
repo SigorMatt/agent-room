@@ -1075,7 +1075,8 @@ def cmd_lease_take(a):
         if holder not in ("none", sid) and not a.takeover:
             raise StateExit(EXIT_MOVED, f"lease held by {holder}: stand down (generation {gen}; "
                                         "--takeover only for a lead Matthew starts after LEAD-SILENT)")
-        return {"lease_session": sid, "lease_generation": next_int(values, "lease_generation")}
+        # a lead that takes the lease is running: a status left at paused, stopped or done mustn't mute the watchdog
+        return {"lease_session": sid, "lease_generation": next_int(values, "lease_generation"), "status": "running"}
 
     for _ in range(2):
         try:
@@ -2468,8 +2469,7 @@ def cmd_reconcile(a):
     if intent != "none":
         print(intent_hint(a, intent, path, msgs, pr))
     if halted(values):
-        print(f"status: {status_of(values)}: a lead that resumes the work sets it back after taking the lease "
-              f"('{ME} state set status=running')")
+        print(f"status: {status_of(values)}: lease take sets it back to running when a lead resumes the work")
     drill = re.search(r"^drill:[ \t]*(\S.*?)[ \t]*$", pushed_text(path, "PLAYBOOK.md") or "", re.M)
     if drill:
         print(f"drill: {drill.group(1)}")
