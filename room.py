@@ -1436,7 +1436,8 @@ def ledger_ids(text):
 
 
 def glob_regex(glob):
-    """A merge-hold glob as a regex on the whole path: '*' within a segment, '**' across segments."""
+    """A merge-hold glob as a regex on the whole path: '*' within a segment, '**' across segments, and
+    '**/' any number of whole directories, none included (`**/go.mod` matches go.mod and lib/go.mod)."""
     out, i = [], 0
     while i < len(glob):
         if glob.startswith("**/", i):
@@ -1459,18 +1460,24 @@ def glob_regex(glob):
 
 def merge_hold_rules(playbook):
     """[(label, glob, deleted_only, regex)] from the "## Merge-hold list" section of PLAYBOOK.md, one
-    bullet per area (- <label>: `glob`, `glob`). None when the section is missing. A label containing
-    "deleted" matches only deleted paths."""
+    bullet per area (- <label>: `glob`, `glob`), whose globs may go on over indented continuation lines.
+    None when the section is missing. A label containing "deleted" matches only deleted paths."""
     m = re.search(r"^##[ \t]+Merge-hold list[^\n]*\n(.*?)(?=^##[ \t]|\Z)", playbook or "", re.M | re.S | re.I)
     if not m:
         return None
-    rules = []
+    rules, label = [], None
     for line in m.group(1).splitlines():
         b = re.match(r"\s*[-*+][ \t]+(.*)", line)
-        if not b:
+        if b:
+            label = b.group(1).split("`", 1)[0].strip().rstrip(":").strip()
+            text = b.group(1)
+        elif label is not None and re.match(r"[ \t]+\S", line):
+            text = line  # an indented continuation line of the same bullet
+        else:
+            if line.strip():
+                label = None  # unindented text ends the bullet; a blank line doesn't
             continue
-        label = b.group(1).split("`", 1)[0].strip().rstrip(":").strip()
-        for glob in re.findall(r"`([^`]+)`", b.group(1)):
+        for glob in re.findall(r"`([^`]+)`", text):
             rules.append((label, glob.strip(), "deleted" in label.lower(), glob_regex(glob.strip())))
     return rules
 

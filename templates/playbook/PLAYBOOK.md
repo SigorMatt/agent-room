@@ -22,13 +22,14 @@ Goal: <one sentence>. Items: P1-1. Mission budget: 8 hours.
 
 ## Merge-hold list
 
-A PR touching any of these areas is held for Matthew (`MERGE-HOLD-n`). Edit the patterns per project.
+A PR touching any of these areas is held for Matthew (`MERGE-HOLD-n`). Edit the patterns per project: `*` stays within one path segment, `**/` matches any number of directories, including none.
 
 - CI and workflow files: `.github/workflows/**`, `.github/actions/**`
 - Authentication, cryptography or secrets handling: `**/auth/**`, `**/crypto/**`, `**/*secret*`
-- New dependencies: `requirements*.txt`, `pyproject.toml`, `package.json`, `go.mod`, `Cargo.toml`
+- New dependencies: `**/requirements*.txt`, `**/pyproject.toml`, `**/setup.py`, `**/setup.cfg`, `**/Pipfile`,
+  `**/package.json`, `**/go.mod`, `**/Cargo.toml`
 - Destructive data migrations: `**/migrations/**`
-- Deleted or weakened tests: `tests/**`, `**/*_test.*`, `**/test_*`
+- Deleted or weakened tests: `**/tests/**`, `**/test/**`, `**/__tests__/**`, `**/*_test.*`, `**/*.test.*`, `**/test_*`
 
 ## Environment needs
 

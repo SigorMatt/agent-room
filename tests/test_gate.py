@@ -308,7 +308,8 @@ def setup():
     g("fetch", "-q", "origin")
     g("checkout", "-q", "-B", "main", "origin/main")
     commit("app, lib and tests", {"app.py": "def greet(name):\n    return name\n", "lib/util.py": "X = 1\n",
-                                  "tests/test_old.py": "def test_greet():\n    pass\n"})
+                                  "tests/test_old.py": "def test_greet():\n    pass\n",
+                                  "lib/tests/test_x.py": "def test_x():\n    pass\n"})
     g("push", "-q", "origin", "main")
     gh_reset()
 
@@ -402,11 +403,41 @@ def t_globs_and_merge_hold_list():
     assert rx("**/test_*").fullmatch("test_a.py") and rx("**/test_*").fullmatch("x/y/test_a.py")
     assert rx("a?c").fullmatch("abc") and not rx("a?c").fullmatch("a/c") and not rx("a.c").fullmatch("abc")
     rules = R.merge_hold_rules(open(os.path.join(TEMPLATES, "PLAYBOOK.md")).read())
-    assert len(rules) == 14, rules
+    assert len(rules) == 20, rules
     assert {label for label, _, deleted, _ in rules if deleted} == {"Deleted or weakened tests"}
     assert ("CI and workflow files", ".github/workflows/**") in [(r[0], r[1]) for r in rules]
     assert R.merge_hold_rules("# Playbook\n\n## Phases\n") is None
     assert R.merge_hold_rules("## Merge-hold list\n\nNone yet.\n\n## Environment needs\n- `x`\n") == []
+
+
+def held(rules, path, status="M"):
+    """The label of the first merge-hold rule PATH (changed with STATUS) matches, or None."""
+    return next((label for label, _, deleted, rx in rules if (status == "D" or not deleted) and rx.fullmatch(path)), None)
+
+
+def t_template_globs_match_nested_paths():  # cold M3 R1-1
+    rules = R.merge_hold_rules(open(os.path.join(TEMPLATES, "PLAYBOOK.md")).read())
+    for path in ("package.json", "web/package.json", "requirements.txt", "svc/requirements-dev.txt", "lib/go.mod",
+                 "go.mod", "crates/x/Cargo.toml", "pyproject.toml", "tools/setup.py", "api/Pipfile"):
+        assert held(rules, path) == "New dependencies", path
+    for path in ("tests/test_old.py", "pkg/tests/helpers.py", "web/src/a.test.js", "src/__tests__/a.js", "test_x.py",
+                 "pkg/x_test.go", "test/unit/a.rb"):
+        assert held(rules, path, "D") == "Deleted or weakened tests", path
+        assert held(rules, path, "M") is None, path  # adding or editing tests never holds
+    assert held(rules, "src/app.py") is None and held(rules, "web/packages.json") is None
+
+
+def t_wrapped_merge_hold_bullet():  # cold M3 R1-11
+    playbook = ("## Merge-hold list\n\nHeld for Matthew.\n\n"
+                "- CI and workflow files: `.github/actions/**`,\n    `.github/workflows/**`\n"
+                "- Deleted or weakened tests:\n\n  `**/tests/**`\n"
+                "Not a bullet: `ignored/**`\n\n## Environment needs\n")
+    rules = R.merge_hold_rules(playbook)
+    assert [(label, glob) for label, glob, _, _ in rules] == [
+        ("CI and workflow files", ".github/actions/**"), ("CI and workflow files", ".github/workflows/**"),
+        ("Deleted or weakened tests", "**/tests/**")], rules
+    assert held(rules, ".github/workflows/ci.yml") == "CI and workflow files"
+    assert held(rules, "pkg/tests/a.py", "D") == "Deleted or weakened tests" and held(rules, "ignored/x") is None
 
 
 # --- gate: each check
@@ -660,8 +691,14 @@ def t_sensitive_paths():
     assert verdict(r) == "gate: FAIL hold reasons 5"
     mission(extra={"tests/test_old.py": None})
     r = gate()
-    failed(r, "sensitive paths", "tests/test_old.py (deleted; `tests/**`, Deleted or weakened tests)")
+    failed(r, "sensitive paths", "tests/test_old.py (deleted; `**/tests/**`, Deleted or weakened tests)")
     assert verdict(r) == "gate: FAIL hold reasons 5", out(r)
+    # nested manifests and a deleted nested test hold too (cold M3 R1-1)
+    mission(extra={"web/package.json": "{}\n", "svc/requirements.txt": "evil==1\n", "lib/tests/test_x.py": None})
+    r = gate()
+    failed(r, "sensitive paths", "web/package.json (`**/package.json`, New dependencies)",
+           "svc/requirements.txt (`**/requirements*.txt`, New dependencies)",
+           "lib/tests/test_x.py (deleted; `**/tests/**`, Deleted or weakened tests)")
     mission(extra={"tests/test_old.py": "def test_greet():\n    assert True\n", "tests/test_new.py": "x = 1\n",
                    "src/test_util.py": "x = 2\n"})
     r = gate()
