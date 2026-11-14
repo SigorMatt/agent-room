@@ -518,32 +518,44 @@ def t_join_line():
 def t_handoff_refused():
     set_state("mission=M2", "step=gate")
     before, n = state_sha(), len(comments())
-    r = room("handoff", "1", "--step", "spec", ROOM_SESSION="L9")
+    last = str(comments()[-1]["id"])
+    r = room("handoff", "1", "--step", "spec", "--cursor", last, ROOM_SESSION="L9")
     assert r.returncode == 5 and "not handed off" in r.stderr and "held by L1" in r.stderr, out(r)
     assert state_sha() == before and len(comments()) == n, "nothing posted, nothing written"
     # local work in the state worktree would stop the state write after posting, so it stops the post
     with open(os.path.join(STATE_DIR, "docs", "playbook", "LEDGER.md"), "a") as f:
         f.write("| L-5 | draft |\n")
-    r = room("handoff", "1", "--step", "spec")
+    r = room("handoff", "1", "--step", "spec", "--cursor", last)
     assert r.returncode == 1 and "uncommitted changes" in r.stderr, out(r)
     assert state_sha() == before and len(comments()) == n
     room("state", "sync", check=True)
-    r = room("handoff", "1", "--step", "spec\nlease_session: mallory")
+    r = room("handoff", "1", "--step", "spec\nlease_session: mallory", "--cursor", last)
     assert r.returncode == 1 and "single line" in r.stderr and len(comments()) == n, out(r)
+    # cold M4 R1-5: the lead names the last comment it acted on: required, and a comment of this room
+    for args, code, why in ((("--step", "spec"), 2, "--cursor"), (("--step", "spec", "--cursor", "abc"), 2, "--cursor"),
+                            (("--step", "spec", "--cursor", "999999"), 1, "--cursor 999999"),
+                            (("--step", "spec", "--cursor", str(comments("2")[-1]["id"])), 1, "not a comment of room 1")):
+        r = room("handoff", "1", *args)
+        assert r.returncode == code and why in r.stderr, (args, out(r))
+    assert state_sha() == before and len(comments()) == n
 
 
 def t_handoff():
     set_state("intent=merge PR #12 at " + "a" * 40)
     room("say", "1", "architect", "DECISION-9: go on", check=True, ROOM_SESSION="arch")
     assert "DECISION-9" in room("read", "1", "lead", check=True).stdout
-    cursor = room("cursor", "1", "lead", check=True).stdout.strip()
+    cursor = room("cursor", "1", "lead", check=True).stdout.strip()  # the last comment the lead acted on
     room("say", "1", "architect", "CHANGE-8: rename the greeting, from the next mission", check=True,
-         ROOM_SESSION="arch")  # not yet read by the lead
+         ROOM_SESSION="arch")
+    # cold M4 R1-5: the waiter reads CHANGE-8, moving the cursor file, but the lead hands over before acting on it
+    w = room("wait", "1", "lead", "--timeout", "10", "--interval", "0.2")
+    assert w.returncode == 0 and "CHANGE-8" in w.stdout, out(w)
+    assert room("cursor", "1", "lead", check=True).stdout.strip() != cursor
     gen = block()["lease_generation"]
     snap = os.path.join(tmp, "room-at-push.json")
     pre_push(f'cp "$FAKE_GH_DB" "{snap}"\nexit 0\n')
     try:
-        r = room("handoff", "1", "--step", "spec")
+        r = room("handoff", "1", "--step", "spec", "--cursor", cursor)
     finally:
         no_hooks()
     assert r.returncode == 0, out(r)
@@ -598,7 +610,7 @@ exit 0
 """)
     n = len(comments())
     try:
-        r = room("handoff", "1", "--step", "cold round 1")
+        r = room("handoff", "1", "--step", "cold round 1", "--cursor", str(comments()[-1]["id"]))
     finally:
         no_hooks()
     assert os.path.exists(os.path.join(hooks, "pre-push.fired")), "the race hook did not run"

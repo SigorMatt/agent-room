@@ -23,7 +23,7 @@ in Claude chat and cloud sessions, or `gh auth login` on your own machine.
   room.py merge PR --sha SHA [--allow-hold 5 --decision DECISION-<n>]        gate, then merge naming SHA
   room.py watchdog N [--silent-after 3h]   the watchdog task: LEAD-SILENT (buzzes) when no progress; never writes
   room.py join-line N [--takeover]         print the line that starts a lead
-  room.py handoff N --step STEP            post HANDOFF, record step and cursor, release the lease, print the join line
+  room.py handoff N --step STEP --cursor ID   post HANDOFF, record step and cursor, release the lease, print the join line
   room.py reconcile N                      for a joining lead: the recorded state next to GitHub's facts
   room.py budget                           the mission's elapsed time against its budget (exit 6 over)
 
@@ -2098,7 +2098,8 @@ def add_gate_commands(sub, common):
 # schedules with its own scheduled-task tool: room.py supplies the facts, the text and the state changes
 # around it. Every command here works inside the project's checkout or without one (ROOM_STATE_REMOTE).
 #
-#   watchdog N [--silent-after 3h]   join-line N [--takeover]   handoff N --step STEP   reconcile N   budget
+#   watchdog N [--silent-after 3h]   join-line N [--takeover]   handoff N --step STEP --cursor ID   reconcile N
+#   budget
 #
 # watchdog, reconcile and budget read the pushed state branch and never write it; the watchdog schedules nothing.
 # Intents reconcile recognizes: "merge PR #<n> at <sha>", "open PR <branch or M<k>>", "post <KIND>", "close room".
@@ -2335,10 +2336,18 @@ def cmd_handoff(a):
         raise StateError(f"{PLAYBOOK_DIR}/MISSIONS.md is missing on {STATE_BRANCH}: run '{ME} state init-lead'")
     values = read_block(text)
     require_lease(values, sid, "not handed off")
+    # the last comment the lead acted on, which it names: the cursor file also moves when the waiter merely reads
+    cursor = a.cursor
+    if cursor != "none":
+        try:
+            c = gh(f"repos/{REPO}/issues/comments/{cursor}") or {}
+        except GhError as e:
+            raise StateError(f"not handed off: --cursor {cursor}: {e}")
+        if not (c.get("issue_url") or "").endswith(f"/issues/{a.room}"):
+            raise StateError(f"not handed off: --cursor {cursor} is not a comment of room {a.room}")
     # posted while this session still holds the lease; then step, cursor, intent and the release in one write
     say(a.room, "lead", f"HANDOFF: mission {values.get('mission') or 'none'}, next step {step}\n\n"
                         "Successor: being scheduled now; a NEXT-LEAD-NEEDED follows if that fails.", a)
-    cursor = str(cursor_id(a.room, "lead") or "none")
     updates = {"step": step, "cursor": cursor, "intent": "none", "lease_session": "none"}
     for attempt in (1, 2, 3):
         try:
@@ -2536,6 +2545,8 @@ def add_unattended_commands(sub, common):
                                      "and release the lease in one state write; prints the join line to schedule")
     s.add_argument("room", type=int)
     s.add_argument("--step", required=True, help="the step the successor starts at")
+    s.add_argument("--cursor", required=True, type=from_arg, metavar="ID",
+                   help="the last comment this lead acted on (from a [cursor: ID] line it handled), or none")
     s = leaf("reconcile", cmd_reconcile, "for a joining lead: the recorded state next to GitHub's facts, and a "
                                          "hint on the recorded intent; changes nothing")
     s.add_argument("room", type=int)
