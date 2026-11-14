@@ -31,8 +31,11 @@ now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def done(obj):
-    with open(db_path, "w") as f:
-        json.dump(db, f)
+    if method != "GET":  # a reader must not overwrite a concurrent writer with its stale copy
+        tmp = f"{db_path}.{os.getpid()}"
+        with open(tmp, "w") as f:
+            json.dump(db, f)
+        os.replace(tmp, db_path)  # atomic, so a concurrent reader never sees half a file
     print(json.dumps(obj))
     sys.exit(0)
 
@@ -56,13 +59,21 @@ if parts[3] == "labels" and method == "POST":
 
 if len(parts) == 4 and method == "POST":
     n = str(len(repo["issues"]) + 1)
-    repo["issues"][n] = {"number": int(n), "title": body["title"], "state": "open", "comments": [],
+    repo["issues"][n] = {"number": int(n), "title": body["title"], "body": body.get("body", ""), "state": "open",
+                         "comments": [],
                          "labels": body.get("labels", []), "updated_at": now}
     done({"number": int(n), "html_url": f"https://github.com/{parts[1]}/{parts[2]}/issues/{n}"})
 if len(parts) == 4 and method == "GET":
     done([{"number": i["number"], "title": i["title"], "comments": len(i["comments"]), "updated_at": i["updated_at"]}
           for i in repo["issues"].values()
           if i["state"] == q.get("state", "open") and ("labels" not in q or q["labels"] in i["labels"])])
+
+if len(parts) == 6 and parts[4] == "comments" and method == "GET":  # one comment, by ID
+    for n, i in repo["issues"].items():
+        for c in i["comments"]:
+            if str(c["id"]) == parts[5]:
+                done(dict(c, issue_url=f"https://api.github.com/repos/{parts[1]}/{parts[2]}/issues/{n}"))
+    fail(404, "Not Found")
 
 issue = repo["issues"].get(parts[4])
 if issue is None:
