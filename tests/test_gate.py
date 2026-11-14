@@ -309,7 +309,11 @@ def setup():
     assert "room 1 in SigorMatt/pet" in room("new", "Phase 1", check=True).stdout
     edit_state("PLAYBOOK.md", lambda t: re.sub(r"^room: 0$", "room: 1", t, count=1, flags=re.M))
     edit_state("LEDGER.md", lambda t: t + "| L-1 | cold M3 R1-3 | a finding | later mission | M4 | open |\n"
-                                          "| L-2 | qodo PR #12 #3 | a finding | next phase | phase 2 backlog | open |\n")
+                                          "| L-2 | cold M3 R1-4 | a finding | next phase | phase 2 backlog | open |\n"
+                                          "| L-3 | qodo PR #12 | Greeting text is hard-coded | next phase | "
+                                          "phase 2 backlog | open |\n"
+                                          "| L-4 | cold M3 R1-6 | a finding | later | M4 | fixed in abc1234 |\n"
+                                          "| L-5 | cold M2 R1-5 | a finding | later | M4 | open |\n")
     g("fetch", "-q", "origin")
     g("checkout", "-q", "-B", "main", "origin/main")
     commit("app, lib and tests", {"app.py": "def greet(name):\n    return name\n", "lib/util.py": "X = 1\n",
@@ -612,7 +616,7 @@ def t_every_disposition_form_passes():
 
     def qrows(s):
         return [("1", "Action required", "crash WHEN the name is missing", "app.py", f"fixed in {s['c2']}"),
-                ("2", "Informational", "Greeting text is hard-coded", "", "deferred: L-2 to phase 2 backlog"),
+                ("2", "Informational", "Greeting text is hard-coded", "", "deferred: L-3 to phase 2 backlog"),
                 ("absent", "Action required", "An old finding", "app.py",
                  "owner decision: not a bug, Matthew (DECISION-3)")]
 
@@ -685,6 +689,34 @@ def t_fixed_in_must_come_after_the_finding():  # cold M3 R1-2
     publish()
     r = gate()
     assert r.returncode == 0, out(r)
+
+
+def t_deferral_needs_its_own_open_ledger_row():  # cold M3 R1-17
+    found = [("R1-1", "high", "app.py:2")] + [(f"R1-{i}", "low", "app.py:1") for i in range(2, 7)]
+    mission(findings1=found,
+            cold_rows=lambda s: [("R1-1", "high", "app.py", f"fixed in {s['c2'][:7]}"),
+                                 ("R1-2", "low", "app.py", "deferred: L-1 to M4"),
+                                 ("R1-3", "low", "app.py", "deferred: L-1 to phase 2 backlog"),
+                                 ("R1-4", "low", "app.py", "deferred: L-2 to phase 2 backlog"),
+                                 ("R1-5", "low", "app.py", "deferred: L-5 to M4"),
+                                 ("R1-6", "low", "app.py", "deferred: L-4 to M4")],
+            qodo_rows=lambda s: default_qodo_rows(s)[:1] + [
+                ("2", "Informational", "Greeting text is hard-coded", "app.py", "deferred: L-1 to M4")])
+    r = gate()
+    failed(r, "dispositions", "cold R1-2: ledger L-1 doesn't record this deferral: its source 'cold M3 R1-3' doesn't "
+                              "name cold M3 R1-2",
+           "cold R1-3: ledger L-1 doesn't record this deferral: its target is 'M4', not phase 2 backlog",
+           "cold R1-5: ledger L-5 doesn't record this deferral: its source 'cold M2 R1-5' doesn't name cold M3 R1-5",
+           "cold R1-6: ledger L-4 doesn't record this deferral: its status is 'fixed in abc1234', not open",
+           'Qodo #2 "Greeting text is hard-coded": ledger L-1 doesn\'t record this deferral: its source',
+           "doesn't name qodo PR #12 and the title")
+    assert "cold R1-4" not in line(r, "dispositions"), out(r)
+    assert verdict(r) == "gate: FAIL hold reasons none; fix first: dispositions", out(r)
+    entries = R.ledger_entries("| ID | Source review | Finding | Reason | Target | Status |\n| --- | --- | --- | --- | --- | --- |\n"
+                               "| L-7 | qodo PR #12 | Use `<path>` placeholders | r | M4 | open |\n")
+    assert R.ledger_problems(entries["L-7"], ("qodo", "12", "use <path> PLACEHOLDERS"), "M4") == []
+    assert R.ledger_problems(entries["L-7"], ("qodo", "1", "Use <path> placeholders"), "M4") != []
+    assert R.ledger_problems(dict(entries["L-7"], source="cold M3 R1-20"), ("cold", "M3", "R1-2"), "M4") != []
 
 def t_disposition_failures():
     g("checkout", "-q", "-B", "side", "origin/main")

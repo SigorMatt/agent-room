@@ -1492,9 +1492,40 @@ def machine_lines(text):
     return values
 
 
-def ledger_ids(text):
-    return {r[0].strip("` ") for _, rows in md_tables(text or "") for r in rows
-            if r and re.fullmatch(r"L-\d+", r[0].strip("` "))}
+def ledger_entries(text):
+    """{L-n: {id, source, finding, target, status}} from LEDGER.md's table, the first row of each ID."""
+    out = {}
+    for row in find_table(text or "", ("id", "source", "target", "status"), ("finding",)) or []:
+        lid = row["id"].strip("` ")
+        if re.fullmatch(r"L-\d+", lid):
+            out.setdefault(lid, row)
+    return out
+
+
+def folded(text):
+    return " ".join(text.replace("`", "").split()).lower()
+
+
+def ledger_problems(entry, finding, target):
+    """Why ledger ENTRY doesn't record this deferral: [] when its status is open, its target is TARGET
+    and its source names FINDING: ("cold", M<k>, ID) or ("qodo", PR number, title)."""
+    out = []
+    if folded(entry["status"]) != "open":
+        out.append(f"its status is '{entry['status']}', not open")
+    if folded(entry["target"]) != folded(target):
+        out.append(f"its target is '{entry['target']}', not {target}")
+    kind, where, what = finding
+    source = entry["source"]
+    if kind == "cold":
+        named = all(re.search(rf"(?<![\w-]){re.escape(x)}(?![\w-])", source) for x in (where, what))
+        expected = f"cold {where} {what}"
+    else:
+        named = bool(re.search(rf"PR #{where}(?!\d)", source)) and \
+            any(title_key(what) in title_key(cell) for cell in (source, entry.get("finding", "")))
+        expected = f"qodo PR #{where} and the title"
+    if not named:
+        out.append(f"its source '{source}' doesn't name {expected}")
+    return out
 
 
 def glob_regex(glob):
@@ -1623,7 +1654,8 @@ def review_records(root, sha, mission, pr):
             archived.append({"fetch": k, "path": p, "reviewed": hits[-1] if hits else None,
                              "findings": qodo_findings(text), "header": header_total(text)})
     qodo_text = blob(root, sha, f"reviews/qodo/PR-{pr}/DISPOSITIONS.md")
-    return {"cold": cold, "qodo": archived[-1] if archived else None, "qodo_fetches": archived,
+    return {"mission": mission, "pr": pr, "cold": cold, "qodo": archived[-1] if archived else None,
+            "qodo_fetches": archived,
             "cold_path": f"reviews/cold/{mission}/DISPOSITIONS.md",
             "cold_dispositions": blob(root, sha, f"reviews/cold/{mission}/DISPOSITIONS.md"),
             "qodo_path": f"reviews/qodo/PR-{pr}/DISPOSITIONS.md",
@@ -1710,10 +1742,11 @@ def row_files(cell):
     return out
 
 
-def judge(root, head, label, cell, top, file_cell, ledger, reported=None, room=None):
+def judge(root, head, label, cell, top, file_cell, ledger, reported=None, room=None, finding=None):
     """What is wrong with one dispositions row: [(text, hold reason or None)]. REPORTED is the commit the
     finding was reported against: a cold report's covers:, or the first Qodo fetch holding the title.
-    ROOM (a RoomLog) answers whether an owner decision on a top-severity row is really Matthew's."""
+    ROOM (a RoomLog) answers whether an owner decision on a top-severity row is really Matthew's. LEDGER is
+    ledger_entries(); FINDING names the finding for a deferral's ledger row (see ledger_problems)."""
     form, m = parse_disposition(cell)
     if form is None:
         return [(f"{label} is undecided" + (f" ('{cell}')" if cell.strip() else ""), 2)]
@@ -1725,6 +1758,10 @@ def judge(root, head, label, cell, top, file_cell, ledger, reported=None, room=N
         return [(f"{label} cites {m.group(2)}, but {room.where()} has no trusted {m.group(2)}", 1)]
     if form == "deferred" and m.group(1) not in ledger:
         return [(f"{label}: {m.group(1)} is not in {PLAYBOOK_DIR}/LEDGER.md on {STATE_BRANCH}", None)]
+    if form == "deferred" and finding:
+        lacking = ledger_problems(ledger[m.group(1)], finding, m.group(2))
+        if lacking:
+            return [(f"{label}: ledger {m.group(1)} doesn't record this deferral: {', '.join(lacking)}", None)]
     if form == "fixed":
         short = m.group(1).lower()
         full = resolve_commit(root, short)
@@ -1746,7 +1783,7 @@ def judge(root, head, label, cell, top, file_cell, ledger, reported=None, room=N
 
 
 def check_dispositions(g, root, head, rec, ledger_text, room):
-    reasons, ledger = [], ledger_ids(ledger_text)
+    reasons, ledger = [], ledger_entries(ledger_text)
     # cold: a row for every finding ID of every report
     want, reported = {}, {}
     for r in rec["cold"]:
@@ -1771,7 +1808,7 @@ def check_dispositions(g, root, head, rec, ledger_text, room):
             n_cold += 1
             top = TOP_COLD in (want.get(fid), row.get("severity", "").strip("` ").lower())
             reasons += judge(root, head, f"cold {fid}", row["disposition"], top, row.get("file", ""), ledger,
-                             reported.get(fid), room)
+                             reported.get(fid), room, ("cold", rec["mission"], fid))
         missing = [fid for fid in want if fid not in seen]
         if rows is not None and missing:
             reasons.append((f"{rec['cold_path']} has no row for {', '.join(missing)}", None))
@@ -1805,7 +1842,7 @@ def check_dispositions(g, root, head, rec, ledger_text, room):
             top = TOP_QODO in ((t.get("severity") or "").lower(), row.get("severity", "").strip("` ").lower())
             label = f"Qodo #{row['#'].strip() or '?'} \"{' '.join(row['finding'].split())}\""
             reasons += judge(root, head, label, row["disposition"], top, row.get("file", ""), ledger, t.get("first"),
-                             room)
+                             room, ("qodo", rec["pr"], t.get("title") or " ".join(row["finding"].split())))
         if mode == "on" and q is None:
             reasons.append((f"{path} says qodo: on, but no Code Review comment is archived for this PR", None))
         elif mode == "on":
