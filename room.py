@@ -2187,14 +2187,15 @@ def shallow_cut(path, sha):
         return False
 
 
-def last_change(path, key):
-    """(sha, committer time) of the newest commit on the fetched state branch whose MISSIONS.md changes KEY in
-    the machine block (the commit that adds it counts), or None. Deepens a shallow clone as far as needed."""
+def last_change(path, counts=lambda key: key != "cursor"):
+    """(sha, committer time) of the newest commit on the fetched state branch whose MISSIONS.md changes a key
+    of the machine block for which counts(key) holds (the commit that adds the block counts), or None. By
+    default every key but cursor counts. Deepens a shallow clone as far as needed."""
     rel = f"{PLAYBOOK_DIR}/MISSIONS.md"
 
     def value(sha):
         try:
-            return read_block(blob(path, sha, rel) or "").get(key)
+            return {k: v for k, v in read_block(blob(path, sha, rel) or "").items() if counts(k)}
         except StateError:
             return None
     newer = None
@@ -2233,6 +2234,21 @@ def mission_push():
     return best
 
 
+def mission_merge():
+    """(number, merge time) of the newest merged PR from a mission/* head in this repo, or None. GitHub
+    deletes the merged branch, so its last push is gone; the merge itself is progress."""
+    best = None
+    for p in gh(f"repos/{REPO}/pulls?state=closed&sort=updated&direction=desc&per_page=100") or []:
+        head = p.get("head") or {}
+        if not (head.get("ref") or "").startswith("mission/") or \
+                ((head.get("repo") or {}).get("full_name") or "").lower() != REPO.lower():
+            continue
+        t = parse_time(p.get("merged_at"))
+        if t is not None and (best is None or t > best[1]):
+            best = (p.get("number"), t)
+    return best
+
+
 def cmd_watchdog(a):
     path, values = pushed_state()  # fetched and read from git objects: the watchdog never writes state
     step, mission = values.get("step") or "none", values.get("mission") or "none"
@@ -2240,15 +2256,18 @@ def cmd_watchdog(a):
     if why:
         print(f"quiet: {why}")
         return 0
-    found = []
-    change = last_change(path, "step")
+    found = []  # progress: a state write other than the cursor, a mission branch push, a mission PR's merge
+    change = last_change(path)
     if change:
-        found.append((change[1], f"step change {change[0][:12]}"))
+        found.append((change[1], f"state change {change[0][:12]}"))
     push = mission_push()
     if push:
         found.append((push[1], f"{push[0]} pushed"))
+    merge = mission_merge()
+    if merge:
+        found.append((merge[1], f"PR #{merge[0]} merged"))
     if not found:
-        raise StateError(f"no progress to measure: {PLAYBOOK_DIR}/MISSIONS.md has no step in its history")
+        raise StateError(f"no progress to measure: {PLAYBOOK_DIR}/MISSIONS.md has no machine block in its history")
     progress, what = max(found)
     now = time.time()
     if now - progress < a.silent_after:
@@ -2370,7 +2389,7 @@ def intent_hint(a, intent, path, msgs, pr):
     kind = message_kind(m.group(1)) if m else None
     if kind:
         # a numbered kind is unique in the room; any other counts only if posted after the intent was recorded
-        since = None if re.search(r"-\d+$", kind) else last_change(path, "intent")
+        since = None if re.search(r"-\d+$", kind) else last_change(path, lambda k: k == "intent")
         hits = [x for x in leads if message_kind(x["text"]) == kind and
                 (since is None or (parse_time(x["at"]) or 0) >= since[1] - INTENT_SKEW)]
         if hits:
@@ -2496,9 +2515,9 @@ def add_unattended_commands(sub, common):
         s.set_defaults(fn=state_command(fn))
         return s
 
-    s = leaf("watchdog", cmd_watchdog, "the watchdog task, as role watchdog: post LEAD-SILENT (it buzzes) when "
-                                       "neither the recorded step nor a mission branch moved for DURATION; "
-                                       "never writes state or schedules anything")
+    s = leaf("watchdog", cmd_watchdog, "the watchdog task, as role watchdog: buzz and post LEAD-SILENT when no "
+                                       "state write (but the cursor's), mission branch push or mission PR merge "
+                                       "happened for DURATION; never writes state or schedules anything")
     s.add_argument("room", type=int)
     s.add_argument("--silent-after", type=duration_arg, default=3 * 3600, metavar="DURATION",
                    help="like 3h or 45m (default 3h; drills use a short one)")

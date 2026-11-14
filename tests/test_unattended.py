@@ -281,7 +281,7 @@ def t_watchdog_recent_step_change():
     set_state("step=cold round 1")
     n, before = len(alarms()), state_sha()
     r = watchdog()
-    assert r.returncode == 0 and re.search(r"^quiet: progress \d+s ago \(step change [0-9a-f]{12} at \S+\), under "
+    assert r.returncode == 0 and re.search(r"^quiet: progress \d+s ago \(state change [0-9a-f]{12} at \S+\), under "
                                            r"3h00m$", r.stdout, re.M), out(r)
     assert len(alarms()) == n and state_sha() == before
     t = set_state("step=cold round 2", hours=1)  # a step change written now, dated an hour ago
@@ -313,16 +313,44 @@ def t_watchdog_recent_mission_push():
     g("checkout", "-q", "-B", "main", "origin/main")
 
 
+def t_watchdog_progress_counts_the_merge_and_its_bookkeeping():
+    # cold M4 R1-1: GitHub deletes a merged mission branch, and merge writes intent and pr but no step
+    age_alarms()
+    set_state("step=gate", hours=5)
+    push_mission(0.1)
+    assert "quiet: progress" in watchdog().stdout
+    g("push", "-q", "origin", "--delete", MISSION_BRANCH)
+    g("checkout", "-q", "-B", "main", "origin/main")
+    merged = dict(state="closed", merged=True, merged_at=iso(time.time() - 300), merge_commit_sha="c" * 40)
+    gh_cfg(pulls={"12": pull(12, MISSION_BRANCH, **merged)})
+    r = watchdog()
+    assert r.returncode == 0 and "quiet: progress" in r.stdout and "(PR #12 merged at" in r.stdout, out(r)
+    # a merged PR from another repo's mission/* branch is no progress of this lead's
+    gh_cfg(pulls={"12": dict(pull(12, MISSION_BRANCH, **merged),
+                             head={"ref": MISSION_BRANCH, "sha": "d" * 40, "repo": {"full_name": "mallory/pet"}})})
+    r = watchdog()
+    assert "alarm: no progress for 5h" in r.stdout, out(r)
+    age_alarms()
+    gh_cfg()
+    set_state("intent=merge PR #12 at " + "b" * 40, "pr=12")  # merge's own state write, no step change
+    r = watchdog()
+    assert "quiet: progress" in r.stdout and "(state change " in r.stdout, out(r)
+    set_state("intent=none", "pr=none", hours=5)
+    set_state("cursor=77")  # reading the room is no progress
+    r = watchdog()
+    assert "alarm: no progress for 5h" in r.stdout, out(r)
+
+
 def t_watchdog_quiet_when_paused_stopped_or_done():
     age_alarms()
     set_state("step=build again", hours=5)
     for status in ("paused", "stopped", "done"):
-        set_state(f"status={status}")
+        set_state(f"status={status}", hours=5)
         n, before = len(alarms()), state_sha()
         r = watchdog()
         assert r.returncode == 0 and r.stdout.strip() == f"quiet: status is {status}", out(r)
         assert len(alarms()) == n and state_sha() == before
-    set_state("status=running")
+    set_state("status=running", hours=5)
     r = watchdog()
     assert r.returncode == 0 and "alarm" in r.stdout, out(r)
 
@@ -410,7 +438,7 @@ def t_watchdog_quiet_for_another_room():
 def t_watchdog_missing_status_reads_running():
     age_alarms()
     set_state("step=build 3", hours=5)
-    edit_state("MISSIONS.md", lambda t: t.replace("status: running\n", "", 1))
+    edit_state("MISSIONS.md", lambda t: t.replace("status: running\n", "", 1), hours=5)
     assert "status" not in block()
     r = watchdog()
     assert r.returncode == 0 and "alarm" in r.stdout, out(r)
