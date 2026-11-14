@@ -336,10 +336,41 @@ def t_say_refused_without_lease():
     assert "sent #" in room("say", "1", "lead", "STATUS: holder speaks", session="L1").stdout
     assert "sent #" in room("say", "1", "architect", "DECISION-1: go", session="L2").stdout  # architects aren't leased
     assert "sent #" in room("say", "1", "lead", "STATUS: no worktree", session="L2", state="nowhere").stdout
+    r = room("close", "1", "lead", "DONE: phase 1", session="L2", check=False)  # closing posts a message too
+    assert r.returncode == 5 and "held by L1" in r.stderr, (r.returncode, r.stderr)
+    assert "Phase 1" in room("rooms").stdout, "a refused close leaves the room open"
     transcript = room("read", "1", "--all").stdout
     assert "STATUS: building" not in transcript and "from stdin" not in transcript, transcript
+    assert "DONE: phase 1" not in transcript
     for text in ("via stdin", "holder speaks", "DECISION-1", "no worktree"):
         assert text in transcript, (text, transcript)
+
+
+def t_single_branch_checkout():
+    # cloud checkouts fetch only main, so every state fetch must name its refspec
+    single = os.path.join(tmp, "work", "pet-single")
+    g("clone", "-q", "--single-branch", "--branch", "main", PET, single)
+    assert g("-C", single, "config", "--get-all", "remote.origin.fetch").stdout.split() == [
+        "+refs/heads/main:refs/remotes/origin/main"]
+    kw = dict(state="S", cwd=single, session="S1")
+    assert room("state", "path", **kw).stdout.strip() == sdir("S")
+    assert os.path.isfile(os.path.join(sdir("S"), ".git")), "a worktree of the single-branch checkout"
+    room_b("state", "set", "step=from-b")  # another machine moves the branch
+    assert room("state", "get", "step", **kw).stdout.strip() == "from-b"
+    tracking = g("-C", single, "rev-parse", "refs/remotes/origin/agent-room/state").stdout.strip()
+    assert tracking == sha(PET, "agent-room/state")
+    gen = int(room("lease", "take", **kw).stdout)
+    assert room("lease", "check", **kw).returncode == 0
+    assert int(room_b("lease", "take").stdout) == gen + 1
+    r = room("lease", "check", check=False, **kw)
+    assert r.returncode == 5 and "held by B" in r.stdout, r.stdout
+    room("state", "sync", **kw)
+    room_b("state", "set", "step=b2")
+    with open(playbook_path("S", "LEDGER.md"), "a") as f:
+        f.write("| L-5 | stale |\n")
+    r = room("state", "commit", "-m", "stale", check=False, **kw)
+    assert r.returncode == 3 and "state moved" in r.stderr, (r.returncode, r.stderr)
+    assert room("state", "next", "counter", **kw).stdout.strip() == str(int(block()["counter"]))
 
 
 # --- preflight
