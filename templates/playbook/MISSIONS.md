@@ -12,9 +12,11 @@ cursor: none
 counter: 0
 intent: none
 waiting_for_owner: no
+status: running
+mission_started: none
 ```
 
-Owned by the lead. Only `room.py` edits the block above (`state set`, `state next`, `lease take`); edit the rest by hand and commit with `room.py state commit -m MSG`.
+Owned by the lead. Only `room.py` edits the block above (`state set`, `state next`, `lease take`, `handoff`); edit the rest by hand and commit with `room.py state commit -m MSG`. `status` is running, paused, stopped or done; `mission_started` is the ISO-8601 UTC time the mission's spec was recorded.
 
 ## Phase 1
 

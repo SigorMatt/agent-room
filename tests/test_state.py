@@ -246,7 +246,8 @@ def t_state_init_lead():
     b = block()
     assert b["lease_session"] == "none" and b["lease_generation"] == "0" and b["counter"] == "0", b
     assert list(b) == ["lease_session", "lease_generation", "phase", "room", "mission", "step", "pr", "cursor",
-                       "counter", "intent", "waiting_for_owner"], list(b)
+                       "counter", "intent", "waiting_for_owner", "status", "mission_started"], list(b)
+    assert b["status"] == "running" and b["mission_started"] == "none", b
     before = sha(PET, "agent-room/state")
     r = room_b("state", "init-lead")
     assert "already present" in r.stdout and sha(PET, "agent-room/state") == before, r.stdout
@@ -390,11 +391,14 @@ def t_broken_state_worktree_is_rebuilt():
         r = room(*args, check=False, **kw)
         assert r.returncode in (0, 5) and len(r.stderr.strip().splitlines()) == 1, (args, r.returncode, r.stderr)
         assert re.fullmatch(r"\[state worktree .* was broken \(no git data left to save; its files are kept\); moved "
-                            r"it to .*/R\.broken-\d{8}T\d{6}Z(-\d+)? and made a new one\]", r.stderr.strip()), r.stderr
+                            r"it to .*/R\.broken-\d{8}T\d{6}Z(-\d+)?, without its \.git link, so it holds plain files, "
+                            r"and made a new one\]", r.stderr.strip()), r.stderr
         assert g("-C", sdir("R"), "rev-parse", "HEAD").stdout.strip() == sha(PET, "agent-room/state")
     assert room("state", "path", **kw).stderr == "", "a healthy worktree is left alone"
     aside = [d for d in os.listdir(os.path.join(tmp, "state")) if d.startswith("R.broken-")]
     assert len(aside) == 2, aside
+    # cold M4 R2-8: the rebuilt worktree may get the moved one's admin dir name, so no .git may point there
+    assert not any(os.path.lexists(os.path.join(tmp, "state", d, ".git")) for d in aside), aside
 
 
 def t_refuses_a_dir_that_is_not_the_state_worktree():
@@ -433,9 +437,11 @@ def t_recreated_state_branch_rebuilds_stale_worktrees():
     for state, kw in (("GA", here), ("GB", away)):
         r = room("state", "path", state=state, **kw)
         assert r.stdout.strip() == sdir(state), r.stdout
+        link = r", without its \.git link, so it holds plain files," if state == "GA" else ""  # linked, or a clone
         assert re.fullmatch(r"\[state worktree .* is stale \(no history of the recreated agent-room/state\); saved "
                             r"its HEAD as refs/agent-room/broken-\d{8}T\d{6}Z(-\d+)? \([0-9a-f]{12}\) in \S+; moved "
-                            r"it to .*\.broken-\d{8}T\d{6}Z(-\d+)? and made a new one\]", r.stderr.strip()), r.stderr
+                            r"it to .*\.broken-\d{8}T\d{6}Z(-\d+)?" + link + r" and made a new one\]", r.stderr.strip()), \
+            r.stderr
         assert g("-C", sdir(state), "rev-parse", "HEAD").stdout.strip() == new
     # the project checkout itself is still refused, even at a commit that holds docs/playbook/
     os.makedirs(os.path.join(work, "docs", "playbook"))
@@ -553,15 +559,25 @@ def t_stale_worktree_local_work_is_saved():
     assert r.returncode == 0, (r.returncode, r.stderr)
     m = re.fullmatch(r"\[state worktree (\S+) is stale \(no history of the recreated agent-room/state\); saved its "
                      r"HEAD and uncommitted changes as (refs/agent-room/broken-\d{8}T\d{6}Z(?:-\d+)?) \(([0-9a-f]{12})\) "
-                     r"in (\S+); moved it to (\S+) and made a new one\]", r.stderr.strip())
+                     r"in (\S+); moved it to (\S+), without its \.git link, so it holds plain files, and made a new "
+                     r"one\]", r.stderr.strip())
     assert m and m.group(1) == wt and m.group(4) == os.path.realpath(os.path.join(work, ".git")), r.stderr
-    ref = m.group(2)
+    ref, aside = m.group(2), m.group(5)
     assert g("-C", work, "rev-parse", ref).stdout.strip().startswith(m.group(3))
     assert g("-C", work, "rev-parse", f"{ref}^").stdout.strip() == unpushed, "the unpushed commit is kept"
     assert "intent: open PR for M3" in g("-C", work, "show", f"{ref}:docs/playbook/MISSIONS.md").stdout
     assert g("-C", work, "show", f"{ref}:docs/playbook/NOTES.md").stdout == "untracked notes\n"
-    assert os.path.isdir(m.group(5)) and "intent: open PR" in open(os.path.join(m.group(5), "docs", "playbook",
-                                                                                 "MISSIONS.md")).read()
+    assert os.path.isdir(aside) and "intent: open PR" in open(os.path.join(aside, "docs", "playbook",
+                                                                            "MISSIONS.md")).read()
+    # cold M4 R2-8: the moved copy holds plain files; git there can't reach the rebuilt worktree, which got its
+    # admin dir's name
+    assert not os.path.lexists(os.path.join(aside, ".git"))
+    assert open(os.path.join(wt, ".git")).read().strip().endswith("/worktrees/lw-A"), "the name the old one had"
+    new_head = g("-C", wt, "rev-parse", "HEAD").stdout.strip()
+    for args in (("rev-parse", "HEAD"), ("add", "-A"), ("commit", "-qm", "restore old work")):
+        assert g("-C", aside, *args, check=False).returncode != 0, args
+    assert g("-C", wt, "rev-parse", "HEAD").stdout.strip() == new_head and \
+        g("-C", wt, "status", "--porcelain").stdout == "", "the rebuilt worktree is untouched"
 
 
 def push_edit(repo, name, fn):
@@ -578,6 +594,13 @@ def push_edit(repo, name, fn):
 AGAIN = dict(cwd=os.path.join(tmp, "work", "again"), ROOM_REPO="SigorMatt/again", state="GA")
 BREAK_FENCE = ("```agent-room-state\n", "```agent-room-state:\n")  # no longer the block's info string
 MANGLE = ("```agent-room-state\n", "```agent-room-state  # machine block\n")
+
+
+def drop_closing_fence(text):
+    """MISSIONS.md TEXT without its machine block's closing fence, whatever the block's last key (the template's
+    block has gained keys, so no fixed key line marks the end)."""
+    end = text.index("\n```\n", text.index("```agent-room-state"))
+    return text[:end + 1] + text[end + 5:]
 VALID = "MISSIONS.md must keep a valid agent-room-state block with the current lease"
 
 
@@ -698,8 +721,7 @@ def t_strict_block_parsing():
             edit_file(playbook_path(S["FL1"], "MISSIONS.md"), lambda t: t.replace(
                 "### Parked questions\n", "### Parked questions\n\n- state before the takeover:\n" + quote, 1))
             assert "pushed" in room("state", "commit", "-m", "note", session="L1", state=S["FL1"], **K).stdout
-            push_edit(repo, "MISSIONS.md", lambda t: t.replace("waiting_for_owner: no\n```\n",
-                                                               "waiting_for_owner: no\n", 1))
+            push_edit(repo, "MISSIONS.md", drop_closing_fence)
         else:
             edit_file(playbook_path(S["FL1"], "MISSIONS.md"), lambda t: t.replace(
                 "### Parked questions\n", "### Parked questions\n\n- state before the takeover:\n" + same_info, 1))
@@ -726,8 +748,7 @@ def t_block_repair_deletes_nothing():
         "### Parked questions\n\n- none", "### Parked questions\n\n- Q-1: error seen:\n\n```text\nTraceback\n```\n", 1))
     assert "pushed" in room("state", "commit", "-m", "note", session="L1", state=S["FL1"], **K).stdout
     before = remote_file(repo, "docs/playbook/MISSIONS.md")
-    push_edit(repo, "MISSIONS.md", lambda t: t.replace(*MANGLE, 1).replace("waiting_for_owner: no\n```\n",
-                                                                         "waiting_for_owner: no\n", 1))
+    push_edit(repo, "MISSIONS.md", lambda t: drop_closing_fence(t.replace(*MANGLE, 1)))
     damaged = remote_file(repo, "docs/playbook/MISSIONS.md")
     r = room("state", "set", "step=build", session="L1", state=S["FL1"], **K)
     assert "restores it" in r.stderr, r.stderr

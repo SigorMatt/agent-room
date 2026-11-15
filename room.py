@@ -21,6 +21,12 @@ in Claude chat and cloud sessions, or `gh auth login` on your own machine.
   room.py preflight --role architect|lead [--fix]              check repo, state branch, environment
   room.py gate  PR [--mission M<k>] [--allow-hold 5 --decision DECISION-<n>]   the merge gate
   room.py merge PR --sha SHA [--allow-hold 5 --decision DECISION-<n>]        gate, then merge naming SHA
+  room.py watchdog N [--silent-after 3h]   the watchdog task: LEAD-SILENT (buzzes) when no progress; never writes
+  room.py join-line N [--takeover]         print the line that starts a lead
+  room.py handoff N --step STEP --cursor ID   post HANDOFF, record step and cursor, release the lease, print the join line
+  room.py intent N "INTENT"                record before acting (post KIND intents note the room's last comment)
+  room.py reconcile N                      for a joining lead: the recorded state next to GitHub's facts
+  room.py budget                           the mission's elapsed time against its budget (exit 6 over)
 
 Every room command takes --repo OWNER/NAME. Without it: $ROOM_REPO, else the
 GitHub remote of the current checkout. --session SID names this participant;
@@ -47,7 +53,7 @@ the gate) and 6 if GitHub finds the PR not mergeable.
 Environment:
   ROOM_REPO         default repo for rooms
   ROOM_SESSION      this participant's session ID (see --session)
-  ROOM_TRUST        comma-separated GitHub logins whose comments count (default: your gh login)
+  ROOM_TRUST        comma-separated GitHub logins whose comments count besides your gh login's
   ROOM_STATE        where read cursors live (default ~/.agent-room)
   ROOM_STATE_DIR    the state branch's worktree (default ~/agent-room-state/OWNER__NAME)
   ROOM_STATE_REMOTE git URL to clone the state branch from when not run inside the project's checkout
@@ -56,6 +62,7 @@ Environment:
   ROOM_NTFY_TOKEN   optional ntfy access token (only raises limits on a paid ntfy.sh tier)
 """
 import argparse
+import datetime
 import calendar
 import html
 import json
@@ -158,9 +165,9 @@ def default_trust():
         return {REPO.split("/")[0].lower()}
 
 
-def doc_url(path):
-    """A link to a file of agent-room itself, at the version this client belongs to."""
-    return f"https://github.com/{HOME_REPO}/blob/{VERSION}/{path}"
+def doc_url(path, version=None):
+    """A link to a file of agent-room itself, at the version this client belongs to (or VERSION given)."""
+    return f"https://github.com/{HOME_REPO}/blob/{version or VERSION}/{path}"
 
 
 # --- identity
@@ -565,6 +572,7 @@ BLOCK_LINE = re.compile(r"([a-z][a-z0-9_]*):[ \t]*(.*?)[ \t]*")
 STATE_KEY = re.compile(r"[a-z][a-z0-9_]*")
 TEMPLATE_URL = "https://raw.githubusercontent.com/{repo}/{version}/templates/playbook/{name}"
 FIRST_GITIGNORE = "__pycache__/\n*.pyc\n.venv/\nnode_modules/\n.env\n.DS_Store\n"
+STATUSES = ("running", "paused", "stopped", "done")  # the machine block's status; a missing one reads as running
 STATE_MARKER = "agent-room-state"  # in the git dir of each state worktree room.py makes
 EXIT_MOVED, EXIT_LEASE = 3, 5
 
@@ -740,9 +748,15 @@ def move_aside(path, why, save=False):
     if os.path.lexists(aside):
         aside += f"-{os.getpid()}"
     saved = save_local_work(path, stamp, aside) if save else None
+    linked = os.path.isfile(os.path.join(path, ".git"))
     os.rename(path, aside)
-    print(f"[state worktree {path} {why}; " + (f"{saved}; " if saved else "") +
-          f"moved it to {aside} and made a new one]", file=sys.stderr)
+    if linked:
+        # its .git names an admin dir in the project's repo, which the rebuilt worktree at PATH gets after the
+        # prune: left in place, git in the moved copy would act on the new worktree. Its work is on the ref.
+        os.remove(os.path.join(aside, ".git"))
+    print(f"[state worktree {path} {why}; " + (f"{saved}; " if saved else "") + f"moved it to {aside}" +
+          (", without its .git link, so it holds plain files," if linked else "") + " and made a new one]",
+          file=sys.stderr)
 
 
 def ensure_worktree():
@@ -1052,6 +1066,11 @@ def change_state(a, msg, fn, need_lease=True):
     if need_lease:
         require_lease(values, session_id(a))
     updates = fn(values)
+    moved = [k for k in ("step", "pr") if k in updates and updates[k] != values.get(k)]
+    if moved and "waiting_for_owner" not in updates and (values.get("waiting_for_owner") or "no").strip().lower() != "no":
+        # the wait is over once the step or the pr moves (merge records pr), unless this write says otherwise
+        updates = {**updates, "waiting_for_owner": "no"}
+        print(f"[waiting_for_owner set back to no: the {' and the '.join(moved)} moved]", file=sys.stderr)
     if note:
         print(f"[{note}; this write restores it]", file=sys.stderr)
     with open(f, "w") as fh:
@@ -1093,10 +1112,29 @@ def pushed_lease(path):
     return {}, f"{what} on {STATE_BRANCH}, and no earlier commit has a valid one: no session holds the lease"
 
 
-def lease_holder():
-    """(session, generation, note) of the lease on the freshly fetched state branch (see pushed_lease)."""
+def pushed_state():
+    """(worktree path, machine block, note) on the freshly fetched state branch: the pushed block, else the
+    last valid one (see pushed_lease), and a note saying so; the block is {} when none parses. Reads git
+    objects only, so local work in the worktree is neither used nor touched."""
     path = ensure_worktree()  # fetched
     values, note = pushed_lease(path)
+    return path, values, note
+
+
+def recorded_state():
+    """(path, block) from pushed_state for commands that only read it: a note goes to stderr, and no valid
+    block anywhere in the history is an error."""
+    path, values, note = pushed_state()
+    if not values:
+        raise BlockUnreadable(f"{note}: the lead runs '{ME} state init-lead'")
+    if note:
+        print(f"[{note}]", file=sys.stderr)
+    return path, values
+
+
+def lease_holder():
+    """(session, generation, note) of the lease on the freshly fetched state branch (see pushed_lease)."""
+    _, values, note = pushed_state()
     holder, gen = lease_of(values)
     return holder, gen, note
 
@@ -1222,17 +1260,27 @@ def cmd_state_get(a):
     print(values[a.key])
 
 
+def single_line(key, value):
+    """VALUE stripped, or StateError if it holds any break read_block's splitlines() honours."""
+    if f"x{value}x".splitlines() != [f"x{value}x"]:
+        raise StateError(f"the value of {key} must be a single line (no line or paragraph separators)")
+    return value.strip()
+
+
 def cmd_state_set(a):
     updates = {}
     for pair in a.pairs:
         key, sep, value = pair.partition("=")
         if not sep or not STATE_KEY.fullmatch(key):
             raise StateError(f"expected KEY=VALUE with a lowercase key, got {pair!r}")
-        if f"x{value}x".splitlines() != [f"x{value}x"]:  # every break read_block's splitlines() honours
-            raise StateError(f"the value of {key} must be a single line (no line or paragraph separators)")
+        value = single_line(key, value)
         if key in LEASE_KEYS:
             raise StateError(f"{key} changes only through 'lease take' and 'lease release'")
-        updates[key] = value.strip()
+        if key == "status" and value not in STATUSES:
+            raise StateError(f"status must be one of {', '.join(STATUSES)}, not {value!r}")
+        if key == "mission_started" and value != "none" and parse_time(value) is None:
+            raise StateError(f"mission_started must be an ISO-8601 UTC time such as {iso(time.time())}, or none")
+        updates[key] = value
     change_state(a, f"state: set {', '.join(updates)}", lambda values: updates)
     print("set " + " ".join(f"{k}={v}" for k, v in updates.items()))
 
@@ -1262,7 +1310,10 @@ def cmd_lease_take(a):
         if holder not in ("none", sid) and not a.takeover:
             raise StateExit(EXIT_MOVED, f"lease held by {holder}: stand down (generation {gen}; "
                                         "--takeover only for a lead Matthew starts after LEAD-SILENT)")
-        return {"lease_session": sid, "lease_generation": next_int(values, "lease_generation")}
+        # a lead that takes the lease is running: a status left at paused, stopped or done mustn't mute the watchdog.
+        # waiting_for_owner stays: a successor may join while the owner still hasn't answered, and a stale flag is
+        # ended by a step or pr change, and doesn't mute the watchdog once anything has progressed since it was set
+        return {"lease_session": sid, "lease_generation": next_int(values, "lease_generation"), "status": "running"}
 
     for _ in range(2):
         try:
@@ -2307,15 +2358,25 @@ def check_checks(g, root, head, pr_updated=None):
              + ("; no GitHub Actions runs for HEAD" if no_actions else ""))
 
 
-def room_number(playbook, missions):
+def current_room(playbook, values):
+    """(number, where) of the current room: PLAYBOOK.md's `room:` line, where the architect records it at each
+    phase's kickoff, else the machine block VALUES' room; None if neither names one. The gate and the watchdog
+    both use it."""
     m = re.search(r"^room:[ \t]*(\d+)", playbook or "", re.M)
-    if m and int(m.group(1)) > 0:
-        return int(m.group(1))
+    for n, where in ((m.group(1) if m else None, "PLAYBOOK.md"), ((values or {}).get("room"), "MISSIONS.md")):
+        if (n or "").strip().isdigit() and int(n) > 0:
+            return int(n), where
+    return None
+
+
+def room_number(playbook, missions):
+    """The current room's number (see current_room), with MISSIONS.md as text; None if no room is recorded."""
     try:
-        n = int(read_block(missions or "").get("room", "0"))
-    except (StateError, ValueError):
-        return None
-    return n if n > 0 else None
+        values = read_block(missions or "")
+    except StateError:
+        values = {}
+    found = current_room(playbook, values)
+    return found[0] if found else None
 
 
 class RoomLog:
@@ -2508,7 +2569,9 @@ def run_gate(a, expect_sha=None):
 
     # 2. the lease
     sid = session_id(a)
-    holder, gen, _ = lease_holder()
+    holder, gen, note = lease_holder()
+    if note:
+        print(f"[{note}]", file=sys.stderr)
     if holder != sid:
         print(f"✗ lease: held by {holder} (generation {gen}), not this session ({sid})")
         print("gate: lease lost")
@@ -2616,6 +2679,691 @@ def add_gate_commands(sub, common):
 # --- end of review records, merge gate and merge
 
 
+# --- unattended operation: watchdog, join line, handoff, reconcile, budget
+#
+# "Lead rotation, pausing and continuity" of docs/design/v1.md; spec docs/design/m4-unattended.md. The agent
+# schedules with its own scheduled-task tool: room.py supplies the facts, the text and the state changes
+# around it. Every command here works inside the project's checkout or without one (ROOM_STATE_REMOTE).
+#
+#   watchdog N [--silent-after 3h]   join-line N [--takeover]   handoff N --step STEP --cursor ID   reconcile N
+#   budget
+#
+# watchdog, reconcile and budget read the pushed state branch and never write it; the watchdog schedules nothing.
+# Intents reconcile recognizes: "merge PR #<n> at <sha>", "open PR <branch or M<k>>", "post <KIND> in room <n> after
+# #<id>" and "close room <n> after #<id>" (as 'intent' records them).
+
+WAITING_FOR_OWNER = "waiting for owner"
+QUIET_STATUSES = ("paused", "stopped", "done")
+PROGRESS_KEYS = ("step", "pr")  # the machine-block keys whose change is progress; merge records pr
+PRESTART_HOURS = 12  # a room no lead has joined gets one alarm this long after its issue was opened
+DEFAULT_BUDGET_HOURS = 8
+
+
+def duration_arg(s):
+    m = re.fullmatch(r"(?:(\d+)h)?(?:(\d+)m)?(?:(\d+)s)?", s.strip())
+    secs = int(m.group(1) or 0) * 3600 + int(m.group(2) or 0) * 60 + int(m.group(3) or 0) if m else 0
+    if secs <= 0:
+        raise argparse.ArgumentTypeError("a duration above zero, like 3h, 45m, 1h30m or 90s")
+    return secs
+
+
+def iso(t):
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(t))
+
+
+def parse_time(s):
+    """Seconds since the epoch of an ISO-8601 time (Z, an offset, or none for UTC), or None if it isn't one."""
+    s = (s or "").strip()
+    if not s:
+        return None
+    try:
+        d = datetime.datetime.fromisoformat(s[:-1] + "+00:00" if s[-1] in "Zz" else s)
+    except ValueError:
+        return None
+    return (d if d.tzinfo else d.replace(tzinfo=datetime.timezone.utc)).timestamp()
+
+
+def span(secs):
+    secs = int(max(secs, 0))
+    h, m = secs // 3600, secs % 3600 // 60
+    return f"{h}h{m:02d}m" if h else f"{m}m" if m else f"{secs}s"
+
+
+def status_of(values):
+    return values.get("status") or "running"
+
+
+def halted(values):
+    """Whether the status is paused, stopped or done, in any case; any other value counts as running."""
+    return status_of(values).strip().lower() in QUIET_STATUSES
+
+
+def quiet_reason(a, values, playbook):
+    """Why the watchdog stays quiet whatever the progress, or None."""
+    room = current_room(playbook, values)
+    if halted(values):
+        holder, _ = lease_of(values)
+        own = (values.get("room") or "").strip()
+        if own.isdigit() and int(own) > 0 and room and int(own) != room[0]:
+            # e.g. phase 1's DONE, while the architect has opened the next phase's room: it says nothing of this one
+            print(f"note: status is {status_of(values)}, but for room {own}, not the current room {room[0]}, so it "
+                  "counts as running")
+        elif holder == "none":  # the lead posted PAUSED, STOPPED or DONE and released the lease
+            return f"status is {status_of(values)} and the lease is released"
+        else:  # written, but the lease is still held: the lead may have died before its post and release
+            print(f"note: status is {status_of(values)}, but {holder} still holds the lease, so it counts as running")
+    step = values.get("step") or "none"
+    if step.strip().lower().startswith(WAITING_FOR_OWNER):
+        return f"step is {step}"
+    if room and room[0] != a.room:
+        return (f"room {a.room} is not the current room ({room[1]} records room {room[0]}); this watchdog is left "
+                "from an earlier phase: delete it")
+    return None
+
+
+def say(room, role, text, a=None, buzz=None):
+    """Post TEXT as ROLE through cmd_say: its role guard, its lease check on send and its buzz (BUZZ as
+    --buzz/--no-buzz: None leaves it to the kind)."""
+    cmd_say(argparse.Namespace(room=room, role=role, text=text, buzz=buzz, session=getattr(a, "session", None)))
+
+
+def shallow_cut(path, sha):
+    """Whether the state history stops at SHA only because the clone is shallow."""
+    f = os.path.join(path, git_out("rev-parse", "--git-path", "shallow", cwd=path))
+    try:
+        with open(f) as fh:
+            return sha in fh.read().split()
+    except OSError:
+        return False
+
+
+def last_change(path, counts=lambda key: key in PROGRESS_KEYS):
+    """(sha, committer time) of the newest commit on the fetched state branch whose MISSIONS.md changes a key
+    of the machine block for which counts(key) holds (the commit that adds the block counts), or None. By
+    default only step and pr count. A commit whose block doesn't parse changes nothing: it is skipped, so
+    breaking the block is no progress. Deepens a shallow clone as far as needed."""
+    rel = f"{PLAYBOOK_DIR}/MISSIONS.md"
+
+    def value(sha):
+        try:
+            return {k: v for k, v in read_block(blob(path, sha, rel) or "").items() if counts(k)}
+        except StateError:
+            return None
+    newer = None
+    for _ in range(50):
+        newer, oldest = None, None  # newer: (sha, time, value) of the valid commit after the one being read
+        for entry in git_out("log", "--topo-order", "--format=%H %ct", STATE_REF, "--", rel, cwd=path).splitlines():
+            sha, ct = entry.split()
+            oldest = sha
+            v = value(sha)
+            if v is None:
+                continue
+            if newer and v != newer[2]:
+                return newer[0], int(newer[1])
+            newer = (sha, ct, v)
+        if oldest is None or not shallow_cut(path, oldest):
+            break
+        before = git_out("rev-list", "--count", STATE_REF, cwd=path)
+        git("fetch", "-q", "--deepen=200", "origin", f"+refs/heads/{STATE_BRANCH}:{STATE_REF}", cwd=path)
+        if git_out("rev-list", "--count", STATE_REF, cwd=path) == before:
+            break
+    return (newer[0], int(newer[1])) if newer else None
+
+
+def mission_push(heads):
+    """(branch, committer time) of the newest mission/* branch tip among HEADS ({branch: sha}), or None."""
+    best = None
+    for branch, sha in sorted(heads.items()):
+        if not branch.startswith("mission/"):
+            continue
+        try:
+            c = gh(f"repos/{REPO}/commits/{sha}") or {}
+        except GhError as e:
+            if http_status(e) not in (404, 422):  # deleted after its merge since we listed it: no push to count
+                raise
+            continue
+        t = parse_time(((c.get("commit") or {}).get("committer") or {}).get("date"))
+        if t is not None and (best is None or t > best[1]):
+            best = (branch, t)
+    return best
+
+
+def mission_branches(heads, values, missions):
+    """The mission branches whose merges count: the mission/* branches on the remote, those MISSIONS.md names for
+    the recorded mission (GitHub deletes a branch on merge), and the head of the recorded PR."""
+    out = {b for b in heads if b.startswith("mission/")}
+    mission = (values or {}).get("mission") or ""
+    if re.fullmatch(r"M\d+", mission):
+        out |= set(re.findall(rf"\bmission/{mission}(?:-[\w.-]+)?(?![\w.-])", missions or ""))
+    n = re.search(r"\d+", (values or {}).get("pr") or "")
+    if n:
+        status, p = gh_try(f"repos/{REPO}/pulls/{n.group()}")
+        if status == 200 and isinstance(p, dict):
+            ref = (p.get("head") or {}).get("ref") or ""
+            if ref.startswith("mission/"):
+                out.add(ref)
+        elif status not in (404, 422):
+            raise GhError(f"can't read PR #{n.group()}: {p}")
+    return out
+
+
+def mission_merge(branches):
+    """(number, merge time) of the newest merged PR from one of BRANCHES in this repo, or None. Closed PRs are
+    read per branch (head=OWNER:branch), page by page, so no number of other PRs can hide a merge."""
+    owner, best = REPO.split("/")[0], None
+    for branch in sorted(branches):
+        page = 1
+        while True:
+            batch = gh(f"repos/{REPO}/pulls?state=closed&head={owner}:{branch}&per_page=100&page={page}") or []
+            for p in batch:
+                head = p.get("head") or {}
+                if head.get("ref") != branch or ((head.get("repo") or {}).get("full_name") or "").lower() != REPO.lower():
+                    continue
+                t = parse_time(p.get("merged_at"))
+                if t is not None and (best is None or t > best[1]):
+                    best = (p.get("number"), t)
+            if len(batch) < 100:
+                break
+            page += 1
+    return best
+
+
+def outside_progress(values=None, missions=None):
+    """[(time, what)] of the progress outside the state branch: the newest mission push and mission PR merge."""
+    found, heads = [], remote_heads()
+    push = mission_push(heads)
+    if push:
+        found.append((push[1], f"{push[0]} pushed"))
+    merge = mission_merge(mission_branches(heads, values, missions))
+    if merge:
+        found.append((merge[1], f"PR #{merge[0]} merged"))
+    return found
+
+
+def alarms_since(a, progress):
+    """The room's trusted watchdog LEAD-SILENTs newer than PROGRESS (all, if None) whose buzz didn't fail, oldest
+    first. An alarm whose buzz failed doesn't count, so it is tried again."""
+    out = []
+    for m in map(parse, comments(a.room, iso(progress) if progress is not None else None)):
+        t = parse_time(m["at"])
+        if m["role"] == "watchdog" and trusted(m) and message_kind(m["text"]) == "LEAD-SILENT" and t and \
+                (progress is None or t > progress) and not re.search(r"\(buzz failed\b", m["text"]):
+            out.append(m)
+    return out
+
+
+def alarm(a, text):
+    """Buzz first (click: the room), then post TEXT saying how the buzz went, with no buzz of its own."""
+    err = buzz_message(a.room, "watchdog", "LEAD-SILENT", {})
+    print("[buzz sent]" if err is None else f"[buzz failed: {err}]")
+    say(a.room, "watchdog", f"{text} " + ("(buzz sent)" if err is None else f"(buzz failed: {err})"), a, buzz=False)
+
+
+def unreadable_state_alarm(a, path, reason):
+    """No machine block anywhere, or no state branch: no lead can write state either, so the pipeline is stuck.
+    The same DURATION and one alarm per stall apply, measured from the last state-branch commit, if any."""
+    reason = re.sub(r"[:;] (?:the architect runs|the lead runs|run) '.*$", "", reason.replace(ME, "room.py"))[:300]
+    found = outside_progress()
+    if path:
+        t = git("log", "-1", "--format=%ct", STATE_REF, cwd=path, check=False).stdout.strip()
+        if t.isdigit():
+            found.append((int(t), f"{STATE_BRANCH} commit"))
+    progress, what = max(found) if found else (None, None)
+    now = time.time()
+    if progress is not None and now - progress < a.silent_after:
+        print(f"quiet: state unreadable ({reason}), but progress {span(now - progress)} ago ({what} at "
+              f"{iso(progress)}), under {span(a.silent_after)}")
+        return 0
+    # only an earlier "state unreadable" alarm reports this, and only as the newest alarm: an ordinary stall alarm,
+    # or one after which the state came back, says nothing of the state being gone now
+    seen = alarms_since(a, progress)
+    seen = seen[-1:] if seen and "LEAD-SILENT: state unreadable" in seen[-1]["text"] else []
+    if seen:
+        print(f"quiet: LEAD-SILENT #{seen[-1]['id']} at {seen[-1]['at']} already reports this stall")
+        return 0
+    print(f"alarm: state unreadable ({reason})")
+    alarm(a, f"LEAD-SILENT: state unreadable ({reason})")
+    return 0
+
+
+def prestart_alarm(a):
+    """Before any lead has joined room N (no trusted lead LEAD ONLINE there), the state may be missing or still
+    the previous phase's: quiet, with a note, until PRESTART_HOURS after the room's issue was opened, then one
+    alarm. Returns the exit code, or None once a lead has joined, when the usual rules apply."""
+    if any(m["role"] == "lead" and trusted(m) and message_kind(m["text"]) == "LEAD ONLINE"
+           for m in map(parse, comments(a.room))):
+        return None
+    opened = parse_time((gh(f"repos/{REPO}/issues/{a.room}") or {}).get("created_at"))
+    if opened is None or time.time() - opened < PRESTART_HOURS * 3600:
+        print(f"quiet: no lead has joined room {a.room} yet" +
+              (f" (opened {span(time.time() - opened)} ago)" if opened is not None else ""))
+        return 0
+    seen = alarms_since(a, None)  # only one alarm for it
+    if seen:
+        print(f"quiet: no lead has joined room {a.room} yet; LEAD-SILENT #{seen[-1]['id']} already reports it")
+        return 0
+    print(f"alarm: no lead has joined room {a.room} in {PRESTART_HOURS}h (opened {iso(opened)})")
+    alarm(a, f"LEAD-SILENT: no lead has joined room {a.room} in {PRESTART_HOURS}h")
+    return 0
+
+
+def cmd_watchdog(a):
+    code = prestart_alarm(a)  # first: before any lead joins, missing state, flags and status say nothing
+    if code is not None:
+        return code
+    try:
+        path, values, note = pushed_state()  # fetched and read from git objects: the watchdog never writes state
+    except StateError as e:
+        # only a state branch that ls-remote doesn't list is no state; any other failure (a fetch that broke on
+        # the network) exits 1 without posting, and the next run tries again
+        if STATE_BRANCH in remote_heads():
+            raise StateError(f"can't read {STATE_BRANCH} ({e}); no alarm: the next run tries again")
+        return unreadable_state_alarm(a, None, f"{STATE_BRANCH} doesn't exist in {REPO}")
+    if not values:
+        return unreadable_state_alarm(a, path, note)
+    if note:  # the pushed block is damaged: the last valid one stands in
+        print(f"note: {note}")
+    step, mission = values.get("step") or "none", values.get("mission") or "none"
+    why = quiet_reason(a, values, pushed_text(path, "PLAYBOOK.md"))
+    if why:
+        print(f"quiet: {why}")
+        return 0
+    # progress, not chatter (v1): a step or pr change, a mission branch push, a mission PR's merge. Lease takes,
+    # handoffs at the same step, intents, the counter and the cursor don't count, so a lead in a loop alarms
+    found = outside_progress(values, pushed_text(path, "MISSIONS.md"))
+    change = last_change(path)
+    if change:
+        found.append((change[1], f"step or pr change {change[0][:12]}"))
+    if not found:
+        return unreadable_state_alarm(a, path, f"{PLAYBOOK_DIR}/MISSIONS.md has no step in its history")
+    progress, what = max(found)
+    if (values.get("waiting_for_owner") or "").strip().lower() == "yes":
+        # it mutes only while nothing has progressed since the commit that set it; after that it is stale
+        flag = last_change(path, lambda k: k == "waiting_for_owner")
+        if flag is None or progress <= flag[1]:
+            print("quiet: waiting_for_owner is yes" + (f" (set at {iso(flag[1])}, no progress since)" if flag else ""))
+            return 0
+        print(f"note: waiting_for_owner is yes, but {what} at {iso(progress)} came after it was set at "
+              f"{iso(flag[1])}, so it is stale")
+    now = time.time()
+    if now - progress < a.silent_after:
+        print(f"quiet: progress {span(now - progress)} ago ({what} at {iso(progress)}), "
+              f"under {span(a.silent_after)}")
+        return 0
+    seen = alarms_since(a, progress)  # one alarm per stall
+    if seen:
+        print(f"quiet: LEAD-SILENT #{seen[0]['id']} at {seen[0]['at']} already reports this stall")
+        return 0
+    print(f"alarm: no progress for {span(now - progress)} ({what} at {iso(progress)})")
+    alarm(a, f"LEAD-SILENT: no progress since {iso(progress)} (step {step}, mission {mission})")
+    return 0
+
+
+def pinned_version(path=None):
+    """The pipeline version PLAYBOOK.md pins on the state branch, else VERSION: sessions run the pinned tag,
+    and links name it (v1.md, "Versioning and upgrades"), so a pin bumped mid-mission reaches the next lead."""
+    try:
+        if path is None:
+            path = ensure_worktree()  # fetched
+        m = re.search(r"^pipeline:[ \t]*(\S+)", pushed_text(path, "PLAYBOOK.md") or "", re.M)
+    except StateError as e:
+        print(f"[can't read the pinned version ({e}); using {VERSION}]", file=sys.stderr)
+        return VERSION
+    if m and re.fullmatch(r"v\d+(\.\d+)*(-[\w.]+)?|main", m.group(1)):
+        return m.group(1)
+    print(f"[PLAYBOOK.md pins no pipeline version; using {VERSION}]", file=sys.stderr)
+    return VERSION
+
+
+def join_line(room, takeover=False, version=None):
+    version = version or pinned_version()
+    line = f"Join agent room {room} in {REPO} as lead, pipeline {version}. Follow LEAD.md: {doc_url('LEAD.md', version)}"
+    if takeover:
+        line += " Take over the lease (lease take --takeover): the previous lead stopped without handing over."
+    return line
+
+
+def cmd_join_line(a):
+    print(join_line(a.room, a.takeover))
+
+
+def cmd_handoff(a):
+    sid = session_id(a)
+    step = single_line("--step", a.step)
+    if not step:
+        raise StateError("--step needs the step the successor starts at")
+    path = ensure_worktree()  # fetched
+    p = pending(path)
+    if p:  # change_state would refuse after HANDOFF is posted; refuse before it instead
+        raise StateError(f"not handed off: the state worktree {path} has {p}: push them with '{ME} state commit "
+                         f"-m MSG', or drop them with '{ME} state sync'")
+    values, note = pushed_lease(path)  # the last valid block when the pushed one is damaged
+    if note:
+        print(f"[{note}]", file=sys.stderr)
+    require_lease(values, sid, "not handed off")
+    # the last comment the lead acted on, which it names: the cursor file also moves when the waiter merely reads
+    cursor = a.cursor
+    if cursor != "none":
+        try:
+            c = gh(f"repos/{REPO}/issues/comments/{cursor}") or {}
+        except GhError as e:
+            raise StateError(f"not handed off: --cursor {cursor}: {e}")
+        if not (c.get("issue_url") or "").endswith(f"/issues/{a.room}"):
+            raise StateError(f"not handed off: --cursor {cursor} is not a comment of room {a.room}")
+    # (a) record step, cursor and intent=none, holding the lease; (b) post HANDOFF, still holding it; (c) release it.
+    # If (a) fails, nothing is posted; if (c) fails, the room has the HANDOFF and the lead must release by hand.
+    def write(msg, updates):
+        for attempt in (1, 2, 3):
+            try:
+                return change_state(a, msg, lambda v: updates)
+            except StateMoved:  # someone else wrote the state branch meanwhile: re-read, re-check the lease, re-apply
+                if attempt == 3:
+                    raise
+            except StateError:
+                reset_to_remote(path)  # drop the unpushed commit, so the next try starts clean
+                raise
+    try:
+        write(f"handoff: {sid} records step {step} for its successor",
+              {"step": step, "cursor": cursor, "intent": "none"})
+    except StateMoved:
+        raise StateExit(EXIT_MOVED, f"not handed off: {STATE_BRANCH} kept moving, so nothing was posted; run "
+                                    "handoff again")
+    say(a.room, "lead", f"HANDOFF: mission {values.get('mission') or 'none'}, next step {step}\n\n"
+                        "Successor: being scheduled now; a NEXT-LEAD-NEEDED follows if that fails.", a)
+    try:
+        write(f"handoff: {sid} releases the lead lease", {"lease_session": "none"})
+    except (StateError, StateMoved, StateExit) as e:
+        print(f"lease not released: {str(e) or f'{STATE_BRANCH} kept moving'}", file=sys.stderr)
+        print(f"HANDOFF is posted; run '{ME} lease release' again", file=sys.stderr)
+        return 1
+    print(f"recorded step {step}, cursor {cursor}, intent none; lease released by {sid}")
+    print("Schedule a one-time task about a minute from now whose prompt is the join line below. If that fails: "
+          f"{ME} say {a.room} lead 'NEXT-LEAD-NEEDED: ...' --repo {REPO}")
+    print(join_line(a.room, version=pinned_version(path)))
+
+
+def is_merged(p):
+    return bool(p.get("merged") or p.get("merged_at"))
+
+
+def pr_state(p):
+    if is_merged(p):
+        return f"merged as {p.get('merge_commit_sha') or '?'}"
+    if p.get("state") == "open":
+        return f"open at {(p.get('head') or {}).get('sha') or '?'}"
+    return "closed without merging"
+
+
+def pr_problem(p):
+    """Why reconcile doesn't count PR object P as the lead's, or None. On a public repo anyone can open a PR,
+    even from a branch named like the mission's: it counts only from this repo, by a trusted author, into main."""
+    head_repo = ((p.get("head") or {}).get("repo") or {}).get("full_name") or ""
+    author = (p.get("user") or {}).get("login") or ""
+    if head_repo.lower() != REPO.lower():
+        return f"its head is in {head_repo or 'an unknown repo'}, not {REPO}"
+    if author.lower() not in TRUST:
+        return f"its author {author or '?'} is not trusted"
+    if (p.get("base") or {}).get("ref") != "main":
+        return f"its base is {(p.get('base') or {}).get('ref') or '?'}, not main"
+    return None
+
+
+def pull_requests():
+    out, page = [], 1
+    while True:
+        batch = gh(f"repos/{REPO}/pulls?state=all&per_page=100&page={page}") or []
+        out += batch
+        if len(batch) < 100:
+            return out
+        page += 1
+
+
+def intent_hint(a, intent, path, msgs, pr):
+    """The one-line verdict on a recorded intent: done (clear it), not done (redo it), or unknown."""
+    leads = [m for m in msgs if m["role"] == "lead"]
+    m = re.fullmatch(r"merge PR #(\d+) at ([0-9a-fA-F]{7,40})", intent)
+    if m:
+        n, p = m.group(1), pr(int(m.group(1)))
+        if p is None:
+            return f"intent unknown: PR #{n} can't be read; check it by hand"
+        if pr_problem(p):
+            return f"intent unknown: PR #{n} doesn't count ({pr_problem(p)}); check it by hand"
+        if is_merged(p):
+            return f"intent done: clear it (PR #{n} is {pr_state(p)}; finish the bookkeeping)"
+        if p.get("state") == "open":
+            return f"intent not done: redo it (PR #{n} is {pr_state(p)}; run the gate, then merge)"
+        return (f"intent not done: PR #{n} was closed without merging, so it can't be merged: clear the intent, "
+                "and reopen the PR or escalate")
+    m = re.fullmatch(r"open PR (?:for |from )?(\S+)", intent)
+    if m:
+        ref = m.group(1)
+        want = re.compile(re.escape(ref) if ref.startswith("mission/") else rf"mission/{re.escape(ref)}(?:-.+)?")
+        named = [p for p in pull_requests() if want.fullmatch((p.get("head") or {}).get("ref") or "")]
+        hits = [p for p in named if not pr_problem(p)]
+        ignored = f"; ignored {len(named) - len(hits)} from another repo or author" if len(named) > len(hits) else ""
+        live = [p for p in hits if is_merged(p) or p.get("state") == "open"]
+        if live:
+            p = max(live, key=lambda p: p.get("number", 0))
+            return f"intent done: clear it (PR #{p.get('number')} from {p['head']['ref']} is {pr_state(p)}; record it)"
+        if hits:
+            p = max(hits, key=lambda p: p.get("number", 0))
+            return (f"intent not done: redo it (PR #{p.get('number')} from {p['head']['ref']} was closed without "
+                    f"merging; open a new one{ignored})")
+        return f"intent not done: redo it (no PR from {ref}{ignored})"
+    m = re.fullmatch(r"post (.+?)(?: in room (\d+))?(?: after #(\d+))?", intent)
+    kind = message_kind(m.group(1)) if m else None
+    if kind:
+        # 'intent' records the room and its last comment ID: a later trusted lead message of the kind in that room
+        # did it. Without an ID, only a numbered kind, unique in the room, can be judged. No clocks involved.
+        where = int(m.group(2)) if m.group(2) else a.room
+        after = int(m.group(3)) if m.group(3) else None
+        if after is None and not re.search(r"-\d+$", kind):
+            return (f"intent unknown: which {kind}? Record post intents with '{ME} intent N \"post {kind}\"', "
+                    "which notes the room's last comment")
+        if where != a.room:
+            leads = [x for x in map(parse, comments(where)) if trusted(x) and x["role"] == "lead"]
+        place = f"room {where}" if m.group(2) else "the room"
+        hits = [x for x in leads if message_kind(x["text"]) == kind and (after is None or x["id"] > after)]
+        if hits:
+            return f"intent done: clear it ({kind} is in {place}: #{hits[-1]['id']})"
+        return f"intent not done: redo it (no {kind} in {place}" + (f" after #{after})" if after is not None else ")")
+    m = re.fullmatch(r"close (?:the )?room(?: (\d+))?(?: after #(\d+))?", intent)
+    if m:
+        if m.group(1) and int(m.group(1)) != a.room:  # e.g. phase 1's DONE, still in the block in phase 2
+            return f"intent from an earlier room: clear it (close room {m.group(1)}; this is room {a.room})"
+        issue = gh(f"repos/{REPO}/issues/{a.room}") or {}
+        if issue.get("state") != "closed":
+            return f"intent not done: redo it (room {a.room} is open)"
+        closes = [x for x in leads if message_kind(x["text"]) in ("DONE", "STOPPED")]
+        if m.group(2):
+            # 'intent' recorded the room's last comment: a later trusted lead DONE or STOPPED is the closing note,
+            # posted before the close (as the protocol does) or after it (as close does with a text)
+            after = int(m.group(2))
+            notes, since = [x for x in closes if x["id"] > after], f"after #{after}"
+        else:  # recorded without an ID: the note close posts after closing
+            closed = parse_time(issue.get("closed_at"))
+            notes = [x for x in closes if closed is not None and (parse_time(x["at"]) or 0) >= closed]
+            since = "came after it closed"
+        if notes:
+            kind = message_kind(notes[-1]["text"])
+            return f"intent done: clear it (room {a.room} is closed, closing {kind} #{notes[-1]['id']})"
+        return f"intent not done: redo it (room {a.room} is closed, but no lead DONE or STOPPED {since})"
+    return ("intent unknown: check it by hand (reconcile knows: merge PR #<n> at <sha>, open PR <branch or M<k>>, "
+            "post <KIND>, close room)")
+
+
+def cmd_intent(a):
+    """Record before acting: the intent, in its own state write, for room N, which must be the current room. A
+    post intent also records the room and its last comment ID (post KIND in room N after #ID), so reconcile can
+    tell a later post of that kind from an earlier one, in the right room."""
+    text = single_line("intent", a.intent)
+    if not text:
+        raise StateError("say what is about to happen (merge PR #<n> at <sha>, open PR <branch>, post <KIND>, "
+                         "close room), or none")
+    path, values, _ = pushed_state()
+    found = current_room(pushed_text(path, "PLAYBOOK.md"), values)
+    if found and found[0] != a.room:
+        raise StateError(f"not recorded: room {a.room} is not the current room ({found[1]} records room "
+                         f"{found[0]})")
+    m = re.fullmatch(r"post\s+(.+)", text)
+    if m:
+        kind = message_kind(m.group(1))
+        if not kind:
+            raise StateError(f"a post intent names the message kind: post ESCALATION-3, post PAUSED…, not {text!r}")
+        text = f"post {kind} in room {a.room} after #{max((c['id'] for c in comments(a.room)), default=0)}"
+    elif re.fullmatch(r"close (?:the )?room(?: \d+)?(?: after #\d+)?", text):
+        # with its room, so that left in the block after DONE it can't send the next phase to close its own room,
+        # and with the room's last comment, so that a DONE posted before the close counts
+        text = f"close room {a.room} after #{max((c['id'] for c in comments(a.room)), default=0)}"
+    change_state(a, f"intent: {text}", lambda v: {"intent": text})
+    print(f"intent: {text}")
+
+
+def cmd_reconcile(a):
+    path, values = recorded_state()  # it changes nothing: no state write, no cursor move
+    print(f"recorded state ({PLAYBOOK_DIR}/MISSIONS.md on {STATE_BRANCH} at "
+          f"{git_out('rev-parse', '--short', STATE_REF, cwd=path)}):")
+    for k, v in values.items():
+        print(f"  {k}: {v}")
+    cache = {}
+
+    def pr(n):
+        if n not in cache:
+            try:
+                cache[n] = gh(f"repos/{REPO}/pulls/{n}") or {}
+            except GhError as e:
+                print(f"[can't read PR #{n}: {e}]", file=sys.stderr)
+                cache[n] = None
+        return cache[n]
+
+    recorded = values.get("pr") or "none"
+    n = re.search(r"\d+", recorded) if recorded != "none" else None
+    if n:
+        p = pr(int(n.group()))
+        print(f"PR: #{n.group()} " + ("unreadable" if p is None else
+                                      f"ignored: {pr_problem(p)}" if pr_problem(p) else pr_state(p)))
+    else:
+        print("PR: none recorded")
+
+    msgs = [m for m in map(parse, comments(a.room)) if trusted(m)]
+
+    def latest(roles, kinds):
+        hits = [m for m in msgs if m["role"] in roles and message_kind(m["text"]) in kinds]
+        return hits[-1] if hits else None
+
+    try:
+        counter = int(values.get("counter") or 0)
+    except ValueError:
+        counter = 0
+    if counter > 0:
+        held = latest(("lead",), (f"ESCALATION-{counter}", f"MERGE-HOLD-{counter}"))
+        if held:
+            answer = latest(("architect", "human"), (f"DECISION-{counter}",))
+            print(f"counter {counter}: {message_kind(held['text'])} is in the room (#{held['id']}), " +
+                  (f"answered by DECISION-{counter} (#{answer['id']})" if answer else f"no DECISION-{counter} yet"))
+        else:
+            print(f"counter {counter}: neither ESCALATION-{counter} nor MERGE-HOLD-{counter} is in the room")
+    else:
+        print("counter 0: no escalation or hold yet")
+
+    h = latest(("lead",), ("HANDOFF",))
+    if h:
+        first = h["text"].splitlines()[0]
+        named = re.search(r"next step (.+)$", first)
+        step = values.get("step") or "none"
+        note = "names the recorded step" if named and named.group(1).strip() == step else \
+            f"the recorded step is {step}"
+        online = [m for m in msgs if m["role"] == "lead" and m["id"] > h["id"] and message_kind(m["text"]) == "LEAD ONLINE"]
+        if online:
+            note += f"; LEAD ONLINE #{online[-1]['id']} came after it"
+        print(f"HANDOFF: #{h['id']} at {h['at']} from lead · {h['session'] or '?'}: {first} ({note})")
+    else:
+        print("HANDOFF: none in the room")
+
+    intent = values.get("intent") or "none"
+    print(f"intent: {intent}")
+    if intent != "none":
+        print(intent_hint(a, intent, path, msgs, pr))
+    if halted(values):
+        print(f"status: {status_of(values)}: lease take sets it back to running when a lead resumes the work")
+    drill = re.search(r"^drill:[ \t]*(\S.*?)[ \t]*$", pushed_text(path, "PLAYBOOK.md") or "", re.M)
+    if drill:
+        print(f"drill: {drill.group(1)}")
+    return 0
+
+
+def phase_budget(playbook, phase):
+    """(hours, source) of the "Mission budget: <n> hours" phrase under PLAYBOOK.md's "### Phase <phase>:"
+    heading, else the default eight hours."""
+    m = re.search(rf"^###[ \t]+Phase[ \t]+{re.escape(phase)}:[^\n]*\n(.*?)(?=^#{{1,3}}[ \t]|\Z)", playbook or "",
+                  re.M | re.S)
+    # tolerant: markdown emphasis around the label or the number; h, hr, hrs, hour or hours; decimals
+    b = re.search(r"mission budget[*_` \t]*:[*_` \t]*(\d+(?:\.\d+)?|\.\d+)[*_` \t]*(?:hours?|hrs?|h)(?![a-z])",
+                  m.group(1), re.I) if m else None
+    if b and float(b.group(1)) > 0:
+        return float(b.group(1)), f"phase {phase} in PLAYBOOK.md"
+    return float(DEFAULT_BUDGET_HOURS), "the default"
+
+
+def cmd_budget(a):
+    path, values = recorded_state()
+    mission, phase = values.get("mission") or "none", values.get("phase") or "1"
+    started = values.get("mission_started") or "none"
+    if started == "none":
+        print(f"budget: mission_started is none (mission {mission}); record it with the mission's spec: "
+              f"'{ME} state set mission_started={iso(time.time())}'")
+        return 1
+    t0 = parse_time(started)
+    if t0 is None:
+        raise StateError(f"mission_started is {started!r}, not an ISO-8601 time")
+    hours, source = phase_budget(pushed_text(path, "PLAYBOOK.md"), phase)
+    elapsed, budget = time.time() - t0, hours * 3600
+    line = f"budget: mission {mission} started {iso(t0)}, {span(elapsed)} elapsed of {hours:g}h ({source})"
+    if elapsed > budget:
+        print(f"{line}: over by {span(elapsed - budget)}; post an ESCALATION, never another automatic retry")
+        return EXIT_FAIL
+    print(f"{line}: {span(budget - elapsed)} left")
+    return 0
+
+
+def add_unattended_commands(sub, common):
+    """argparse wiring for watchdog, join-line, handoff, reconcile and budget."""
+    def leaf(name, fn, help):
+        s = sub.add_parser(name, parents=[common], help=help, description=help)
+        s.set_defaults(fn=state_command(fn))
+        return s
+
+    s = leaf("watchdog", cmd_watchdog, "the watchdog task, as role watchdog: buzz and post LEAD-SILENT when no "
+                                       "step or pr change, mission branch push or mission PR merge happened for "
+                                       "DURATION; never writes state or schedules anything")
+    s.add_argument("room", type=int)
+    s.add_argument("--silent-after", type=duration_arg, default=3 * 3600, metavar="DURATION",
+                   help="like 3h or 45m (default 3h; drills use a short one)")
+    s = leaf("join-line", cmd_join_line, "print the line that starts a lead")
+    s.add_argument("room", type=int)
+    s.add_argument("--takeover", action="store_true",
+                   help="for the lead Matthew starts after LEAD-SILENT: take the lease with lease take --takeover")
+    s = leaf("handoff", cmd_handoff, "record step, cursor and intent=none holding the lease, post HANDOFF, then "
+                                     "release the lease; prints the join line to schedule")
+    s.add_argument("room", type=int)
+    s.add_argument("--step", required=True, help="the step the successor starts at")
+    s.add_argument("--cursor", required=True, type=from_arg, metavar="ID",
+                   help="the last comment this lead acted on (from a [cursor: ID] line it handled), or none")
+    s = leaf("intent", cmd_intent, "record the intended outside action before taking it (needs the lease); a post "
+                                   "intent also records the room's last comment ID")
+    s.add_argument("room", type=int)
+    s.add_argument("intent", help='e.g. "post ESCALATION-3", "merge PR #12 at <sha>", "open PR mission/M2-x", '
+                                  '"close room", or none')
+    s = leaf("reconcile", cmd_reconcile, "for a joining lead: the recorded state next to GitHub's facts, and a "
+                                         "hint on the recorded intent; changes nothing")
+    s.add_argument("room", type=int)
+    leaf("budget", cmd_budget, "the mission's elapsed time against its phase's budget (exit 0 under, 6 over, "
+                               "1 without mission_started)")
+
+
+# --- end of unattended operation
+
+
 def from_arg(s):
     if s != "none" and not s.isdigit():
         raise argparse.ArgumentTypeError("--from takes a comment ID, or none for the room's start")
@@ -2656,6 +3404,7 @@ def main():
     sub.add_parser("ping").set_defaults(fn=cmd_ping, repo=None)
     add_state_commands(sub, common)  # M2-B: state, lease, preflight
     add_gate_commands(sub, common)   # M3: gate, merge
+    add_unattended_commands(sub, common)  # M4: watchdog, join-line, handoff, reconcile, budget
 
     a = p.parse_args()
     SESSION_OPT = getattr(a, "session", None)
@@ -2665,8 +3414,9 @@ def main():
     if not REPO:
         sys.exit("which repo? Run inside the project's checkout, or pass --repo OWNER/NAME")
     try:
+        # v1: ROOM_TRUST adds logins to the gh login; it never replaces it
         env_trust = os.environ.get("ROOM_TRUST", "")
-        TRUST = {s.strip().lower() for s in env_trust.split(",") if s.strip()} or default_trust()
+        TRUST = default_trust() | {s.strip().lower() for s in env_trust.split(",") if s.strip()}
         sys.exit(a.fn(a) or 0)
     except GhError as e:
         sys.exit(f"github error: {e}")

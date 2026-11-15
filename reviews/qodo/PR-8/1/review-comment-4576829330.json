@@ -1,0 +1,71 @@
+{
+  "url": "https://api.github.com/repos/SigorMatt/agent-room/pulls/comments/4576829330",
+  "pull_request_review_id": 5908804387,
+  "id": 4576829330,
+  "node_id": "PRRC_kwDOVVYvuc8AAAABEMzfkg",
+  "diff_hunk": "@@ -1262,7 +1310,9 @@ def take(values):\n         if holder not in (\"none\", sid) and not a.takeover:\n             raise StateExit(EXIT_MOVED, f\"lease held by {holder}: stand down (generation {gen}; \"\n                                         \"--takeover only for a lead Matthew starts after LEAD-SILENT)\")\n-        return {\"lease_session\": sid, \"lease_generation\": next_int(values, \"lease_generation\")}\n+        # a lead that takes the lease is running: a status left at paused, stopped or done mustn't mute the watchdog\n+        return {\"lease_session\": sid, \"lease_generation\": next_int(values, \"lease_generation\"), \"status\": \"running\",\n+                \"waiting_for_owner\": \"no\"}",
+  "path": "room.py",
+  "commit_id": "773c792c4bd9cd29e83b38c3938296b7ec81ad0e",
+  "original_commit_id": "773c792c4bd9cd29e83b38c3938296b7ec81ad0e",
+  "user": {
+    "login": "qodo-code-review[bot]",
+    "id": 151058649,
+    "node_id": "BOT_kgDOCQD42Q",
+    "avatar_url": "https://avatars.githubusercontent.com/in/484649?v=4",
+    "gravatar_id": "",
+    "url": "https://api.github.com/users/qodo-code-review%5Bbot%5D",
+    "html_url": "https://github.com/apps/qodo-code-review",
+    "followers_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/followers",
+    "following_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/following{/other_user}",
+    "gists_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/gists{/gist_id}",
+    "starred_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/starred{/owner}{/repo}",
+    "subscriptions_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/subscriptions",
+    "organizations_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/orgs",
+    "repos_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/repos",
+    "events_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/events{/privacy}",
+    "received_events_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/received_events",
+    "type": "Bot",
+    "user_view_type": "public",
+    "site_admin": false
+  },
+  "body": "<img src=\"https://img.shields.io/badge/Medium-634FD1?style=flat-square\" height=\"20px\" alt=\"Remediation recommended\">\n\n5\\. A waiting successor gets a false silence alarm <code>🐞 Bug</code> <code>≡ Correctness</code>\n\n<pre>\n<b><i>cmd_lease_take</i></b> now always writes <b><i>waiting_for_owner: no</i></b> along with the lease, so a lead that\nhands off while an <b><i>ESCALATION-n</i></b>/<b><i>MERGE-HOLD-n</i></b> is still unanswered leaves its successor with the\nflag cleared, even though <b><i>handoff</i></b> at the same step kept it. If the owner takes longer than\n<b><i>--silent-after</i></b> (3h by default) to answer, the watchdog posts and buzzes <b><i>LEAD-SILENT</i></b> while a\nhealthy lead is waiting, which invites a <b><i>--takeover</i></b> lead to start beside the live one.\n</pre>\n\n\n<details>\n<summary><strong>Agent Prompt</strong></summary>\n\n```\n## Issue description\n`lease take` always resets `waiting_for_owner` to `no`. A successor that takes over while the owner still hasn't answered an ESCALATION or MERGE-HOLD loses the flag, and the watchdog raises a false LEAD-SILENT after DURATION.\n\n## Fix Focus Areas\n- room.py[1313-1315]\n- room.py[2953-2960]\n\n## Recommended Fix\nStop resetting `waiting_for_owner` in `cmd_lease_take`. The watchdog already treats the flag as stale once progress follows the commit that set it (the S1-1 logic), and `change_state` clears it when `step` or `pr` moves. If a reset on take is still wanted, make it conditional: reset only when the latest ESCALATION or MERGE-HOLD for `counter` already has a DECISION, or when the flag-setting commit is older than the latest progress. Add a test: handoff while waiting at the same step, successor `lease take`, watchdog past DURATION stays quiet.\n```\n\n<code>ⓘ Copy this prompt and use it to remediate the issue with your preferred AI generation tools</code>\n</details>\n\n[Dismiss ↗](https://app.qodo.ai/findings/c9863915-a8d3-47e3-89e2-fd12fac97e30?action=dismiss&origin=git) | [View ↗](https://app.qodo.ai/findings/c9863915-a8d3-47e3-89e2-fd12fac97e30)",
+  "created_at": "2026-11-15T03:13:26Z",
+  "updated_at": "2026-11-15T03:13:26Z",
+  "html_url": "https://github.com/SigorMatt/agent-room/pull/8#discussion_r4576829330",
+  "pull_request_url": "https://api.github.com/repos/SigorMatt/agent-room/pulls/8",
+  "_links": {
+    "self": {
+      "href": "https://api.github.com/repos/SigorMatt/agent-room/pulls/comments/4576829330"
+    },
+    "html": {
+      "href": "https://github.com/SigorMatt/agent-room/pull/8#discussion_r4576829330"
+    },
+    "pull_request": {
+      "href": "https://api.github.com/repos/SigorMatt/agent-room/pulls/8"
+    }
+  },
+  "reactions": {
+    "url": "https://api.github.com/repos/SigorMatt/agent-room/pulls/comments/4576829330/reactions",
+    "total_count": 0,
+    "+1": 0,
+    "-1": 0,
+    "laugh": 0,
+    "hooray": 0,
+    "confused": 0,
+    "heart": 0,
+    "rocket": 0,
+    "eyes": 0
+  },
+  "start_line": 1313,
+  "original_start_line": 1313,
+  "start_side": "RIGHT",
+  "line": 1315,
+  "original_line": 1315,
+  "side": "RIGHT",
+  "author_association": "NONE",
+  "original_position": 151,
+  "position": 151,
+  "subject_type": "line",
+  "is_copilot_code_review": false,
+  "copilot_code_review_sources": []
+}

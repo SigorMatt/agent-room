@@ -14,9 +14,9 @@ The build of the agent-room pipeline v1, as designed in [`v1.md`](v1.md). A fres
 | M0 | Commit design and build state | Done (#5) |
 | M1 | Platform check | In progress |
 | M2 | Core machinery | Done (#6) |
-| M3 | Review records, `gate` and `merge` (spec `m3-reviews-gate.md`) | In review (PR) |
-| M4 | Unattended operation (spec `m4-unattended.md`) | Not started |
-| M5 | Protocols (`ARCHITECT.md`, `LEAD.md`, briefs, thin skill), manuals and index | Not started |
+| M3 | Review records, `gate` and `merge` (spec `m3-reviews-gate.md`) | Done (#7) |
+| M4 | Unattended operation (spec `m4-unattended.md`) | In review (PR) |
+| M5 | Protocols (`ARCHITECT.md`, `LEAD.md`, briefs, thin skill), manuals and index | In progress (spec `m5-protocols-manuals.md`) |
 | M6 | Dress rehearsal on `pet-todo` (build lead plays the architect) | Not started |
 | M7 | Matthew's owner run, then tag `v1.0.0` | Not started |
 
@@ -75,7 +75,7 @@ Results of the eleven assumptions in `v1.md` ("To verify"). Evidence lives in is
 | 2026-11-14 | Docs-only milestone PRs get Qodo but no cold review | The design's coverage rule covers code changes only; the design itself had two cold reviews |
 | 2026-11-14 | The protocols, briefs and thin skill move from the core milestone to M5, after the code they describe | Keeps each milestone PR reviewable; `v1.md` stays the authority meanwhile |
 | 2026-11-14 | Mission PRs merge with a merge commit, not a squash | Keeps every `fixed in <sha>` reachable from `main` after the branch is deleted |
-| 2026-11-15 | The lease is released at `HANDOFF`, `PAUSED`, `STOPPED` and `DONE`; `lease take` fails while another session holds it, unless `--takeover`, which only a lead Matthew starts after `LEAD-SILENT` uses | Makes "only one successor can win the lease" hold for launches minutes apart, not only for simultaneous pushes (cold M2 R1-3) |
+| 2026-11-15 | The lease is released at `HANDOFF` (`handoff` records the step and cursor, posts `HANDOFF`, then releases), `PAUSED`, `STOPPED` and `DONE`; `lease take` fails while another session holds it, unless `--takeover`, which only a lead Matthew starts after `LEAD-SILENT` uses | Makes "only one successor can win the lease" hold for launches minutes apart, not only for simultaneous pushes (cold M2 R1-3) |
 
 ## Assumptions while Matthew was away (from 2026-11-15 01:24)
 
