@@ -119,6 +119,6 @@ The watchdog saw nothing move. A lead died, got stuck or ran out of Claude usage
 
   - If the last lead message is `HANDOFF` with no `LEAD ONLINE` after it, the next lead never started. The architect starts one, or gives you the normal join line: [Start the next lead by hand](start-the-next-lead-by-hand.md).
   - If no lead started after your decision, or one started but didn't come online, the architect starts one. If the lead that waited for you died before it ended properly, that takes the takeover line.
-  - Otherwise a lead is still busy with a step. The architect checks again about 30 minutes later. If the lead is stuck, the watchdog's `LEAD-SILENT` follows, with a takeover lead.
+  - Otherwise a lead is running, maybe busy with a helper. The architect checks again about an hour after that lead started. If there's still no ACK and no lead message, the lead may have stopped. The watchdog notices, even while the step says it waits for you: a `LEAD-SILENT` buzz follows within three hours of the lead's `LEAD ONLINE`, with a takeover lead. Answer it as above.
 - Tapping the buzz didn't open the room: in GitHub, open the repo, then **Issues**, and filter by the label `agent-room`.
 - Something else: [Troubleshooting](troubleshooting.md).

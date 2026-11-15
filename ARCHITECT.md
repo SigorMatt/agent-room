@@ -408,8 +408,8 @@ An `ACK DECISION-n` comes from the lead started after the decision (9.2, step 7)
    - **The last lead message is `HANDOFF`, with no `LEAD ONLINE` after it:** the successor never started. Start a lead with the normal join line (9.5).
    - **A `LEAD-STARTED` after the decision, with no `LEAD ONLINE` after it:** that lead didn't join. Start another by hand (9.5).
    - **No `LEAD-STARTED` after the decision, and the step is `waiting for owner: …`:** nobody started a lead. Start one (9.2, step 7). If `lease_session` isn't `none`, the parked lead died before releasing the lease: use the takeover line instead (9.5).
-   - **Otherwise:** a running lead is busy. Schedule another check-in about 30 minutes ahead, as in step 2.
-4. At that check-in, with still no `ACK` and no lead message since: the watchdog's `LEAD-SILENT` follows if the lead is stuck, and with it a takeover lead; handle it as in 9.5. If Matthew finds the lead's session gone, start a takeover lead at once (9.5).
+   - **Otherwise:** a lead is running, maybe busy with a builder. Schedule another check-in for about an hour after that lead's `LEAD-STARTED` (or its `LEAD ONLINE`, for a lead that wasn't parked), as in step 2.
+4. At that check-in, with still no `ACK` and no lead message since: the lead may have stopped while holding the lease, even with the step still `waiting for owner: …`. Tell Matthew. The watchdog doesn't stay quiet then: within three hours of that lead's `LEAD ONLINE` it posts `LEAD-SILENT` and starts a takeover lead; handle it as in 9.5. If Matthew finds the lead's session gone, start a takeover lead at once (9.5).
 
 ### 9.7 `DONE`
 
