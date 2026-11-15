@@ -321,7 +321,7 @@ At the end of a mission, or early at a step boundary when your context gets heav
    python3 room.py handoff N --step <step> --cursor <ID>
    ```
 5. Schedule the successor with `create_trigger`: one time, `run_once_at` about a minute from now, the prompt exactly the printed join line. Never delete that task: it disables itself after firing, and deleting it deletes the successor's session.
-6. Check the approval setting in the result. If its runs will ask for approval (`permission_mode` isn't `auto`), the successor would stall at its first prompt: don't rely on it. Then, or if scheduling failed, post this (it buzzes):
+6. Check the approval setting in the result. If its runs will ask for approval (`permission_mode` isn't `auto`), the successor would stall at its first prompt, maybe holding the lease: disable the task with `update_trigger` (`enabled` false; never delete it). Then, or if scheduling failed, post this (it buzzes):
    ```bash
    python3 room.py say N lead "NEXT-LEAD-NEEDED: the successor <can't start unattended: its task asks for approval | couldn't be scheduled> (<reason>). Start a lead with the join line for room N."
    ```
