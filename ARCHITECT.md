@@ -162,6 +162,7 @@ Fill the [template](templates/playbook/PLAYBOOK.md):
    - `room: N`: set at kickoff.
    - `watchdog: <task ID>`: set at kickoff.
    - `test: <command>`: one command that runs every test on a cloud machine.
+   - `drill: <value>`: only for a failure drill Matthew asks for, `stop-after-merge` or `no-handoff` (LEAD.md says what each does). The drill ends a lead early, so a `LEAD-SILENT` follows. After the drill, remove the line and commit, before you give the next join line.
 2. **Phases:** a `### Phase <p>: <name>` heading, then `Goal: <one sentence>. Items: P<p>-1, P<p>-2. Mission budget: 8 hours.` The lead's `budget` command reads that phrase.
 3. **Items:** a `### P<p>-<i>: <title>` heading, then one checkbox per criterion, each naming the check that proves it. Mark the rest `(manual check for Matthew)`.
 4. **Merge-hold list:** one bullet per area, ``- <label>: `glob`, `glob` ``.
