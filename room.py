@@ -2293,6 +2293,7 @@ def add_gate_commands(sub, common):
 
 WAITING_FOR_OWNER = "waiting for owner"
 QUIET_STATUSES = ("paused", "stopped", "done")
+PROGRESS_KEYS = ("step", "pr")  # the machine-block keys whose change is progress; merge records pr
 DEFAULT_BUDGET_HOURS = 8
 
 
@@ -2367,10 +2368,10 @@ def shallow_cut(path, sha):
         return False
 
 
-def last_change(path, counts=lambda key: key != "cursor"):
+def last_change(path, counts=lambda key: key in PROGRESS_KEYS):
     """(sha, committer time) of the newest commit on the fetched state branch whose MISSIONS.md changes a key
     of the machine block for which counts(key) holds (the commit that adds the block counts), or None. By
-    default every key but cursor counts. Deepens a shallow clone as far as needed."""
+    default only step and pr count. Deepens a shallow clone as far as needed."""
     rel = f"{PLAYBOOK_DIR}/MISSIONS.md"
 
     def value(sha):
@@ -2436,10 +2437,12 @@ def cmd_watchdog(a):
     if why:
         print(f"quiet: {why}")
         return 0
-    found = []  # progress: a state write other than the cursor, a mission branch push, a mission PR's merge
+    # progress, not chatter (v1): a step or pr change, a mission branch push, a mission PR's merge. Lease takes,
+    # handoffs at the same step, intents, the counter and the cursor don't count, so a lead in a loop alarms
+    found = []
     change = last_change(path)
     if change:
-        found.append((change[1], f"state change {change[0][:12]}"))
+        found.append((change[1], f"step or pr change {change[0][:12]}"))
     push = mission_push()
     if push:
         found.append((push[1], f"{push[0]} pushed"))
@@ -2767,8 +2770,8 @@ def add_unattended_commands(sub, common):
         return s
 
     s = leaf("watchdog", cmd_watchdog, "the watchdog task, as role watchdog: buzz and post LEAD-SILENT when no "
-                                       "state write (but the cursor's), mission branch push or mission PR merge "
-                                       "happened for DURATION; never writes state or schedules anything")
+                                       "step or pr change, mission branch push or mission PR merge happened for "
+                                       "DURATION; never writes state or schedules anything")
     s.add_argument("room", type=int)
     s.add_argument("--silent-after", type=duration_arg, default=3 * 3600, metavar="DURATION",
                    help="like 3h or 45m (default 3h; drills use a short one)")

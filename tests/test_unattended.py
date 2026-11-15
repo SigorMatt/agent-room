@@ -303,8 +303,8 @@ def t_watchdog_recent_step_change():
     set_state("step=cold round 1")
     n, before = len(alarms()), state_sha()
     r = watchdog()
-    assert r.returncode == 0 and re.search(r"^quiet: progress \d+s ago \(state change [0-9a-f]{12} at \S+\), under "
-                                           r"3h00m$", r.stdout, re.M), out(r)
+    assert r.returncode == 0 and re.search(r"^quiet: progress \d+s ago \(step or pr change [0-9a-f]{12} at \S+\), "
+                                           r"under 3h00m$", r.stdout, re.M), out(r)
     assert len(alarms()) == n and state_sha() == before
     t = set_state("step=cold round 2", hours=1)  # a step change written now, dated an hour ago
     r = watchdog()
@@ -356,11 +356,37 @@ def t_watchdog_progress_counts_the_merge_and_its_bookkeeping():
     gh_cfg()
     set_state("intent=merge PR #12 at " + "b" * 40, "pr=12")  # merge's own state write, no step change
     r = watchdog()
-    assert "quiet: progress" in r.stdout and "(state change " in r.stdout, out(r)
+    assert "quiet: progress" in r.stdout and "(step or pr change " in r.stdout, out(r)
     set_state("intent=none", "pr=none", hours=5)
     set_state("cursor=77")  # reading the room is no progress
     r = watchdog()
     assert "alarm: no progress for 5h" in r.stdout, out(r)
+
+
+def t_watchdog_alarms_on_a_lead_in_a_loop():
+    # cold M4 R2-3, the "a lead loops without progress" drill: only a step or pr change, a mission push or a mission
+    # PR's merge is progress; lease takes, same-step handoffs, intents, the counter and the cursor are chatter
+    age_alarms()
+    t = set_state("step=build 7", hours=5)
+    assert "alarm: no progress for 5h" in watchdog().stdout
+    age_alarms()
+    holder = "L1"
+    for successor in ("L2", "L3", "L1"):  # leads that join and hand over at the same step
+        room("handoff", "1", "--step", "build 7", "--cursor", "none", check=True, ROOM_SESSION=holder)
+        room("lease", "take", check=True, ROOM_SESSION=successor)
+        holder = successor
+    for i in range(2):  # a lead retrying the same task
+        room("intent", "1", "post STATUS", check=True)
+        room("say", "1", "lead", f"STATUS: retrying task 2 ({i})", check=True)
+        room("state", "next", "counter", check=True)
+        set_state(f"cursor={last_id()}", "intent=none")
+    r = watchdog()
+    assert r.returncode == 0 and "alarm: no progress for 5h" in r.stdout, out(r)
+    assert text_of(alarms()[-1]).startswith(f"LEAD-SILENT: no progress since {iso(t)} (step build 7, mission M1)")
+    # waiting for owner does not alarm
+    set_state("step=waiting for owner (ESCALATION-2)", hours=5)
+    assert watchdog().stdout.strip() == "quiet: step is waiting for owner (ESCALATION-2)"
+    set_state("step=build 8", "counter=0", hours=5)  # the counter back where the later tests expect it
 
 
 def t_watchdog_quiet_when_paused_stopped_or_done():
