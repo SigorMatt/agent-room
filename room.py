@@ -2340,9 +2340,6 @@ class RoomLog:
         """The trusted messages of KIND (DECISION-n) from the architect, or untagged from Matthew, oldest first."""
         return [m for m in self.messages() if m["role"] in ("architect", "human") and message_kind(m["text"]) == kind]
 
-    def decision(self, kind):
-        return next(iter(self.decisions(kind)), None)
-
     @staticmethod
     def before(ask, decision):
         """Whether ASK (a hold or escalation) stood as it is now when DECISION was posted: posted before it
