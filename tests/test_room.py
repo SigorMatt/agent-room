@@ -367,9 +367,33 @@ def t_wait_cursor_line():
     assert code == 0 and "LEAD ONLINE" in out and "my own note" not in out, (code, out)
     assert lines[-1] == f"[cursor: {sent_id(r)}]", lines
     assert "--session w1" in out, "hints must keep the session: " + out
-    assert run("cursor", n, "lead", role="lead").stdout.strip() == sent_id(r)
-    code, out, _ = finish(bg_wait("lead", "--timeout", "1", room=n))
+    assert run("cursor", n, "lead", "--session", "w1", role="lead").stdout.strip() == sent_id(r)
+    code, out, _ = finish(bg_wait("lead", "--timeout", "1", "--session", "w1", room=n))
     assert code == 3 and "[cursor:" not in out, (code, out)
+
+
+def t_two_leads_one_machine():
+    # qodo PR #6 "One lead can hide messages from another": a cursor per room, role and session
+    n = new_room("Two leads, one machine")
+    machine = dict(role="lead", ROOM_STATE=os.path.join(tmp, "state-one-machine"))
+    old, new = dict(machine, ROOM_SESSION="old"), dict(machine, ROOM_SESSION="new")
+    mark = sent_id(run("say", n, "lead", "STATUS: old lead's last processed point", **old))
+    run("say", n, "architect", "DECISION-1: merge as is")
+    out = run("read", n, "lead", **old).stdout
+    assert "DECISION-1" in out, out
+    out = run("read", n, "lead", **new).stdout  # its first read, with no cursor of its own: as before
+    assert "DECISION-1" in out and "last processed point" in out, out
+    assert "[nothing new]" in run("read", n, "lead", **old).stdout
+    gap = sent_id(run("say", n, "architect", "CHANGE-1: posted while both wait"))
+    out = run("read", n, "lead", "--from", mark, **new).stdout  # --from moves only this session's cursor
+    assert "DECISION-1" in out and "CHANGE-1" in out, out
+    assert run("cursor", n, "lead", **new).stdout.strip() == gap
+    assert run("cursor", n, "lead", **old).stdout.strip() != gap
+    p = bg_wait("lead", room=n, ROOM_SESSION="old", ROOM_STATE=machine["ROOM_STATE"])  # still has CHANGE-1 to see
+    code, out, _ = finish(p)
+    assert code == 0 and "CHANGE-1" in out and out.strip().splitlines()[-1] == f"[cursor: {gap}]", (code, out)
+    files = sorted(os.listdir(os.path.join(tmp, "state-one-machine", "SigorMatt__agent-room")))
+    assert files == [f"{n}-lead-new.json", f"{n}-lead-old.json"], files
 
 
 def t_role_guard():

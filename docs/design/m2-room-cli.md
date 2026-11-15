@@ -22,7 +22,7 @@ The interface that the M2 builders implement and the M3 protocol docs (`ARCHITEC
     - role `human` stays rejected;
     - any other role is rejected: only `lead`, `architect` and `watchdog` post.
 - **Automatic buzz:** `say` buzzes when the kind is one of `ESCALATION`, `MERGE-HOLD`, `NEXT-LEAD-NEEDED`, `PAUSED`, `STOPPED`, `DONE`, `LEAD-SILENT`. `--buzz` forces one, `--no-buzz` suppresses one. Buzz title: `<KIND> · <repo name> room <N>`; body: `<KIND> from <role> in <OWNER/NAME> room <N>`; click: the comment URL. Never the text.
-- **Lease check on send:** when role is `lead` and a state worktree exists (see State), `say` and `close` refuse with exit 5 if another session holds the lease. A released lease (`none`) doesn't block posting, so a retiring lead can still post `NEXT-LEAD-NEEDED`. No kind is exempt: `LEAD ONLINE` is posted after taking the lease.
+- **Lease check on send:** when role is `lead` and a state worktree exists (see State), `say` and `close` refuse with exit 5 if another session holds the lease (see **The lease** below). A released lease (`none`) doesn't block posting, so a retiring lead can still post `NEXT-LEAD-NEEDED`. While the pushed block is damaged, the last valid block decides, with a one-line warning, so its holder can still report the problem. No kind is exempt: `LEAD ONLINE` is posted after taking the lease.
 
 ## Room commands
 
@@ -49,13 +49,13 @@ The playbook and pipeline state live on branch `agent-room/state` of the project
 | `state init-lead` | Lead. Adds missing lead-owned files from templates (`MISSIONS.md`, `LEDGER.md`, `QODO-VALUE.md`) and pushes. Idempotent |
 | `state path` | Prints the worktree path, creating or syncing it first |
 | `state sync` | Fetches and hard-resets the worktree to `origin/agent-room/state` |
-| `state commit -m MSG` | Commits all changes in the worktree and pushes. Changes to lead-owned files require the lease (exit 5). If the push is rejected because the branch moved (the remote is neither the commit the work was built on nor this commit; a remote that already holds this commit is a success): exit 3, prints `state moved: run 'state sync', re-read, re-apply`, leaves the worktree reset to the remote |
+| `state commit -m MSG` | Commits all changes in the worktree and pushes. Changes to lead-owned files require the lease (exit 5). A commit that changes `MISSIONS.md` is refused, for every session including the holder (exit 1, `MISSIONS.md must keep a valid agent-room-state block with the current lease`), if the new file is missing, has no parseable block, or changes `lease_session` or `lease_generation`. If the push is rejected because the branch moved (the remote is neither the commit the work was built on nor this commit; a remote that already holds this commit is a success): exit 3, prints `state moved: run 'state sync', re-read, re-apply`, leaves the worktree reset to the remote |
 | `state get KEY` | Prints a value from the machine block of `MISSIONS.md` |
-| `state set KEY=VALUE …` | Sync, set, commit and push in one step (exit 3 on a lost race). Requires that this session holds the lease (exit 5), except `lease take`'s own write |
+| `state set KEY=VALUE …` | Sync, set, commit and push in one step (exit 3 on a lost race). Requires that this session holds the lease (exit 5). `lease_session` and `lease_generation` can't be set (exit 1) |
 | `state next counter` | Increments `counter`, pushes, prints the new value (for `ESCALATION-n` / `MERGE-HOLD-n`). Requires the lease (exit 5) |
-| `lease take [--takeover]` | Sync. If `lease_session` is another session, exit 3 (`lease held by X: stand down`), unless `--takeover`. Otherwise `lease_generation += 1`; `lease_session = <session>`; commit and push. Prints the generation. Exit 3 if another session pushed first |
+| `lease take [--takeover]` | Sync. If the lease is held by another session, exit 3 (`lease held by X: stand down`), unless `--takeover`. Otherwise `lease_generation += 1`; `lease_session = <session>`; commit and push. Prints the generation. If the push loses to another write, re-sync and retry once while the lease is still free, ours, or unchanged; exit 3 only if another session took it |
 | `lease release` | The holder sets `lease_session: none` and pushes. Leads release at `HANDOFF`, `PAUSED`, `STOPPED` and `DONE`, so the next lead's plain `lease take` wins and a duplicate launch stands down. `--takeover` is only for a lead Matthew starts after `LEAD-SILENT` |
-| `lease check` | Fetch; exit 0 if `lease_session` is this session, else exit 5 and print the holder |
+| `lease check` | Fetch; exit 0 if this session holds the lease, else exit 5 and print the holder |
 
 **Machine block.** The top of `MISSIONS.md` holds one fenced block that only `room.py` edits:
 
@@ -76,6 +76,8 @@ waiting_for_owner: no
 ````
 
 Values are single-line strings. Unknown keys are kept.
+
+**The lease** is the machine block of the most recent state-branch commit whose `MISSIONS.md` block parses. When the pushed block doesn't parse, or the file is missing, `room.py` walks back the history of `MISSIONS.md` (at most 200 commits, deepening a shallow clone first) to the latest commit where it does, and uses that block. No such commit means no lease: no session holds it. Nothing outside the block, such as a quoted `lease_session:` line, counts. `room.py` never writes a broken block (see `state commit`), so a damaged one can only come from an edit outside it. The next write by `state set`, `state next`, `lease take` or `lease release` restores it: it starts from the last valid block's values, keeps its unknown keys, and rewrites the block in place, or prepends it if the fence is gone. Until then only the holder of the last valid block, or a lead using `lease take --takeover`, can write lead-owned files.
 
 ## Preflight
 
@@ -100,4 +102,4 @@ Extend `tests/test_room.py`, still with fake `gh` and `curl`. Add a fake or loca
 
 ## Changes after cold review round 1
 
-The lease rows, the lease check on send, `close` buzzing, markdown-wrapped kinds, unknown roles and the preflight pin row above were changed by the M2 cold review (`reviews/cold/M2/round-1.md`, findings R1-1 to R1-15).
+The lease rows, the lease check on send, `close` buzzing, markdown-wrapped kinds, unknown roles and the preflight pin row above were changed by the M2 cold review (`reviews/cold/M2/round-1.md`, findings R1-1 to R1-15). The lease rows, the lease check on send and **The lease** were changed again by `reviews/cold/M2/round-2.md` (R2-3 to R2-5) and the scoped reviews `scoped-1.md` and `scoped-2.md` (S1-1, S1-2, S2-1 to S2-3).
