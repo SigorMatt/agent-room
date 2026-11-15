@@ -370,8 +370,8 @@ def t_broken_state_worktree_is_rebuilt():
         g("clone", "-q", PET, work)
         r = room(*args, check=False, **kw)
         assert r.returncode in (0, 5) and len(r.stderr.strip().splitlines()) == 1, (args, r.returncode, r.stderr)
-        assert re.fullmatch(r"\[state worktree .* was broken; moved it to .*/R\.broken-\d{8}T\d{6}Z(-\d+)? and made "
-                            r"a new one\]", r.stderr.strip()), r.stderr
+        assert re.fullmatch(r"\[state worktree .* was broken \(no git data left to save; its files are kept\); moved "
+                            r"it to .*/R\.broken-\d{8}T\d{6}Z(-\d+)? and made a new one\]", r.stderr.strip()), r.stderr
         assert g("-C", sdir("R"), "rev-parse", "HEAD").stdout.strip() == sha(PET, "agent-room/state")
     assert room("state", "path", **kw).stderr == "", "a healthy worktree is left alone"
     aside = [d for d in os.listdir(os.path.join(tmp, "state")) if d.startswith("R.broken-")]
@@ -414,7 +414,8 @@ def t_recreated_state_branch_rebuilds_stale_worktrees():
     for state, kw in (("GA", here), ("GB", away)):
         r = room("state", "path", state=state, **kw)
         assert r.stdout.strip() == sdir(state), r.stdout
-        assert re.fullmatch(r"\[state worktree .* is stale \(no history of the recreated agent-room/state\); moved "
+        assert re.fullmatch(r"\[state worktree .* is stale \(no history of the recreated agent-room/state\); saved "
+                            r"its HEAD as refs/agent-room/broken-\d{8}T\d{6}Z(-\d+)? \([0-9a-f]{12}\) in \S+; moved "
                             r"it to .*\.broken-\d{8}T\d{6}Z(-\d+)? and made a new one\]", r.stderr.strip()), r.stderr
         assert g("-C", sdir(state), "rev-parse", "HEAD").stdout.strip() == new
     # the project checkout itself is still refused, even at a commit that holds docs/playbook/
@@ -426,6 +427,122 @@ def t_recreated_state_branch_rebuilds_stale_worktrees():
     r = room("state", "sync", state=None, ROOM_STATE_DIR=work, check=False, **here)
     assert r.returncode == 1 and "holds no agent-room/state history" in r.stderr, r.stderr
     assert os.path.exists(os.path.join(work, "docs", "playbook", "notes.md"))
+
+
+def new_project(name):
+    """A bare repo NAME with a checkout, a state branch and the lead files. Returns (repo, work, here)."""
+    repo = bare(name)
+    work = os.path.join(tmp, "work", name)
+    g("clone", "-q", repo, work)
+    here = dict(cwd=work, ROOM_REPO=f"SigorMatt/{name}")
+    room("state", "init", session="arch", state=f"{name}-A", **here)
+    room("state", "init-lead", session="L1", state=f"{name}-A", **here)
+    return repo, work, here
+
+
+def recreate_state_branch(repo, name, here):
+    """Matthew deletes agent-room/state and the architect recreates it (dated, so it is a new root commit)."""
+    g("--git-dir", repo, "update-ref", "-d", "refs/heads/agent-room/state")
+    room("state", "init", session="arch", state=f"{name}-arch", GIT_AUTHOR_DATE="2026-01-01T00:00:00Z",
+         GIT_COMMITTER_DATE="2026-01-01T00:00:00Z", **here)
+    return sha(repo, "agent-room/state")
+
+
+def git_dir(path):
+    return g("-C", path, "rev-parse", "--absolute-git-dir").stdout.strip()
+
+
+def asides(name):
+    return [d for d in os.listdir(os.path.join(tmp, "state")) if d.startswith(f"{name}.broken-")]
+
+
+def t_state_worktrees_carry_a_marker():
+    # B-2 (cold M2 S1-4, S1-5): room.py marks the state worktrees and clones it makes, in their own git dir
+    repo, work, here = new_project("mk")
+    room("state", "path", state="mk-B", cwd=tmp, ROOM_REPO="SigorMatt/mk", ROOM_STATE_REMOTE=repo)
+    for state in ("mk-A", "mk-B"):
+        assert os.path.isfile(os.path.join(git_dir(sdir(state)), "agent-room-state")), state
+    assert "/worktrees/" in git_dir(sdir("mk-A")), "a linked worktree's own git dir, not the project's"
+    assert not os.path.exists(os.path.join(work, ".git", "agent-room-state")), "the project's repo is never marked"
+
+
+def t_stale_worktree_rebuilt_from_inside_it():
+    # B-2 (cold M2 S1-5): run from inside the stale worktree itself, clone mode and linked worktree mode
+    repo, work, here = new_project("in")
+    away = dict(ROOM_REPO="SigorMatt/in", ROOM_STATE_REMOTE=repo)
+    room("state", "path", state="in-B", cwd=tmp, **away)
+    new = recreate_state_branch(repo, "in", here)
+    r = room("state", "path", state="in-B", cwd=sdir("in-B"), check=False, **away)
+    assert r.returncode == 0 and r.stdout.strip() == sdir("in-B") and "is stale" in r.stderr, (r.returncode, r.stderr)
+    assert g("-C", sdir("in-B"), "rev-parse", "HEAD").stdout.strip() == new and len(asides("in-B")) == 1
+    inside = os.path.join(sdir("in-A"), "docs", "playbook")
+    r = room("state", "path", session="L1", state="in-A", cwd=inside, ROOM_REPO="SigorMatt/in", check=False)
+    assert r.returncode == 0 and r.stdout.strip() == sdir("in-A") and "is stale" in r.stderr, (r.returncode, r.stderr)
+    assert g("-C", sdir("in-A"), "rev-parse", "HEAD").stdout.strip() == new and len(asides("in-A")) == 1
+    assert os.path.isfile(os.path.join(git_dir(sdir("in-A")), "agent-room-state")), "the new worktree is marked"
+    assert room("state", "path", state="in-A", **here).stderr == "", "and healthy"
+
+
+def t_only_marked_dirs_are_moved():
+    # B-2 (cold M2 S1-4): ROOM_STATE_DIR naming the project checkout is refused from anywhere, never moved aside
+    repo, work, here = new_project("pc")
+    os.makedirs(os.path.join(work, "docs", "playbook"))
+    notes = os.path.join(work, "docs", "playbook", "notes.md")
+    open(notes, "w").write("project notes\n")
+    g("-C", work, "checkout", "-q", "--detach", "origin/main")
+    g("-C", work, "add", "-A")
+    g("-C", work, "commit", "-qm", "project docs")
+    wip = os.path.join(work, "uncommitted.txt")
+    open(wip, "w").write("wip\n")
+    builder = os.path.join(work, ".claude", "worktrees", "agent-1")
+    g("-C", work, "worktree", "add", "-q", "-b", "worktree-agent-1", builder)
+    for cwd, extra in ((work, {}), (tmp, {"ROOM_STATE_REMOTE": repo}), (builder, {})):
+        r = room("state", "sync", state=None, ROOM_STATE_DIR=work, cwd=cwd, ROOM_REPO="SigorMatt/pc", check=False,
+                 **extra)
+        assert r.returncode == 1 and "holds no agent-room/state history and has no agent-room-state marker" in \
+            r.stderr and "leaves it alone" in r.stderr, (cwd, r.stderr)
+    assert open(notes).read() == "project notes\n" and open(wip).read() == "wip\n"
+    assert g("-C", builder, "status", "--short").returncode == 0, "the builder worktree still works"
+    assert not [d for d in os.listdir(os.path.join(tmp, "work")) if d.startswith("pc.broken-")]
+    # a stale clone room.py didn't make (no marker) is left alone too
+    hand = sdir("pc-hand")
+    g("clone", "-q", "--branch", "agent-room/state", repo, hand)
+    recreate_state_branch(repo, "pc", here)
+    r = room("state", "path", state="pc-hand", cwd=tmp, ROOM_REPO="SigorMatt/pc", ROOM_STATE_REMOTE=repo, check=False)
+    assert r.returncode == 1 and "has no agent-room-state marker" in r.stderr, r.stderr
+    assert os.path.isdir(os.path.join(hand, ".git")) and not asides("pc-hand")
+    # and so is a directory git can't open that carries no marker
+    broken = sdir("pc-junk")
+    os.makedirs(os.path.join(broken, ".git"))
+    open(os.path.join(broken, "keep.txt"), "w").write("mine\n")
+    r = room("state", "path", state="pc-junk", cwd=tmp, ROOM_REPO="SigorMatt/pc", ROOM_STATE_REMOTE=repo, check=False)
+    assert r.returncode == 1 and "no git checkout room.py can open" in r.stderr and not asides("pc-junk"), r.stderr
+
+
+def t_stale_worktree_local_work_is_saved():
+    # B-2 (cold M2 S1-3): an unpushed commit and uncommitted edits are saved on a ref before the move, and said so
+    repo, work, here = new_project("lw")
+    room("lease", "take", session="L1", state="lw-A", **here)
+    wt = sdir("lw-A")
+    append("lw-A", "LEDGER.md", "| L-9 | unpushed ledger row |")
+    g("-C", wt, "commit", "-qam", "ledger row (push failed)")
+    unpushed = g("-C", wt, "rev-parse", "HEAD").stdout.strip()
+    append("lw-A", "MISSIONS.md", "intent: open PR for M3")
+    open(os.path.join(wt, "docs", "playbook", "NOTES.md"), "w").write("untracked notes\n")
+    recreate_state_branch(repo, "lw", here)
+    r = room("state", "path", session="L1", state="lw-A", check=False, **here)
+    assert r.returncode == 0, (r.returncode, r.stderr)
+    m = re.fullmatch(r"\[state worktree (\S+) is stale \(no history of the recreated agent-room/state\); saved its "
+                     r"HEAD and uncommitted changes as (refs/agent-room/broken-\d{8}T\d{6}Z(?:-\d+)?) \(([0-9a-f]{12})\) "
+                     r"in (\S+); moved it to (\S+) and made a new one\]", r.stderr.strip())
+    assert m and m.group(1) == wt and m.group(4) == os.path.realpath(os.path.join(work, ".git")), r.stderr
+    ref = m.group(2)
+    assert g("-C", work, "rev-parse", ref).stdout.strip().startswith(m.group(3))
+    assert g("-C", work, "rev-parse", f"{ref}^").stdout.strip() == unpushed, "the unpushed commit is kept"
+    assert "intent: open PR for M3" in g("-C", work, "show", f"{ref}:docs/playbook/MISSIONS.md").stdout
+    assert g("-C", work, "show", f"{ref}:docs/playbook/NOTES.md").stdout == "untracked notes\n"
+    assert os.path.isdir(m.group(5)) and "intent: open PR" in open(os.path.join(m.group(5), "docs", "playbook",
+                                                                                 "MISSIONS.md")).read()
 
 
 def push_edit(repo, name, fn):
