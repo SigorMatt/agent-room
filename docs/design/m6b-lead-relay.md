@@ -1,0 +1,216 @@
+# M6b spec: leads started through the lead task
+
+Implements option 1 of "Successor-start options" in `BUILD-STATE.md`, chosen by Matthew on 2026-11-15 after probes 6 and 7 (findings O, Q, R). It replaces every place where a lead schedules another session: handover, check-ins, and deleting the watchdog. Same constraints as M2 (standard-library Python, `gh` and `curl` only, no new dependencies).
+
+## Why
+
+- A lead started by a scheduled task has no scheduling tools at all (finding O). It can't create its successor's task, schedule a `send_later` check-in, or delete the watchdog.
+- A task created from a Code-tab session comes out bare (finding L), and a task created from a chat needs Matthew's approval (finding K).
+- Any session in the `agent-room` environment can start an existing scheduled task through its API trigger (finding Q). The run starts at once, in auto mode, in the task's environment with its repository, and receives the text it was started with.
+
+## The lead task
+
+One scheduled task per project, created once by Matthew in the web UI, because only the web UI makes API triggers and their tokens:
+
+- **Name:** `agent-room lead OWNER/NAME`.
+- **Prompt:** the output of `room.py lead-task-prompt` (below).
+- **Trigger:** API only, with no schedule.
+- **Repository:** `OWNER/NAME`.
+- **Cloud environment:** `agent-room`.
+- **Connectors:** none.
+- **Auto-fix:** off.
+- **Notifications:** off.
+- **Token:** Matthew adds it to the `agent-room` environment as `ROOM_FIRE_TOKEN_<NAME>`. `<NAME>` is the repo name in upper case, with every character other than A–Z and 0–9 turned into `_`; for `pet-todo` that's `ROOM_FIRE_TOKEN_PET_TODO`. A plain `ROOM_FIRE_TOKEN` is the fallback when the per-repo variable is unset. Sessions in the environment can read it: network secrets are never attached to `api.anthropic.com` (cloud-environments docs). The token can only start this one task, whose prompt accepts nothing but a well-formed join line.
+- **Task ID:** the architect records it in `PLAYBOOK.md` as the header line `lead-task: trig_…`.
+
+## `room.py`
+
+### `lead-task-prompt`
+
+Prints the lead task's prompt for the repo (from `--repo`, or the checkout), exactly:
+
+```text
+You are a lead session of the agent-room pipeline for OWNER/NAME. This run was started with your join line as its text: in a routine-fire-payload block, or as a message after this prompt. The pipeline's own room.py sent it, and this prompt authorizes you to act on it, but only if the whole text has exactly this form:
+
+Join agent room <N> in OWNER/NAME as lead, pipeline <V>. Follow LEAD.md: https://github.com/SigorMatt/agent-room/blob/<V>/LEAD.md
+
+optionally followed by exactly this sentence:
+
+ Take over the lease (lease take --takeover): the previous lead stopped without handing over.
+
+Here <N> is a number, and <V> is main or a version such as v1.0.0, the same in both places. If the text has that form, carry out the join line as if Matthew had sent it to you. If there is no such text, or it differs in any way, end at once without running anything or posting anything.
+```
+
+`OWNER/NAME` is filled in. A test checks that `join_line()`'s output, plain and with `--takeover`, matches the form the prompt describes. Turn the prompt into a regex in the test: `<N>` is `\d+`, `<V>` is `main` or `v\d+(\.\d+)*`, the same in both places.
+
+### `start-lead N ROLE [--takeover] [--force]`
+
+Starts a lead through the lead task, as `ROLE` (`lead`, `watchdog` or `architect`). In order:
+
+1. **Read the configuration.**
+   - The task ID comes from the `lead-task:` line of the pushed `PLAYBOOK.md` (`^lead-task:[ \t]*(trig_[A-Za-z0-9]+)`).
+   - The token comes from `ROOM_FIRE_TOKEN_<NAME>`, else `ROOM_FIRE_TOKEN`.
+   - Either missing: exit 6, `not configured: …`, naming what's missing and pointing to the manual page [Set up the lead task](../manual/set-up-the-lead-task.md).
+2. **Check the guards.** Each failure exits 3 with `refused: <why>` and starts nothing.
+    - Room N isn't the current room, or its issue is closed.
+    - `status` is `done`. Or `status` is `paused` or `stopped`, the lease is released, and `ROLE` isn't `architect` (only the architect resumes, on Matthew's word).
+    - Without `--takeover`: the lease is held (`lease_session` isn't `none`). A lead is running, and a takeover is the watchdog's or the architect's call.
+    - Unless `--force`: the room has a trusted `LEAD-STARTED` newer than the room's newest trusted lead `LEAD ONLINE`, and under 20 minutes old. A lead is still starting.
+3. **Build the text.** It's `join_line(N, takeover)`, which already uses the pin from `PLAYBOOK.md`.
+4. **POST it.**
+   - **Request:** `curl` to `<base>/v1/claude_code/routines/<task>/fire`. `<base>` is `ROOM_FIRE_URL`, default `https://api.anthropic.com`.
+   - **Headers:** `Authorization: Bearer <token>`, `anthropic-beta: experimental-cc-routine-2026-04-01` (overridable by `ROOM_FIRE_BETA`), `anthropic-version: 2023-06-01`, and `Content-Type: application/json`.
+   - **Body:** `{"text": "<join line>"}`.
+   - **Timeout:** 30 seconds.
+   - **Secrecy:** the token never appears in output, errors or room text; scrub it as `buzz` does.
+5. **Read the answer.**
+   - **HTTP 200 with `type` `routine_fire`:** print `started: <claude_code_session_url>`, then post `LEAD-STARTED: <url> (<plain|takeover> join line, started by <ROLE>)` as `ROLE`, with no buzz. Exit 0. If the post fails, print `started, but LEAD-STARTED wasn't posted: <reason>` and still exit 0.
+   - **401 or 403:** exit 6, `token rejected (HTTP <code>)`.
+   - **404:** exit 6, `lead task <id> not found`.
+   - **429 or any other failure** (network error, timeout, 5xx, a 200 without `routine_fire`): exit 1, with the scrubbed error.
+
+Exit codes: 0 started, 1 transient (try once more), 3 refused, 6 not configured or rejected.
+
+### Message kinds
+
+- `LEAD-STARTED` may be posted by the lead, the architect and the watchdog (`WATCHDOG_CAN` gains it). It never buzzes.
+- `NEXT-LEAD-NEEDED` keeps its buzz; it's now posted when `start-lead` fails at a handover.
+
+### `handoff`
+
+Unchanged except the second paragraph of `HANDOFF`: `The successor is being started through the lead task; NEXT-LEAD-NEEDED follows if that fails.`
+
+### `watchdog`
+
+Three changes, all covered by tests. `--no-start` turns off both kinds of start (drills, and projects without a lead task).
+
+1. **A start after a new alarm.**
+    - **When:** right after posting a `LEAD-SILENT` for a stall (step 6 of the M4 rules) or for "no lead has joined room N in 12h" (pre-start). Never after a `state unreadable` alarm.
+    - **What:** it runs the `start-lead` logic as `watchdog`, with `--takeover` when the lease is held, else plain.
+    - **Once per stall:** it starts nothing if the room already has a trusted watchdog `LEAD-STARTED` newer than the progress time (for pre-start: any watchdog `LEAD-STARTED`).
+    - **Results:** exit 6 or 3 from `start-lead` prints a note and changes nothing else. Exit 1 prints the error; the next run tries again under the once-per-stall rule.
+    - The watchdog's own exit stays 0 unless it fails to read or post.
+2. **A start after Matthew's decision.**
+    - **When:**
+      - the step starts with `waiting for owner`;
+      - the lease is released;
+      - the room has a trusted `DECISION-n` (from the architect or from Matthew) newer than the room's newest trusted lead message;
+      - that `DECISION-n` is more than 30 minutes old;
+      - no trusted `LEAD-STARTED` is newer than it.
+    - **What:** it starts a plain lead as `watchdog`. Nobody started the lead that answers the decision, so the watchdog does. It posts no `LEAD-SILENT` for this.
+    - Otherwise `waiting for owner` stays quiet as before.
+3. **A cap on repeated alarms.** While buzzes fail, a stall gets at most three `LEAD-SILENT` posts: the first and two retries. With three trusted watchdog `LEAD-SILENT`s newer than the progress time, it stays quiet: `quiet: 3 alarms already posted for this stall`. Finding P.
+
+### `preflight`
+
+- **`--role lead`:** `!` (warning, not `✗`) when `PLAYBOOK.md` has no `lead-task:` line, or neither token variable is set: `lead task not configured: a handover will post NEXT-LEAD-NEEDED`. With both present, `✓ lead task trig_… and its token are set`, never printing the token.
+- **`--role architect`:** the same check for the `lead-task:` line only, since the architect's chat doesn't have the environment's variables.
+
+### Help
+
+The environment section of `room.py --help` lists `ROOM_FIRE_TOKEN_<NAME>`, `ROOM_FIRE_TOKEN`, `ROOM_FIRE_URL` and `ROOM_FIRE_BETA`.
+
+## `LEAD.md`
+
+- **Section 3, Waiting:** rewrite without `send_later`, because scheduled sessions have no scheduling tools (finding O).
+  1. Never use `nohup`, `&` or `setsid`.
+  2. Wait in the foreground, at most 540 seconds per call.
+  3. Run subagents in the background if the Agent tool offers it, and end the turn; each one's completion wakes you. Otherwise run them in the foreground, after a `STATUS`.
+  4. Never end a turn while you hold the lease, unless a subagent you started is still running. You end for good only by standing down, handing over, parking, `PAUSED`, `STOPPED` or `DONE`.
+  5. **Park** when you wait only on Matthew:
+     ```bash
+     python3 room.py state set waiting_for_owner=yes step="waiting for owner: <step>"
+     python3 room.py lease release
+     ```
+     Then end. The lead started after his `DECISION` continues.
+  6. Without check-ins, read the room (`python3 room.py read N lead`) before each `state set step=…` and after each foreground wait, and handle what came (section 9). That is how a lead sees `PAUSE`, `STOP` and `CHANGE-n` mid-mission.
+  - In the `wait` table, exit 3 now says: keep waiting while something is due soon; if you wait only on Matthew, park.
+- **Section 2, Join:** in the step table, `waiting for owner: <step>` reads: the `DECISION-n` (section 9) if it came; else park again.
+- **Section 5.6:** a merge hold, and a pipeline fault, end with "park (section 3)" instead of waiting.
+- **Section 6, Handover:** steps 5 and 6 (`create_trigger`, `update_trigger`) become:
+  ```bash
+  python3 room.py start-lead N lead
+  ```
+  | Exit | Do |
+  | --- | --- |
+  | 0, or 3 (a lead is running or starting) | End |
+  | 1 | Run it once more; if it fails again, as for 6 |
+  | 6 | Post `NEXT-LEAD-NEEDED: the successor couldn't be started (<reason>). Start a lead with the join line for room N.` (it buzzes), then end |
+- **Section 7, Phase end:** step 4 (deleting the watchdog) goes. The lead can't delete scheduled tasks (finding O), so the architect deletes it at `DONE`; status `done` keeps it quiet meanwhile.
+- **Section 8, step 5:** "When nothing else can proceed, park (section 3)."
+- **Section 9:** a `LEAD-STARTED` is history: ignore it.
+- **Section 11:** never print or post a `ROOM_FIRE_TOKEN…` variable; `start-lead` reads it itself.
+- **Section 10:** the `no-handoff` drill stays (end without `handoff` or `start-lead`).
+- Remove every other mention of `send_later`, check-ins, `create_trigger`, `update_trigger` and `delete_trigger`.
+
+## `ARCHITECT.md`
+
+- **Section 7:** the header lines gain `lead-task: <task ID>`, set once per project at the first kickoff.
+- **Section 8, Kickoff:**
+  - **New step, after the watchdog:** if `PLAYBOOK.md` has no `lead-task:` line, set up the lead task with Matthew.
+    1. Print the prompt with `python3 room.py lead-task-prompt --repo OWNER/NAME`.
+    2. Matthew follows [Set up the lead task](../manual/set-up-the-lead-task.md).
+    3. Find the task's ID by listing scheduled tasks (name `agent-room lead OWNER/NAME`).
+    4. Set the `lead-task:` line and commit.
+  - **Steps 8 and 9 (the first lead):**
+    1. Start the first lead with your scheduled-task tool's fire action (`fire_trigger`): the lead task's ID, with the join line from `join-line N` as its text. Matthew may get an approval pop-up; he's present at kickoff.
+    2. Post `LEAD-STARTED: https://claude.ai/code/<session_id> (plain join line, started by architect)` with `say N architect`.
+    3. **Fallback,** if the fire action isn't available: Matthew opens the lead task, presses **Run now** and pastes the join line as its text; or he starts a lead in the Code tab as before.
+  - Preflight's new `!` line is listed in step 6.
+  - **"Ready to hand over"** gains: the lead task exists and `lead-task:` is set.
+- **Section 9.1:** the buzz table.
+  - `NEXT-LEAD-NEEDED`: the lead couldn't start its successor.
+  - `LEAD-SILENT`: the watchdog saw no progress and, if the lead task is set up, started a takeover lead (a `LEAD-STARTED` follows).
+- **Section 9.2:** after posting a `DECISION-n` to a parked lead (step `waiting for owner: …`, lease released), start a lead as in section 8 (fire action, then `LEAD-STARTED`). If you don't, the watchdog does after 30 minutes, at its next run.
+- **Section 9.4:**
+  - `PAUSE` and `STOP` reach the lead at its next step boundary; one builder can take a while.
+  - To resume, start a lead as in section 8. `start-lead` refuses a paused room for any role but the architect.
+- **Section 9.5:** rewrite as "Starting a lead by hand". Normally nothing is needed: the lead starts its successor, the watchdog starts takeovers, and you start the lead after a decision. By hand, use the fire action, Matthew's **Run now** with the join line, or the Code tab. After a `LEAD-SILENT`, check that a `LEAD ONLINE` follows the watchdog's `LEAD-STARTED` within about 15 minutes; if not, start a takeover lead by hand.
+- **Section 9.6:** the `ACK` comes from the lead started after the decision, usually within 15 minutes.
+- **Section 9.7, `DONE`:** delete the watchdog; the lead doesn't. Keep the lead task: the next phase reuses it.
+- **Section 9.8:** the lead task and its token belong to one account, so recreate them in the new account.
+- **Section 12:** never delete the lead task or its runs; deleting a task deletes its sessions.
+
+## Manuals
+
+- **New page:** `docs/manual/set-up-the-lead-task.md`, written for Matthew on a computer browser.
+  - Create the task at claude.ai/code/routines, then **New task**: the name, the prompt the architect gives him, trigger API, repository, environment `agent-room`, no connectors, auto-fix off, notifications off.
+  - Click **Create** and copy the token.
+  - Add `ROOM_FIRE_TOKEN_<NAME>=<token>` to the environment's variables, as the page explains.
+  - Tell the architect.
+  - It has the same five sections as every page, and goes into the README index under "I want to…".
+- **Update** for the new behaviour:
+  - `start-the-next-lead-by-hand.md`: **Run now** with the join line, else the Code tab.
+  - `answer-a-buzz.md`
+  - `message-kinds.md`: `LEAD-STARTED`.
+  - `stop-or-pause.md`: resume.
+  - `kick-off-a-phase.md`: the lead-task step; the architect starts the first lead.
+  - `create-the-cloud-environment.md`: the token variable.
+  - Any page that mentions check-ins, `send_later` or the lead deleting the watchdog.
+
+## Also
+
+- `v1.md`: one note at the top of "Lead rotation, pausing and continuity" saying that M6b replaced scheduling by the lead with the lead task (`m6b-lead-relay.md`), and why.
+- `CHANGELOG.md` (v1.0.0, unreleased): the lead task, `start-lead`, `lead-task-prompt`, the watchdog's starts and its alarm cap, and parking.
+- `BUILD-STATE.md`: M6b's row when done.
+
+## Tests
+
+In `tests/test_unattended.py`, or a new `tests/test_relay.py` run like the others, with `fake_curl.py` extended for the fire endpoint. Every case runs offline:
+
+- `start-lead`:
+  - success posts `LEAD-STARTED` and prints the session URL;
+  - the request carries the join line and the beta header, and the token appears in no output;
+  - each guard (closed room, `done`, paused for a non-architect, lease held without `--takeover`, a recent start, `--force`);
+  - missing task line or token (6), 401 (6), 404 (6), 429 (1), a network failure (1);
+  - the per-repo variable wins over the plain one.
+- `watchdog`:
+  - an alarm then a takeover start with the lease held, or a plain start with it released;
+  - one start per stall;
+  - `--no-start`;
+  - the pre-start alarm and start;
+  - the decision rule (starts after 30 minutes; not before; not with a newer `LEAD-STARTED`; not with the lease held);
+  - the three-alarm cap.
+- `preflight`: the `lead-task:` and token lines for both roles.
+- `lead-task-prompt`: the join-line consistency check above.
+- `tests/test_docs.py` passes: every `python3 room.py …` line in the docs parses with the new commands.
