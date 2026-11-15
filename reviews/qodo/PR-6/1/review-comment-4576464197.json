@@ -1,0 +1,71 @@
+{
+  "url": "https://api.github.com/repos/SigorMatt/agent-room/pulls/comments/4576464197",
+  "pull_request_review_id": 5908285741,
+  "id": 4576464197,
+  "node_id": "PRRC_kwDOVVYvuc8AAAABEMdNRQ",
+  "diff_hunk": "@@ -0,0 +1,130 @@\n+# M3 spec: review records, `room.py gate` and `room.py merge`\n+\n+Implements the \"Reviews, dispositions and the ledger\", \"Qodo\" and \"Merge gate\" sections of `v1.md`. Where the two differ, `v1.md` plus `BUILD-STATE.md` decisions win, and this file gets fixed. Same constraints as M2: one file, standard library, Python 3.9+, GitHub only through `gh` and `git`.\n+\n+## Review records\n+\n+All records live on the mission branch under `reviews/` and are the only files the coverage rule exempts. The exempt set is exactly these patterns (deferral B-1); anything else under `reviews/` counts as a change needing review:\n+\n+| Pattern | What |\n+| --- | --- |\n+| `reviews/cold/M<k>/round-<r>.md` | A cold review round, `r` = 1 or 2 |\n+| `reviews/cold/M<k>/scoped-<s>.md` | A scoped cold review, `s` = 1, 2, … |\n+| `reviews/cold/M<k>/DISPOSITIONS.md` | Dispositions of every cold finding |\n+| `reviews/qodo/PR-<n>/DISPOSITIONS.md` | Dispositions of every Qodo finding |\n+| `reviews/qodo/PR-<n>/<k>/(issue-comment\\|review\\|review-comment)-<id>.(md\\|json)` | Qodo archives written by `qodo_review.py` |\n+\n+`<k>`, `<r>`, `<s>`, `<n>`, `<id>` are decimal numbers. Matching is on the whole path.\n+\n+### Cold review report\n+\n+`reviews/cold/M<k>/round-<r>.md` or `scoped-<s>.md`. The first lines are machine lines, then free text:\n+\n+```markdown\n+# Cold review M3 round 1\n+covers: <40-hex sha of the mission branch head that was reviewed>\n+base: <40-hex sha of main it was diffed against>\n+spec: <state-branch commit the spec was pinned at>\n+since: <40-hex sha>            # scoped reviews only: the last covered commit\n+\n+## Findings\n+\n+| ID | severity | file:line | finding | failure scenario |\n+| --- | --- | --- | --- | --- |\n+| R1-1 | high | room.py:120 | … | … |\n+\n+## Criteria\n+\n+| criterion | met | evidence |\n+| --- | --- | --- |\n+| P1.2 | yes | test_x |\n+\n+## Scope\n+\n+Inside the spec / outside the spec: one paragraph.\n+```\n+\n+- IDs: `R<r>-<n>` for rounds, `S<s>-<n>` for scoped reviews. Severity: `high`, `medium` or `low`.\n+- A report with no findings keeps the table header and says \"none\" under it.\n+\n+### Cold dispositions\n+\n+`reviews/cold/M<k>/DISPOSITIONS.md`: one row per finding ID of every round and scoped report.\n+\n+| ID | severity | file | finding | disposition | evidence |\n+| --- | --- | --- | --- | --- | --- |\n+\n+### Qodo dispositions\n+\n+`reviews/qodo/PR-<n>/DISPOSITIONS.md`, as `QODO-REVIEW.md` step 7 plus the `cold caught` column (deviation 2), preceded by machine lines:\n+\n+```markdown\n+qodo: on | off | no first review\n+fetches: 1, 2, 3\n+reviewed: <40-hex sha of the last fetch's reviewed commit>\n+no re-review: <sha>, …          # optional\n+\n+| # | severity | finding | tags | file | disposition | Qodo now | cold caught |\n+| --- | --- | --- | --- | --- | --- | --- | --- |\n+```\n+\n+With `qodo: off` or `qodo: no first review`, the table may be empty.\n+\n+### Disposition grammar\n+\n+Both tables use the same grammar in the `disposition` column:\n+\n+| Form | Allowed for top severity (`high`, `Action required`) |\n+| --- | --- |\n+| `fixed in <7–40 hex sha>` | yes |\n+| `dismissed: <reason>` | no |\n+| `deferred: L-<n> to M<k>` or `deferred: L-<n> to phase <p> backlog` | no |\n+| `owner decision: <what>, Matthew (DECISION-<n>)` | yes |\n+| `owner decision: pending (ESCALATION-<n>)` | an open owner decision: hold reason 1 |\n+\n+Anything else, or an empty cell, is undecided.\n+\n+### Ledger and value files (state branch)\n+\n+- `LEDGER.md` table: `| ID | source | finding | reason | target | status |`. ID `L-<n>`; source like `cold M3 R1-2` or `qodo PR #12 #3`; target `M<k>` or `phase <p> backlog`; status `open`, `fixed in <sha>`, `deferred again: L-<m>` or `won't fix (Matthew, DECISION-<n>)`.\n+- `QODO-VALUE.md`: one line per PR, in the format of the example in `v1.md`.\n+\n+The M2 templates under `templates/playbook/` are aligned to these formats in this mission if they differ.\n+\n+## `room.py gate PR [--mission M<k>] [--allow-hold 5 --decision DECISION-<n>]`\n+\n+Run by the lead in the project checkout. Prints one line per check (`✓`/`✗`, with the reason), then a verdict line.\n+\n+1. **PR:** read `pulls/<PR>`: open, base `main`, head ref `mission/M<k>-…` (the mission comes from it unless `--mission`). `git fetch origin <head ref> main`; the fetched head must equal the PR's head sha. All later checks use that sha, called HEAD here.\n+2. **Lease:** `lease check` passes.\n+3. **Coverage:** collect the covered commits: every cold report's `covers:` and the reviewed commit of the latest Qodo archive of this PR (its Code Review comment's commit marker). Passes when some covered commit X is an ancestor of HEAD (or equal), and `git diff --name-only X HEAD` has no path outside the exempt set. Otherwise lists the uncovered paths.\n+4. **Dispositions:**\n+    - the cold dispositions file exists and has a row for every finding ID in every cold report;\n+    - when `QODO_REVIEW=on`, the Qodo dispositions file exists; when its `qodo:` is `on`, it has a row for every finding title in the latest archived Code Review comment (titles compared as plain text, case-folded, markup and the resolved mark removed);\n+    - every row's disposition parses, and top severity rows use only the allowed forms;\n+    - `fixed in <sha>`: the sha is an ancestor of HEAD and the commit touches the row's file when one is given;\n+    - `deferred: L-<n> …`: `L-<n>` exists in `LEDGER.md` on the state branch;\n+    - an open owner decision or an undecided row fails with hold reason 1 or 2.\n+5. **Checks:** check runs and commit statuses on HEAD. Required contexts come from `main`'s protection (404 or the upgrade 403: none). Fails if a required context is missing or not successful, or any completed run failed (hold reason 3). Pending runs give the wait verdict. No checks at all passes, noted as \"no checks configured\".\n+6. **Sensitive paths:** the changed paths (`git diff --name-status origin/main...HEAD`) against the globs of the \"## Merge-hold list\" section of `PLAYBOOK.md` on the state branch. The template has one bullet per area, ``- <label>: `glob`, `glob` ``; every backticked glob in a bullet counts. `*` matches within a path segment, `**` across segments. A bullet whose label contains \"deleted\" (any case) matches only deleted paths, so adding or editing tests never holds; weakened tests are the cold reviewer's to flag. A match fails with hold reason 5, naming the path and the glob, unless `--allow-hold 5 --decision DECISION-<n>` is given and the room holds a trusted architect comment whose kind is that `DECISION-<n>`. A playbook with no merge-hold section, or one with no globs, fails: the gate never runs without the list.",
+  "path": "docs/design/m3-reviews-gate.md",
+  "commit_id": "870f10beea0d145859842b5a254b52c98d2cfb39",
+  "original_commit_id": "870f10beea0d145859842b5a254b52c98d2cfb39",
+  "user": {
+    "login": "qodo-code-review[bot]",
+    "id": 151058649,
+    "node_id": "BOT_kgDOCQD42Q",
+    "avatar_url": "https://avatars.githubusercontent.com/in/484649?v=4",
+    "gravatar_id": "",
+    "url": "https://api.github.com/users/qodo-code-review%5Bbot%5D",
+    "html_url": "https://github.com/apps/qodo-code-review",
+    "followers_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/followers",
+    "following_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/following{/other_user}",
+    "gists_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/gists{/gist_id}",
+    "starred_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/starred{/owner}{/repo}",
+    "subscriptions_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/subscriptions",
+    "organizations_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/orgs",
+    "repos_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/repos",
+    "events_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/events{/privacy}",
+    "received_events_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/received_events",
+    "type": "Bot",
+    "user_view_type": "public",
+    "site_admin": false
+  },
+  "body": "<img src=\"https://img.shields.io/badge/Medium-634FD1?style=flat-square\" height=\"20px\" alt=\"Remediation recommended\">\n\n5\\. Weakened tests evade the merge hold <code>🐞 Bug</code> <code>≡ Correctness</code>\n\n<pre>\nThe M3 gate specification says a merge-hold bullet containing <b><i>deleted</i></b> matches only deleted paths,\nwhile the default playbook puts deleted and weakened tests in that same bullet. An edit to an\nexisting test therefore matches the test globs but does not trigger the sensitive-path hold required\nby the governing design.\n</pre>\n\n\n<details>\n<summary><strong>Agent Prompt</strong></summary>\n\n```\n## Issue description\nThe deleted-only rule exempts modified tests from the default sensitive-path hold, including modifications that weaken them.\n## Fix Focus Areas\n- docs/design/m3-reviews-gate.md[108-109]\n- templates/playbook/PLAYBOOK.md[27-31]\n## Recommended Fix\nSpecify a conservative hold for modified tests unless a reliable weakened-test determination is available. Keep the template labels and gate matching rules aligned with that behavior.\n```\n\n<code>ⓘ Copy this prompt and use it to remediate the issue with your preferred AI generation tools</code>\n</details>\n\n[Dismiss ↗](https://app.qodo.ai/findings/db26aaf6-31bd-4f77-bfc8-88567e336b51?action=dismiss&origin=git) | [View ↗](https://app.qodo.ai/findings/db26aaf6-31bd-4f77-bfc8-88567e336b51)",
+  "created_at": "2026-11-15T00:53:35Z",
+  "updated_at": "2026-11-15T00:53:36Z",
+  "html_url": "https://github.com/SigorMatt/agent-room/pull/6#discussion_r4576464197",
+  "pull_request_url": "https://api.github.com/repos/SigorMatt/agent-room/pulls/6",
+  "_links": {
+    "self": {
+      "href": "https://api.github.com/repos/SigorMatt/agent-room/pulls/comments/4576464197"
+    },
+    "html": {
+      "href": "https://github.com/SigorMatt/agent-room/pull/6#discussion_r4576464197"
+    },
+    "pull_request": {
+      "href": "https://api.github.com/repos/SigorMatt/agent-room/pulls/6"
+    }
+  },
+  "reactions": {
+    "url": "https://api.github.com/repos/SigorMatt/agent-room/pulls/comments/4576464197/reactions",
+    "total_count": 0,
+    "+1": 0,
+    "-1": 0,
+    "laugh": 0,
+    "hooray": 0,
+    "confused": 0,
+    "heart": 0,
+    "rocket": 0,
+    "eyes": 0
+  },
+  "start_line": null,
+  "original_start_line": null,
+  "start_side": null,
+  "line": 109,
+  "original_line": 109,
+  "side": "RIGHT",
+  "author_association": "NONE",
+  "original_position": 109,
+  "position": 109,
+  "subject_type": "line",
+  "is_copilot_code_review": false,
+  "copilot_code_review_sources": []
+}
