@@ -135,11 +135,13 @@ def append(state, name, text):
 
 @contextlib.contextmanager
 def pre_push(state, body):
-    """A pre-push hook in machine STATE's clone (B-style), for the length of the block."""
+    """A pre-push hook in machine STATE's clone (B-style), for the length of the block.
+    {hooks} in BODY stands for the hook's own directory."""
     hooks = tempfile.mkdtemp(dir=tmp, prefix="hooks-")
     with open(os.path.join(hooks, "pre-push"), "w") as f:
         f.write("#!/bin/sh\ncat >/dev/null\n"
-                "unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_COMMON_DIR ROOM_STATE_REMOTE\n" + body)
+                "unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_COMMON_DIR ROOM_STATE_REMOTE\n"
+                + body.replace("{hooks}", hooks))
     os.chmod(os.path.join(hooks, "pre-push"), 0o755)
     g("-C", sdir(state), "config", "core.hooksPath", hooks)
     try:
@@ -147,6 +149,9 @@ def pre_push(state, body):
     finally:
         g("-C", sdir(state), "config", "--unset", "core.hooksPath")
 
+
+# the hook acts on the first push only
+ONCE = '[ -e "{hooks}/fired" ] && exit 0\ntouch "{hooks}/fired"\n'
 
 # the push lands, then the client hears a failure (a connection dropped after the remote updated)
 LOST_ACK = ('git push -q --no-verify "$2" HEAD:refs/heads/agent-room/state\n'
@@ -366,8 +371,8 @@ def t_broken_state_worktree_is_rebuilt():
         g("clone", "-q", PET, work)
         r = room(*args, check=False, **kw)
         assert r.returncode in (0, 5) and len(r.stderr.strip().splitlines()) == 1, (args, r.returncode, r.stderr)
-        assert re.fullmatch(r"\[state worktree .* was broken; moved it to .*/R\.broken-\d{8}T\d{6}Z(-\d+)? and made "
-                            r"a new one\]", r.stderr.strip()), r.stderr
+        assert re.fullmatch(r"\[state worktree .* was broken \(no git data left to save; its files are kept\); moved "
+                            r"it to .*/R\.broken-\d{8}T\d{6}Z(-\d+)? and made a new one\]", r.stderr.strip()), r.stderr
         assert g("-C", sdir("R"), "rev-parse", "HEAD").stdout.strip() == sha(PET, "agent-room/state")
     assert room("state", "path", **kw).stderr == "", "a healthy worktree is left alone"
     aside = [d for d in os.listdir(os.path.join(tmp, "state")) if d.startswith("R.broken-")]
@@ -390,6 +395,207 @@ def t_refuses_a_dir_that_is_not_the_state_worktree():
     assert r.returncode == 1 and "holds no agent-room/state history" in r.stderr, r.stderr
     assert open(app).read() == "uncommitted mission work\n"
     assert g("-C", work, "rev-parse", "mission/M1-x").stdout.strip() == main_sha
+
+
+def t_recreated_state_branch_rebuilds_stale_worktrees():
+    # cold M2 R2-2: state worktrees of a deleted and recreated agent-room/state are stale, not foreign
+    repo = bare("again")
+    work = os.path.join(tmp, "work", "again")
+    g("clone", "-q", repo, work)
+    here = dict(cwd=work, ROOM_REPO="SigorMatt/again")  # worktree mode
+    away = dict(cwd=tmp, ROOM_REPO="SigorMatt/again", ROOM_STATE_REMOTE=repo)  # clone mode
+    room("state", "init", session="arch", state="GA", **here)
+    room("state", "init-lead", session="L1", state="GA", **here)
+    room("state", "path", state="GB", **away)
+    g("--git-dir", repo, "update-ref", "-d", "refs/heads/agent-room/state")  # Matthew deletes the branch
+    # and the architect recreates it (dated, or within the same second it would be the very same root commit)
+    room("state", "init", session="arch", state="GARCH", GIT_AUTHOR_DATE="2026-01-01T00:00:00Z",
+         GIT_COMMITTER_DATE="2026-01-01T00:00:00Z", **here)
+    new = sha(repo, "agent-room/state")
+    for state, kw in (("GA", here), ("GB", away)):
+        r = room("state", "path", state=state, **kw)
+        assert r.stdout.strip() == sdir(state), r.stdout
+        assert re.fullmatch(r"\[state worktree .* is stale \(no history of the recreated agent-room/state\); saved "
+                            r"its HEAD as refs/agent-room/broken-\d{8}T\d{6}Z(-\d+)? \([0-9a-f]{12}\) in \S+; moved "
+                            r"it to .*\.broken-\d{8}T\d{6}Z(-\d+)? and made a new one\]", r.stderr.strip()), r.stderr
+        assert g("-C", sdir(state), "rev-parse", "HEAD").stdout.strip() == new
+    # the project checkout itself is still refused, even at a commit that holds docs/playbook/
+    os.makedirs(os.path.join(work, "docs", "playbook"))
+    open(os.path.join(work, "docs", "playbook", "notes.md"), "w").write("project notes\n")
+    g("-C", work, "checkout", "-q", "--detach", "origin/main")
+    g("-C", work, "add", "-A")
+    g("-C", work, "commit", "-qm", "project docs")
+    r = room("state", "sync", state=None, ROOM_STATE_DIR=work, check=False, **here)
+    assert r.returncode == 1 and "holds no agent-room/state history" in r.stderr, r.stderr
+    assert os.path.exists(os.path.join(work, "docs", "playbook", "notes.md"))
+
+
+def new_project(name):
+    """A bare repo NAME with a checkout, a state branch and the lead files. Returns (repo, work, here)."""
+    repo = bare(name)
+    work = os.path.join(tmp, "work", name)
+    g("clone", "-q", repo, work)
+    here = dict(cwd=work, ROOM_REPO=f"SigorMatt/{name}")
+    room("state", "init", session="arch", state=f"{name}-A", **here)
+    room("state", "init-lead", session="L1", state=f"{name}-A", **here)
+    return repo, work, here
+
+
+def recreate_state_branch(repo, name, here):
+    """Matthew deletes agent-room/state and the architect recreates it (dated, so it is a new root commit)."""
+    g("--git-dir", repo, "update-ref", "-d", "refs/heads/agent-room/state")
+    room("state", "init", session="arch", state=f"{name}-arch", GIT_AUTHOR_DATE="2026-01-01T00:00:00Z",
+         GIT_COMMITTER_DATE="2026-01-01T00:00:00Z", **here)
+    return sha(repo, "agent-room/state")
+
+
+def git_dir(path):
+    return g("-C", path, "rev-parse", "--absolute-git-dir").stdout.strip()
+
+
+def asides(name):
+    return [d for d in os.listdir(os.path.join(tmp, "state")) if d.startswith(f"{name}.broken-")]
+
+
+def t_state_worktrees_carry_a_marker():
+    # B-2 (cold M2 S1-4, S1-5): room.py marks the state worktrees and clones it makes, in their own git dir
+    repo, work, here = new_project("mk")
+    room("state", "path", state="mk-B", cwd=tmp, ROOM_REPO="SigorMatt/mk", ROOM_STATE_REMOTE=repo)
+    for state in ("mk-A", "mk-B"):
+        assert os.path.isfile(os.path.join(git_dir(sdir(state)), "agent-room-state")), state
+    assert "/worktrees/" in git_dir(sdir("mk-A")), "a linked worktree's own git dir, not the project's"
+    assert not os.path.exists(os.path.join(work, ".git", "agent-room-state")), "the project's repo is never marked"
+
+
+def t_stale_worktree_rebuilt_from_inside_it():
+    # B-2 (cold M2 S1-5): run from inside the stale worktree itself, clone mode and linked worktree mode
+    repo, work, here = new_project("in")
+    away = dict(ROOM_REPO="SigorMatt/in", ROOM_STATE_REMOTE=repo)
+    room("state", "path", state="in-B", cwd=tmp, **away)
+    new = recreate_state_branch(repo, "in", here)
+    r = room("state", "path", state="in-B", cwd=sdir("in-B"), check=False, **away)
+    assert r.returncode == 0 and r.stdout.strip() == sdir("in-B") and "is stale" in r.stderr, (r.returncode, r.stderr)
+    assert g("-C", sdir("in-B"), "rev-parse", "HEAD").stdout.strip() == new and len(asides("in-B")) == 1
+    inside = os.path.join(sdir("in-A"), "docs", "playbook")
+    r = room("state", "path", session="L1", state="in-A", cwd=inside, ROOM_REPO="SigorMatt/in", check=False)
+    assert r.returncode == 0 and r.stdout.strip() == sdir("in-A") and "is stale" in r.stderr, (r.returncode, r.stderr)
+    assert g("-C", sdir("in-A"), "rev-parse", "HEAD").stdout.strip() == new and len(asides("in-A")) == 1
+    assert os.path.isfile(os.path.join(git_dir(sdir("in-A")), "agent-room-state")), "the new worktree is marked"
+    assert room("state", "path", state="in-A", **here).stderr == "", "and healthy"
+
+
+def t_only_marked_dirs_are_moved():
+    # B-2 (cold M2 S1-4): ROOM_STATE_DIR naming the project checkout is refused from anywhere, never moved aside
+    repo, work, here = new_project("pc")
+    os.makedirs(os.path.join(work, "docs", "playbook"))
+    notes = os.path.join(work, "docs", "playbook", "notes.md")
+    open(notes, "w").write("project notes\n")
+    g("-C", work, "checkout", "-q", "--detach", "origin/main")
+    g("-C", work, "add", "-A")
+    g("-C", work, "commit", "-qm", "project docs")
+    wip = os.path.join(work, "uncommitted.txt")
+    open(wip, "w").write("wip\n")
+    builder = os.path.join(work, ".claude", "worktrees", "agent-1")
+    g("-C", work, "worktree", "add", "-q", "-b", "worktree-agent-1", builder)
+    for cwd, extra in ((work, {}), (tmp, {"ROOM_STATE_REMOTE": repo}), (builder, {})):
+        r = room("state", "sync", state=None, ROOM_STATE_DIR=work, cwd=cwd, ROOM_REPO="SigorMatt/pc", check=False,
+                 **extra)
+        assert r.returncode == 1 and "holds no agent-room/state history and has no agent-room-state marker" in \
+            r.stderr and "leaves it alone" in r.stderr, (cwd, r.stderr)
+    assert open(notes).read() == "project notes\n" and open(wip).read() == "wip\n"
+    assert g("-C", builder, "status", "--short").returncode == 0, "the builder worktree still works"
+    assert not [d for d in os.listdir(os.path.join(tmp, "work")) if d.startswith("pc.broken-")]
+    # a stale clone room.py didn't make (no marker) is left alone too
+    hand = sdir("pc-hand")
+    g("clone", "-q", "--branch", "agent-room/state", repo, hand)
+    recreate_state_branch(repo, "pc", here)
+    r = room("state", "path", state="pc-hand", cwd=tmp, ROOM_REPO="SigorMatt/pc", ROOM_STATE_REMOTE=repo, check=False)
+    assert r.returncode == 1 and "has no agent-room-state marker" in r.stderr, r.stderr
+    assert os.path.isdir(os.path.join(hand, ".git")) and not asides("pc-hand")
+    # and so is a directory git can't open that carries no marker
+    broken = sdir("pc-junk")
+    os.makedirs(os.path.join(broken, ".git"))
+    open(os.path.join(broken, "keep.txt"), "w").write("mine\n")
+    r = room("state", "path", state="pc-junk", cwd=tmp, ROOM_REPO="SigorMatt/pc", ROOM_STATE_REMOTE=repo, check=False)
+    assert r.returncode == 1 and "no git checkout room.py can open" in r.stderr and not asides("pc-junk"), r.stderr
+
+
+def t_stale_worktree_local_work_is_saved():
+    # B-2 (cold M2 S1-3): an unpushed commit and uncommitted edits are saved on a ref before the move, and said so
+    repo, work, here = new_project("lw")
+    room("lease", "take", session="L1", state="lw-A", **here)
+    wt = sdir("lw-A")
+    append("lw-A", "LEDGER.md", "| L-9 | unpushed ledger row |")
+    g("-C", wt, "commit", "-qam", "ledger row (push failed)")
+    unpushed = g("-C", wt, "rev-parse", "HEAD").stdout.strip()
+    append("lw-A", "MISSIONS.md", "intent: open PR for M3")
+    open(os.path.join(wt, "docs", "playbook", "NOTES.md"), "w").write("untracked notes\n")
+    recreate_state_branch(repo, "lw", here)
+    r = room("state", "path", session="L1", state="lw-A", check=False, **here)
+    assert r.returncode == 0, (r.returncode, r.stderr)
+    m = re.fullmatch(r"\[state worktree (\S+) is stale \(no history of the recreated agent-room/state\); saved its "
+                     r"HEAD and uncommitted changes as (refs/agent-room/broken-\d{8}T\d{6}Z(?:-\d+)?) \(([0-9a-f]{12})\) "
+                     r"in (\S+); moved it to (\S+) and made a new one\]", r.stderr.strip())
+    assert m and m.group(1) == wt and m.group(4) == os.path.realpath(os.path.join(work, ".git")), r.stderr
+    ref = m.group(2)
+    assert g("-C", work, "rev-parse", ref).stdout.strip().startswith(m.group(3))
+    assert g("-C", work, "rev-parse", f"{ref}^").stdout.strip() == unpushed, "the unpushed commit is kept"
+    assert "intent: open PR for M3" in g("-C", work, "show", f"{ref}:docs/playbook/MISSIONS.md").stdout
+    assert g("-C", work, "show", f"{ref}:docs/playbook/NOTES.md").stdout == "untracked notes\n"
+    assert os.path.isdir(m.group(5)) and "intent: open PR" in open(os.path.join(m.group(5), "docs", "playbook",
+                                                                                 "MISSIONS.md")).read()
+
+
+def push_edit(repo, name, fn):
+    """Edit a playbook file on the state branch from another clone, as a hand edit on GitHub would."""
+    other = tempfile.mkdtemp(dir=tmp, prefix="edit-")
+    g("clone", "-q", "--branch", "agent-room/state", repo, other)
+    path = os.path.join(other, "docs", "playbook", name)
+    text = fn(open(path).read())  # read before open(..., "w") truncates it
+    open(path, "w").write(text)
+    g("-C", other, "commit", "-qam", f"hand edit of {name}")
+    g("-C", other, "push", "-q", "origin", "HEAD:agent-room/state")
+
+
+AGAIN = dict(cwd=os.path.join(tmp, "work", "again"), ROOM_REPO="SigorMatt/again", state="GA")
+BREAK_FENCE = ("```agent-room-state", "``` agent-room-state")
+
+
+def t_unreadable_lease_does_not_block_posting():
+    # cold M2 R2-3: with MISSIONS.md missing or its block broken, nobody can be shown to hold the lease
+    assert "room 1 in SigorMatt/again" in room("new", "Phase 1", **AGAIN).stdout
+    r = room("say", "1", "lead", "ESCALATION-1: preflight fails, need X", session="L1", **AGAIN)
+    assert "sent #" in r.stdout and len(r.stderr.strip().splitlines()) == 1, (r.stdout, r.stderr)
+    assert r.stderr.startswith("[lease unreadable, posting anyway: ") and "MISSIONS.md is missing" in r.stderr
+    room("state", "init-lead", session="L1", **AGAIN)
+    room("lease", "take", session="L1", **AGAIN)
+    assert room("say", "1", "lead", "STATUS: held", session="L2", check=False, **AGAIN).returncode == 5
+    push_edit(os.path.join(tmp, "git", "SigorMatt", "again.git"), "MISSIONS.md", lambda t: t.replace(*BREAK_FENCE, 1))
+    for session in ("L1", "L2"):
+        r = room("say", "1", "lead", f"ESCALATION-2: MISSIONS.md block broken ({session})", session=session, **AGAIN)
+        assert "sent #" in r.stdout and "has no agent-room-state block" in r.stderr, (r.stdout, r.stderr)
+    r = room("lease", "check", session="L1", check=False, **AGAIN)
+    assert r.returncode == 1 and "has no agent-room-state block" in r.stderr, "lease check still reports it"
+    transcript = room("read", "1", "--all", **AGAIN).stdout
+    assert "preflight fails" in transcript and "(L1)" in transcript and "(L2)" in transcript
+    assert "STATUS: held" not in transcript
+
+
+def t_broken_block_can_be_repaired():
+    # cold M2 R2-4: state commit of MISSIONS.md goes ahead, with a warning, while the pushed block is broken
+    room("state", "sync", session="L1", **AGAIN)
+    missions = playbook_path("GA", "MISSIONS.md")
+    text = open(missions).read()
+    assert BREAK_FENCE[1] in text and "lease_session: L1" in text, text
+    open(missions, "w").write(text.replace(BREAK_FENCE[1], BREAK_FENCE[0], 1))
+    r = room("state", "commit", "-m", "repair the block", session="L1", **AGAIN)
+    assert "pushed" in r.stdout and len(r.stderr.strip().splitlines()) == 1, (r.stdout, r.stderr)
+    assert r.stderr.startswith("[lease unreadable, committing anyway: ") and "no agent-room-state block" in r.stderr
+    assert room("lease", "check", session="L1", **AGAIN).returncode == 0, "the repaired block holds L1's lease"
+    room("state", "sync", session="L2", **AGAIN)
+    append("GA", "LEDGER.md", "| L-1 | not L2's to write |")
+    r = room("state", "commit", "-m", "ledger", session="L2", check=False, **AGAIN)
+    assert r.returncode == 5 and "held by L1" in r.stderr, (r.returncode, r.stderr)
 
 
 # --- lease
@@ -419,7 +625,8 @@ exit 0
         g("-C", sdir("B"), "config", "--unset", "core.hooksPath")
     assert os.path.exists(os.path.join(hooks, "fired")), "the race hook did not run"
     assert open(out).read().strip() == str(gen + 1), open(out).read()
-    assert r.returncode == 3 and "lease not taken" in r.stderr, (r.returncode, r.stdout, r.stderr)
+    assert r.returncode == 3 and "lease not taken: A took it first" in r.stderr and "stand down" in r.stderr, \
+        (r.returncode, r.stdout, r.stderr)
     b = block()
     assert b["lease_session"] == "A" and b["lease_generation"] == str(gen + 1), b
     assert "lease_session: A" in open(playbook_path("B", "MISSIONS.md")).read(), "loser is reset to the remote"
@@ -463,6 +670,33 @@ def t_lease_take_stands_down_and_release():
     assert room_b("lease", "check").returncode == 0
 
 
+def t_lease_take_retries_after_an_unrelated_write():
+    # cold M2 R2-5: a push lost to another write retries; only a lease another session took means stand down
+    room_b("lease", "release")
+    gen = int(block()["lease_generation"])
+    room_b("state", "sync")
+    note = (f'cd "{CHECKOUT}" && export ROOM_SESSION=arch ROOM_STATE_DIR="{sdir("A")}" ROOM_REPO=SigorMatt/pet\n'
+            f'"{sys.executable}" "{ROOM}" state sync >/dev/null 2>&1\n'
+            f'echo "- architect note" >> "{playbook_path("A", "HANDOFF.md")}"\n'
+            f'"{sys.executable}" "{ROOM}" state commit -m "handoff note" > "{{hooks}}/out" 2>&1\n')
+    with pre_push("B", ONCE + note) as hooks:
+        r = room_b("lease", "take", check=False)
+        out = open(os.path.join(hooks, "out")).read()
+    assert "pushed" in out, out
+    assert r.returncode == 0 and r.stdout.strip() == str(gen + 1), (r.returncode, r.stdout, r.stderr)
+    assert block()["lease_session"] == "B" and "architect note" in remote_file(PET, "docs/playbook/HANDOFF.md")
+    # a --takeover that overlaps the stale holder's own release still takes the lease
+    release = (f'cd "{tmp}" && ROOM_SESSION=B ROOM_STATE_REMOTE="{PET}" ROOM_STATE_DIR="{sdir("B2")}" '
+               f'ROOM_REPO=SigorMatt/pet "{sys.executable}" "{ROOM}" lease release > "{{hooks}}/out" 2>&1\n')
+    with pre_push("B", ONCE + release) as hooks:
+        r = room_b("lease", "take", "--takeover", session="S9", check=False)
+        out = open(os.path.join(hooks, "out")).read()
+    assert "released by B" in out, out
+    assert r.returncode == 0 and r.stdout.strip() == str(gen + 2), (r.returncode, r.stdout, r.stderr)
+    assert block()["lease_session"] == "S9"
+    room_b("lease", "take", "--takeover")
+
+
 def t_stale_lead_cannot_write():
     # cold M2 R1-1: after a successor takes the lease, the old lead can't write lead-owned state
     room("lease", "take", "--takeover")
@@ -482,6 +716,26 @@ def t_stale_lead_cannot_write():
     assert "pushed" in room("state", "commit", "-m", "handoff").stdout
     room_b("lease", "release")
     assert room_b("state", "set", "step=x", check=False).returncode == 5, "a released lease is no one's"
+
+
+def t_renaming_a_lead_file_needs_the_lease():
+    # cold M2 R2-1: a rename shows the old name too, staged or already committed locally
+    room("lease", "take")
+    before = sha(PET, "agent-room/state")
+    room("state", "sync", session="arch")
+    g("-C", sdir("A"), "mv", "docs/playbook/MISSIONS.md", "docs/playbook/archive-missions.md")
+    r = room("state", "commit", "-m", "tidy", session="arch", check=False)
+    assert r.returncode == 5 and "MISSIONS.md are lead-owned" in r.stderr, (r.returncode, r.stderr)
+    g("-C", sdir("A"), "commit", "-qm", "tidy")  # an unpushed commit holding the rename
+    r = room("state", "commit", "-m", "tidy", session="arch", check=False)
+    assert r.returncode == 5 and "MISSIONS.md are lead-owned" in r.stderr, (r.returncode, r.stderr)
+    assert sha(PET, "agent-room/state") == before
+    room("state", "sync")
+    g("-C", sdir("A"), "mv", "docs/playbook/LEDGER.md", "docs/playbook/LEDGER-old.md")
+    assert "pushed" in room("state", "commit", "-m", "the holder may").stdout
+    g("-C", sdir("A"), "mv", "docs/playbook/LEDGER-old.md", "docs/playbook/LEDGER.md")
+    assert "pushed" in room("state", "commit", "-m", "and back").stdout
+    room("lease", "release")
 
 
 def t_say_refused_without_lease():

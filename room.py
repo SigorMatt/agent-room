@@ -23,7 +23,8 @@ in Claude chat and cloud sessions, or `gh auth login` on your own machine.
   room.py merge PR --sha SHA [--allow-hold 5 --decision DECISION-<n>]        gate, then merge naming SHA
   room.py watchdog N [--silent-after 3h]   the watchdog task: LEAD-SILENT (buzzes) when no progress; never writes
   room.py join-line N [--takeover]         print the line that starts a lead
-  room.py handoff N --step STEP            post HANDOFF, record step and cursor, release the lease, print the join line
+  room.py handoff N --step STEP --cursor ID   post HANDOFF, record step and cursor, release the lease, print the join line
+  room.py intent N "INTENT"                record before acting (post KIND intents note the room's last comment)
   room.py reconcile N                      for a joining lead: the recorded state next to GitHub's facts
   room.py budget                           the mission's elapsed time against its budget (exit 6 over)
 
@@ -52,7 +53,7 @@ the gate) and 6 if GitHub finds the PR not mergeable.
 Environment:
   ROOM_REPO         default repo for rooms
   ROOM_SESSION      this participant's session ID (see --session)
-  ROOM_TRUST        comma-separated GitHub logins whose comments count (default: your gh login)
+  ROOM_TRUST        comma-separated GitHub logins whose comments count besides your gh login's
   ROOM_STATE        where read cursors live (default ~/.agent-room)
   ROOM_STATE_DIR    the state branch's worktree (default ~/agent-room-state/OWNER__NAME)
   ROOM_STATE_REMOTE git URL to clone the state branch from when not run inside the project's checkout
@@ -142,13 +143,18 @@ def git_out(*args, cwd=None):
     return git(*args, cwd=cwd).stdout.strip()
 
 
+def repo_of_url(url):
+    """OWNER/NAME from a GitHub (or Claude proxy) git URL, or None."""
+    m = re.search(r"(?:github\.com[:/]+|/git/)([\w.-]+)/([\w.-]+?)(?:\.git)?/?$", url)
+    return f"{m.group(1)}/{m.group(2)}" if m else None
+
+
 def repo_from_checkout():
     try:
         url = git("remote", "get-url", "origin", check=False, timeout=10).stdout.strip()
     except StateError:
         return None
-    m = re.search(r"(?:github\.com[:/]+|/git/)([\w.-]+)/([\w.-]+?)(?:\.git)?/?$", url)
-    return f"{m.group(1)}/{m.group(2)}" if m else None
+    return repo_of_url(url)
 
 
 def default_trust():
@@ -560,11 +566,16 @@ STATE_KEY = re.compile(r"[a-z][a-z0-9_]*")
 TEMPLATE_URL = "https://raw.githubusercontent.com/{repo}/{version}/templates/playbook/{name}"
 FIRST_GITIGNORE = "__pycache__/\n*.pyc\n.venv/\nnode_modules/\n.env\n.DS_Store\n"
 STATUSES = ("running", "paused", "stopped", "done")  # the machine block's status; a missing one reads as running
+STATE_MARKER = "agent-room-state"  # in the git dir of each state worktree room.py makes
 EXIT_MOVED, EXIT_LEASE = 3, 5
 
 
 class StateMoved(Exception):
     """A push to the state branch was rejected because someone else pushed first."""
+
+
+class BlockUnreadable(StateError):
+    """MISSIONS.md, or the machine block in it, is missing or broken: no lease can be read."""
 
 
 class StateExit(Exception):
@@ -585,12 +596,19 @@ def identity(cwd):
 
 
 def state_checkout():
-    """The project checkout to add the state worktree to, or None to clone instead."""
+    """The project checkout to add the state worktree to (its main worktree), or None to clone instead. Never
+    a state clone room.py made, even when run from inside one."""
     if os.environ.get("ROOM_STATE_REMOTE"):
         return None
     here = repo_from_checkout()
     if not here or here.lower() != REPO.lower():
         return None
+    common = git("rev-parse", "--git-common-dir", check=False).stdout.strip()
+    common = os.path.realpath(common) if common else ""
+    if not common or os.path.isfile(os.path.join(common, STATE_MARKER)):
+        return None  # inside a state clone: it is no project checkout
+    if os.path.basename(common) == ".git":
+        return os.path.dirname(common)  # from a linked worktree too, so moving that one aside can't pull the rug
     r = git("rev-parse", "--show-toplevel", check=False)
     return r.stdout.strip() if r.returncode == 0 and r.stdout.strip() else None
 
@@ -608,9 +626,8 @@ def state_worktree_exists():
     return os.path.exists(os.path.join(state_path(), ".git"))
 
 
-def remote_heads():
-    """{branch: sha} of the project repo's branches."""
-    root = state_checkout()
+def ls_heads(root):
+    """{branch: sha} of the project repo's branches, through the checkout ROOT or, if None, remote_url()."""
     out = git("ls-remote", "--heads", "origin", cwd=root).stdout if root else \
         git("ls-remote", "--heads", remote_url()).stdout
     heads = {}
@@ -621,43 +638,136 @@ def remote_heads():
     return heads
 
 
+def remote_heads():
+    """{branch: sha} of the project repo's branches."""
+    return ls_heads(state_checkout())
+
+
+# Only a directory room.py made is ever moved aside and rebuilt: it writes STATE_MARKER into the git dir of every
+# state worktree or clone it creates (B-2, cold M2 S1-3 to S1-5). A directory whose .git file names an admin dir
+# that is gone (the checkout it was added from was cloned again) is the one other case. Anything else is refused,
+# whatever the current directory.
+
+def git_dir_of(path):
+    """PATH's git dir, read from the file system (PATH/.git, or the gitdir its .git file names) whether or not
+    git can open it; None when PATH has no .git."""
+    dot = os.path.join(path, ".git")
+    if os.path.isdir(dot):
+        return dot
+    try:
+        with open(dot) as f:
+            line = f.read().strip()
+    except OSError:
+        return None
+    if not line.startswith("gitdir:"):
+        return None
+    gd = line[len("gitdir:"):].strip()
+    return gd if os.path.isabs(gd) else os.path.normpath(os.path.join(path, gd))
+
+
+def has_marker(path):
+    gd = git_dir_of(path)
+    return bool(gd) and os.path.isfile(os.path.join(gd, STATE_MARKER))
+
+
+def dangling_gitfile(path):
+    """PATH's .git is a file naming a git dir that no longer exists."""
+    gd = git_dir_of(path)
+    return os.path.isfile(os.path.join(path, ".git")) and bool(gd) and not os.path.exists(gd)
+
+
+def mark(path):
+    gd = os.path.join(path, git_out("rev-parse", "--git-dir", cwd=path))
+    with open(os.path.join(gd, STATE_MARKER), "w") as f:
+        f.write(f"The {STATE_BRANCH} worktree of {REPO}, made by room.py, which may move it aside and rebuild it.\n")
+
+
 def check_state_dir(path):
-    """Refuse a directory that isn't the state worktree, before anything resets or cleans it: one
-    with another branch checked out, or whose HEAD shares no history with the state branch (the
-    project checkout, or a builder's worktree, whatever the current directory)."""
+    """Fetch, then judge the directory before anything resets or cleans it. Returns 'ok', or 'stale'
+    for a state worktree room.py made whose history the recreated branch no longer shares. Refuses
+    anything else: a directory with another branch checked out, or with no state history and no marker
+    (the project checkout, or a builder's worktree, whatever the current directory)."""
     branch = git("symbolic-ref", "-q", "--short", "HEAD", cwd=path, check=False).stdout.strip()
     if branch and branch != STATE_BRANCH:
         raise StateError(f"{path} has branch {branch} checked out, so it isn't the state worktree; "
                          "set ROOM_STATE_DIR to a directory of its own")
-    if git("rev-parse", "-q", "--verify", STATE_REF, cwd=path, check=False).returncode != 0:
-        fetch(path)
-    if git("merge-base", "HEAD", STATE_REF, cwd=path, check=False).returncode != 0:
-        raise StateError(f"{path} holds no {STATE_BRANCH} history (the project checkout?), so it isn't the "
-                         "state worktree; set ROOM_STATE_DIR to a directory of its own")
+    fetch(path)
+    if git("merge-base", "HEAD", STATE_REF, cwd=path, check=False).returncode == 0:
+        return "ok"
+    if has_marker(path):
+        return "stale"
+    raise StateError(f"{path} holds no {STATE_BRANCH} history and has no {STATE_MARKER} marker in its git dir "
+                     "(the project checkout?), so room.py didn't make it and leaves it alone: move it yourself, or "
+                     "set ROOM_STATE_DIR to a directory of its own")
+
+
+def save_local_work(path, stamp, aside):
+    """Before a stale state worktree is moved aside: its HEAD and uncommitted changes as a commit on
+    refs/agent-room/broken-<stamp> in its repository (for a linked worktree, the project's, which outlives the
+    worktree's own admin dir), else as a patch next to the moved dir. Returns the words for the notice."""
+    try:
+        head = git_out("rev-parse", "HEAD", cwd=path)
+        git("add", "-A", cwd=path)  # its index moves aside with it anyway
+        tree = git_out("write-tree", cwd=path)
+        snap = head if tree == git_out("rev-parse", "HEAD^{tree}", cwd=path) else git_out(
+            *identity(path), "commit-tree", tree, "-p", head, "-m",
+            f"agent-room: uncommitted work of the stale state worktree {path}", cwd=path)
+        ref = f"refs/agent-room/broken-{stamp}"
+        if git("update-ref", ref, snap, "0" * 40, cwd=path, check=False).returncode != 0:  # create, never overwrite
+            ref += f"-{os.getpid()}"
+            git("update-ref", ref, snap, "0" * 40, cwd=path)
+        repo = os.path.realpath(os.path.join(path, git_out("rev-parse", "--git-common-dir", cwd=path)))
+        inside = os.path.realpath(path) + os.sep
+        if repo.startswith(inside):  # a clone keeps its repo, which moves with it
+            repo = os.path.join(aside, repo[len(inside):])
+        what = "its HEAD" + (" and uncommitted changes" if snap != head else "")
+        return f"saved {what} as {ref} ({snap[:12]}) in {repo}"
+    except (StateError, OSError) as e:
+        patch = f"{aside}.patch"
+        try:
+            diff = git("diff", "--cached", "--binary", "HEAD", cwd=path, check=False).stdout
+            head = git("rev-parse", "HEAD", cwd=path, check=False).stdout.strip() or "unknown"
+            with open(patch, "w") as f:
+                f.write(f"HEAD of {path} was {head}; its uncommitted changes follow.\n\n{diff}")
+            return f"couldn't save a commit ({e}); saved its HEAD and changes as {patch}"
+        except OSError as e2:
+            return f"couldn't save its HEAD or changes ({e}; {e2}); its files are in the moved dir"
+
+
+def move_aside(path, why, save=False):
+    stamp = time.strftime('%Y%m%dT%H%M%SZ', time.gmtime())
+    aside = f"{path}.broken-{stamp}"
+    if os.path.lexists(aside):
+        aside += f"-{os.getpid()}"
+    saved = save_local_work(path, stamp, aside) if save else None
+    os.rename(path, aside)
+    print(f"[state worktree {path} {why}; " + (f"{saved}; " if saved else "") +
+          f"moved it to {aside} and made a new one]", file=sys.stderr)
 
 
 def ensure_worktree():
-    """Path of the state worktree: checked, rebuilt if broken, created if missing."""
+    """Path of the state worktree, just fetched: checked, rebuilt if broken or stale, created if missing."""
     path = state_path()
+    root = state_checkout()  # before anything moves: the current directory may be inside the one moved aside
     if os.path.lexists(os.path.join(path, ".git")):
         r = git("rev-parse", "--show-toplevel", cwd=path, check=False)
         if r.returncode == 0:
-            check_state_dir(path)
-            return path
-        if "not a git repository" not in r.stderr:
+            if check_state_dir(path) == "ok":
+                return path
+            move_aside(path, f"is stale (no history of the recreated {STATE_BRANCH})", save=True)
+        elif dangling_gitfile(path) or has_marker(path):
+            # e.g. the project checkout it was added from was cloned again
+            move_aside(path, "was broken (no git data left to save; its files are kept)")
+        elif "not a git repository" in r.stderr:
+            raise StateError(f"{path} is no git checkout room.py can open, and has no {STATE_MARKER} marker, so "
+                             "room.py leaves it alone: move it yourself, or set ROOM_STATE_DIR")
+        else:
             raise StateError(f"git rev-parse in {path}: {r.stderr.strip()}")
-        # e.g. the project checkout it was added from was cloned again: move it aside and start over
-        aside = f"{path}.broken-{time.strftime('%Y%m%dT%H%M%SZ', time.gmtime())}"
-        if os.path.lexists(aside):
-            aside += f"-{os.getpid()}"
-        os.rename(path, aside)
-        print(f"[state worktree {path} was broken; moved it to {aside} and made a new one]", file=sys.stderr)
-    if STATE_BRANCH not in remote_heads():
+    if STATE_BRANCH not in ls_heads(root):
         raise StateError(f"{STATE_BRANCH} doesn't exist in {REPO} yet: the architect runs '{ME} state init'")
     if os.path.isdir(path) and os.listdir(path):
         raise StateError(f"{path} exists and is not a git checkout: move it, or set ROOM_STATE_DIR")
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    root = state_checkout()
     if root:
         git("fetch", "-q", "origin", f"+refs/heads/{STATE_BRANCH}:{STATE_REF}", cwd=root)
         git("worktree", "prune", cwd=root)
@@ -665,6 +775,7 @@ def ensure_worktree():
         git("worktree", "add", "-q", "--detach", path, STATE_REF, cwd=root)
     else:
         git("clone", "-q", "--depth", "1", "--single-branch", "--branch", STATE_BRANCH, remote_url(), path)
+    mark(path)
     return path
 
 
@@ -807,7 +918,7 @@ def add_missing(names, msg):
 def read_block(text):
     m = STATE_BLOCK.search(text)
     if not m:
-        raise StateError(f"{PLAYBOOK_DIR}/MISSIONS.md has no agent-room-state block")
+        raise BlockUnreadable(f"{PLAYBOOK_DIR}/MISSIONS.md has no agent-room-state block")
     values = {}
     for line in m.group(1).splitlines():
         key, sep, value = line.partition(":")
@@ -879,11 +990,10 @@ def pushed_text(path, name):
 def pushed_state():
     """(worktree path, machine block) of MISSIONS.md on the remote state branch, freshly fetched. Reads
     git objects only, so local work in the worktree is neither used nor touched."""
-    path = ensure_worktree()
-    fetch(path)
+    path = ensure_worktree()  # fetched
     text = pushed_text(path, "MISSIONS.md")
     if text is None:
-        raise StateError(f"{PLAYBOOK_DIR}/MISSIONS.md is missing on {STATE_BRANCH}: run '{ME} state init-lead'")
+        raise BlockUnreadable(f"{PLAYBOOK_DIR}/MISSIONS.md is missing on {STATE_BRANCH}: run '{ME} state init-lead'")
     return path, read_block(text)
 
 
@@ -895,12 +1005,16 @@ def lease_holder():
 def lease_guard(a, kind=None):
     """Lease check on send, for say and close: a lead with a state worktree may not post while
     another session holds the lease (exit 5). A released lease (none) doesn't block, so a
-    retiring lead can still post NEXT-LEAD-NEEDED. No kind is exempt; KIND is unused."""
+    retiring lead can still post NEXT-LEAD-NEEDED, and neither does an unreadable one (a missing
+    MISSIONS.md or a broken block), with a warning. No kind is exempt; KIND is unused."""
     if a.role != "lead" or not state_worktree_exists():
         return
     sid = session_id(a)
     try:
         holder, gen = lease_holder()
+    except BlockUnreadable as e:  # no session can be shown to hold it, and the lead must be able to say so
+        print(f"[lease unreadable, posting anyway: {e}]", file=sys.stderr)
+        return
     except StateError as e:
         sys.exit(f"not sent: lease check failed: {e}")
     if holder not in (sid, "none"):
@@ -950,12 +1064,13 @@ def cmd_state_sync(a):
 
 
 def changed_paths(path):
-    """Paths the worktree changes against the commit its work was built on: staged and unpushed."""
+    """Paths the worktree changes against the commit its work was built on: staged and unpushed.
+    Without rename detection, so a renamed or moved file counts under its old name too."""
     git("add", "-A", cwd=path)
-    out = set(git_out("diff", "--cached", "--name-only", cwd=path).splitlines())
+    out = set(git_out("diff", "--cached", "--no-renames", "--name-only", cwd=path).splitlines())
     base = git("merge-base", "HEAD", STATE_REF, cwd=path, check=False).stdout.strip()
     if base:
-        out |= set(git_out("diff", "--name-only", base, "HEAD", cwd=path).splitlines())
+        out |= set(git_out("diff", "--no-renames", "--name-only", base, "HEAD", cwd=path).splitlines())
     return out
 
 
@@ -965,8 +1080,12 @@ def cmd_state_commit(a):
     if touched:  # lead-owned files need the lease, read from the freshly fetched branch
         fetch(path)
         text = pushed_text(path, "MISSIONS.md")
-        values = read_block(text) if text is not None else {}
-        require_lease(values, session_id(a), f"not committed ({', '.join(touched)} are lead-owned)")
+        try:
+            if text is None:
+                raise BlockUnreadable(f"{PLAYBOOK_DIR}/MISSIONS.md is missing on {STATE_BRANCH}")
+            require_lease(read_block(text), session_id(a), f"not committed ({', '.join(touched)} are lead-owned)")
+        except BlockUnreadable as e:  # no one holds a lease that can't be read; let the repair through
+            print(f"[lease unreadable, committing anyway: {e}]", file=sys.stderr)
     if commit_and_push(path, a.message):
         print(f"pushed {git_out('rev-parse', '--short', 'HEAD', cwd=path)} to {STATE_BRANCH}")
     else:
@@ -1020,19 +1139,31 @@ def cmd_state_next(a):
 
 def cmd_lease_take(a):
     sid = session_id(a)
+    seen = []  # the lease as each try found it
 
     def take(values):
         holder, gen = lease_of(values)
+        seen.append((holder, gen))
         if holder not in ("none", sid) and not a.takeover:
             raise StateExit(EXIT_MOVED, f"lease held by {holder}: stand down (generation {gen}; "
                                         "--takeover only for a lead Matthew starts after LEAD-SILENT)")
-        return {"lease_session": sid, "lease_generation": next_int(values, "lease_generation")}
-    try:
-        new = change_state(a, f"lease: {sid} takes the lead lease", take, need_lease=False)
-    except StateMoved:
-        print("lease not taken: another session pushed first; stand down, or see 'lease check'", file=sys.stderr)
-        return EXIT_MOVED
-    print(new["lease_generation"])
+        # a lead that takes the lease is running: a status left at paused, stopped or done mustn't mute the watchdog
+        return {"lease_session": sid, "lease_generation": next_int(values, "lease_generation"), "status": "running"}
+
+    for _ in range(2):
+        try:
+            new = change_state(a, f"lease: {sid} takes the lead lease", take, need_lease=False)
+            print(new["lease_generation"])
+            return 0
+        except StateMoved:
+            # the push lost to some other write; only a lease that another session took means stand down
+            holder, gen = lease_holder()
+            if holder not in ("none", sid) and (holder, gen) != seen[-1]:
+                print(f"lease not taken: {holder} took it first (generation {gen}); stand down", file=sys.stderr)
+                return EXIT_MOVED
+    print(f"lease not taken: {STATE_BRANCH} moved under both tries, and no session took the lease; "
+          "run 'lease take' again", file=sys.stderr)
+    return 1
 
 
 def cmd_lease_release(a):
@@ -1181,8 +1312,7 @@ def cmd_preflight(a):
     # branch after a fetch, so uncommitted edits in the worktree can't pass for it
     path = None
     try:
-        path = ensure_worktree()
-        fetch(path)
+        path = ensure_worktree()  # fetched
     except StateError as e:
         path = None
         check("✗", f"state branch: {e}")
@@ -2040,14 +2170,16 @@ def add_gate_commands(sub, common):
 # schedules with its own scheduled-task tool: room.py supplies the facts, the text and the state changes
 # around it. Every command here works inside the project's checkout or without one (ROOM_STATE_REMOTE).
 #
-#   watchdog N [--silent-after 3h]   join-line N [--takeover]   handoff N --step STEP   reconcile N   budget
+#   watchdog N [--silent-after 3h]   join-line N [--takeover]   handoff N --step STEP --cursor ID   reconcile N
+#   budget
 #
 # watchdog, reconcile and budget read the pushed state branch and never write it; the watchdog schedules nothing.
-# Intents reconcile recognizes: "merge PR #<n> at <sha>", "open PR <branch or M<k>>", "post <KIND>", "close room".
+# Intents reconcile recognizes: "merge PR #<n> at <sha>", "open PR <branch or M<k>>", "post <KIND> after #<id>" (as
+# 'intent' records it), "close room".
 
 WAITING_FOR_OWNER = "waiting for owner"
+QUIET_STATUSES = ("paused", "stopped", "done")
 DEFAULT_BUDGET_HOURS = 8
-INTENT_SKEW = 120  # seconds a room message may seem to predate the intent recorded before it (clock skew)
 
 
 def duration_arg(s):
@@ -2084,9 +2216,40 @@ def status_of(values):
     return values.get("status") or "running"
 
 
-def say(room, role, text, a=None):
-    """Post TEXT as ROLE through cmd_say: its role guard, its lease check on send and its buzz."""
-    cmd_say(argparse.Namespace(room=room, role=role, text=text, buzz=None, session=getattr(a, "session", None)))
+def halted(values):
+    """Whether the status is paused, stopped or done, in any case; any other value counts as running."""
+    return status_of(values).strip().lower() in QUIET_STATUSES
+
+
+def current_room(values, playbook):
+    """(number, where) of the room the state records: the block's room, else PLAYBOOK.md's; None if neither."""
+    for n, where in ((values.get("room"), "MISSIONS.md"),
+                     ((re.search(r"^room:[ \t]*(\d+)", playbook or "", re.M) or [None, None])[1], "PLAYBOOK.md")):
+        if (n or "").strip().isdigit() and int(n) > 0:
+            return int(n), where
+    return None
+
+
+def quiet_reason(a, values, playbook):
+    """Why the watchdog stays quiet whatever the progress, or None."""
+    if halted(values):
+        return f"status is {status_of(values)}"
+    if (values.get("waiting_for_owner") or "").strip().lower() == "yes":
+        return "waiting_for_owner is yes"
+    step = values.get("step") or "none"
+    if step.strip().lower().startswith(WAITING_FOR_OWNER):
+        return f"step is {step}"
+    room = current_room(values, playbook)
+    if room and room[0] != a.room:
+        return (f"room {a.room} is not the current room ({room[1]} records room {room[0]}); this watchdog is left "
+                "from an earlier phase: delete it")
+    return None
+
+
+def say(room, role, text, a=None, buzz=None):
+    """Post TEXT as ROLE through cmd_say: its role guard, its lease check on send and its buzz (BUZZ as
+    --buzz/--no-buzz: None leaves it to the kind)."""
+    cmd_say(argparse.Namespace(room=room, role=role, text=text, buzz=buzz, session=getattr(a, "session", None)))
 
 
 def shallow_cut(path, sha):
@@ -2099,14 +2262,15 @@ def shallow_cut(path, sha):
         return False
 
 
-def last_change(path, key):
-    """(sha, committer time) of the newest commit on the fetched state branch whose MISSIONS.md changes KEY in
-    the machine block (the commit that adds it counts), or None. Deepens a shallow clone as far as needed."""
+def last_change(path, counts=lambda key: key != "cursor"):
+    """(sha, committer time) of the newest commit on the fetched state branch whose MISSIONS.md changes a key
+    of the machine block for which counts(key) holds (the commit that adds the block counts), or None. By
+    default every key but cursor counts. Deepens a shallow clone as far as needed."""
     rel = f"{PLAYBOOK_DIR}/MISSIONS.md"
 
     def value(sha):
         try:
-            return read_block(blob(path, sha, rel) or "").get(key)
+            return {k: v for k, v in read_block(blob(path, sha, rel) or "").items() if counts(k)}
         except StateError:
             return None
     newer = None
@@ -2145,37 +2309,59 @@ def mission_push():
     return best
 
 
+def mission_merge():
+    """(number, merge time) of the newest merged PR from a mission/* head in this repo, or None. GitHub
+    deletes the merged branch, so its last push is gone; the merge itself is progress."""
+    best = None
+    for p in gh(f"repos/{REPO}/pulls?state=closed&sort=updated&direction=desc&per_page=100") or []:
+        head = p.get("head") or {}
+        if not (head.get("ref") or "").startswith("mission/") or \
+                ((head.get("repo") or {}).get("full_name") or "").lower() != REPO.lower():
+            continue
+        t = parse_time(p.get("merged_at"))
+        if t is not None and (best is None or t > best[1]):
+            best = (p.get("number"), t)
+    return best
+
+
 def cmd_watchdog(a):
     path, values = pushed_state()  # fetched and read from git objects: the watchdog never writes state
     step, mission = values.get("step") or "none", values.get("mission") or "none"
-    if status_of(values) != "running":
-        print(f"quiet: status is {status_of(values)}")
+    why = quiet_reason(a, values, pushed_text(path, "PLAYBOOK.md"))
+    if why:
+        print(f"quiet: {why}")
         return 0
-    if step.lower() == WAITING_FOR_OWNER:
-        print(f"quiet: step is {WAITING_FOR_OWNER}")
-        return 0
-    found = []
-    change = last_change(path, "step")
+    found = []  # progress: a state write other than the cursor, a mission branch push, a mission PR's merge
+    change = last_change(path)
     if change:
-        found.append((change[1], f"step change {change[0][:12]}"))
+        found.append((change[1], f"state change {change[0][:12]}"))
     push = mission_push()
     if push:
         found.append((push[1], f"{push[0]} pushed"))
+    merge = mission_merge()
+    if merge:
+        found.append((merge[1], f"PR #{merge[0]} merged"))
     if not found:
-        raise StateError(f"no progress to measure: {PLAYBOOK_DIR}/MISSIONS.md has no step in its history")
+        raise StateError(f"no progress to measure: {PLAYBOOK_DIR}/MISSIONS.md has no machine block in its history")
     progress, what = max(found)
     now = time.time()
     if now - progress < a.silent_after:
         print(f"quiet: progress {span(now - progress)} ago ({what} at {iso(progress)}), "
               f"under {span(a.silent_after)}")
         return 0
-    for m in map(parse, comments(a.room, iso(progress))):  # one alarm per stall
+    for m in map(parse, comments(a.room, iso(progress))):  # one alarm per stall, unless its buzz failed
         t = parse_time(m["at"])
-        if m["role"] == "watchdog" and trusted(m) and message_kind(m["text"]) == "LEAD-SILENT" and t and t > progress:
+        if m["role"] == "watchdog" and trusted(m) and message_kind(m["text"]) == "LEAD-SILENT" and t and \
+                t > progress and not re.search(r"\(buzz failed\b", m["text"]):
             print(f"quiet: LEAD-SILENT #{m['id']} at {m['at']} already reports this stall")
             return 0
     print(f"alarm: no progress for {span(now - progress)} ({what} at {iso(progress)})")
-    say(a.room, "watchdog", f"LEAD-SILENT: no progress since {iso(progress)} (step {step}, mission {mission})", a)
+    # buzz first (click: the room), then post saying how it went: an alarm whose buzz failed doesn't count above,
+    # so the next run tries again
+    err = buzz_message(a.room, "watchdog", "LEAD-SILENT", {})
+    print("[buzz sent]" if err is None else f"[buzz failed: {err}]")
+    say(a.room, "watchdog", f"LEAD-SILENT: no progress since {iso(progress)} (step {step}, mission {mission}) " +
+        ("(buzz sent)" if err is None else f"(buzz failed: {err})"), a, buzz=False)
     return 0
 
 
@@ -2184,8 +2370,7 @@ def pinned_version(path=None):
     and links name it (v1.md, "Versioning and upgrades"), so a pin bumped mid-mission reaches the next lead."""
     try:
         if path is None:
-            path = ensure_worktree()
-            fetch(path)
+            path = ensure_worktree()  # fetched
         m = re.search(r"^pipeline:[ \t]*(\S+)", pushed_text(path, "PLAYBOOK.md") or "", re.M)
     except StateError as e:
         print(f"[can't read the pinned version ({e}); using {VERSION}]", file=sys.stderr)
@@ -2213,8 +2398,7 @@ def cmd_handoff(a):
     step = single_line("--step", a.step)
     if not step:
         raise StateError("--step needs the step the successor starts at")
-    path = ensure_worktree()
-    fetch(path)
+    path = ensure_worktree()  # fetched
     p = pending(path)
     if p:  # change_state would refuse after HANDOFF is posted; refuse before it instead
         raise StateError(f"not handed off: the state worktree {path} has {p}: push them with '{ME} state commit "
@@ -2224,10 +2408,18 @@ def cmd_handoff(a):
         raise StateError(f"{PLAYBOOK_DIR}/MISSIONS.md is missing on {STATE_BRANCH}: run '{ME} state init-lead'")
     values = read_block(text)
     require_lease(values, sid, "not handed off")
+    # the last comment the lead acted on, which it names: the cursor file also moves when the waiter merely reads
+    cursor = a.cursor
+    if cursor != "none":
+        try:
+            c = gh(f"repos/{REPO}/issues/comments/{cursor}") or {}
+        except GhError as e:
+            raise StateError(f"not handed off: --cursor {cursor}: {e}")
+        if not (c.get("issue_url") or "").endswith(f"/issues/{a.room}"):
+            raise StateError(f"not handed off: --cursor {cursor} is not a comment of room {a.room}")
     # posted while this session still holds the lease; then step, cursor, intent and the release in one write
     say(a.room, "lead", f"HANDOFF: mission {values.get('mission') or 'none'}, next step {step}\n\n"
                         "Successor: being scheduled now; a NEXT-LEAD-NEEDED follows if that fails.", a)
-    cursor = str(cursor_id(a.room, "lead") or "none")
     updates = {"step": step, "cursor": cursor, "intent": "none", "lease_session": "none"}
     for attempt in (1, 2, 3):
         try:
@@ -2244,12 +2436,30 @@ def cmd_handoff(a):
     print(join_line(a.room, version=pinned_version(path)))
 
 
+def is_merged(p):
+    return bool(p.get("merged") or p.get("merged_at"))
+
+
 def pr_state(p):
-    if p.get("merged") or p.get("merged_at"):
+    if is_merged(p):
         return f"merged as {p.get('merge_commit_sha') or '?'}"
     if p.get("state") == "open":
         return f"open at {(p.get('head') or {}).get('sha') or '?'}"
     return "closed without merging"
+
+
+def pr_problem(p):
+    """Why reconcile doesn't count PR object P as the lead's, or None. On a public repo anyone can open a PR,
+    even from a branch named like the mission's: it counts only from this repo, by a trusted author, into main."""
+    head_repo = ((p.get("head") or {}).get("repo") or {}).get("full_name") or ""
+    author = (p.get("user") or {}).get("login") or ""
+    if head_repo.lower() != REPO.lower():
+        return f"its head is in {head_repo or 'an unknown repo'}, not {REPO}"
+    if author.lower() not in TRUST:
+        return f"its author {author or '?'} is not trusted"
+    if (p.get("base") or {}).get("ref") != "main":
+        return f"its base is {(p.get('base') or {}).get('ref') or '?'}, not main"
+    return None
 
 
 def pull_requests():
@@ -2267,37 +2477,75 @@ def intent_hint(a, intent, path, msgs, pr):
     leads = [m for m in msgs if m["role"] == "lead"]
     m = re.fullmatch(r"merge PR #(\d+) at ([0-9a-fA-F]{7,40})", intent)
     if m:
-        p = pr(int(m.group(1)))
+        n, p = m.group(1), pr(int(m.group(1)))
         if p is None:
-            return f"intent unknown: PR #{m.group(1)} can't be read; check it by hand"
-        if p.get("merged") or p.get("merged_at"):
-            return f"intent done: clear it (PR #{m.group(1)} is {pr_state(p)}; finish the bookkeeping)"
-        return f"intent not done: redo it (PR #{m.group(1)} is {pr_state(p)}; run the gate, then merge)"
+            return f"intent unknown: PR #{n} can't be read; check it by hand"
+        if pr_problem(p):
+            return f"intent unknown: PR #{n} doesn't count ({pr_problem(p)}); check it by hand"
+        if is_merged(p):
+            return f"intent done: clear it (PR #{n} is {pr_state(p)}; finish the bookkeeping)"
+        if p.get("state") == "open":
+            return f"intent not done: redo it (PR #{n} is {pr_state(p)}; run the gate, then merge)"
+        return (f"intent not done: PR #{n} was closed without merging, so it can't be merged: clear the intent, "
+                "and reopen the PR or escalate")
     m = re.fullmatch(r"open PR (?:for |from )?(\S+)", intent)
     if m:
         ref = m.group(1)
         want = re.compile(re.escape(ref) if ref.startswith("mission/") else rf"mission/{re.escape(ref)}(?:-.+)?")
-        hits = [p for p in pull_requests() if want.fullmatch((p.get("head") or {}).get("ref") or "")]
+        named = [p for p in pull_requests() if want.fullmatch((p.get("head") or {}).get("ref") or "")]
+        hits = [p for p in named if not pr_problem(p)]
+        ignored = f"; ignored {len(named) - len(hits)} from another repo or author" if len(named) > len(hits) else ""
+        live = [p for p in hits if is_merged(p) or p.get("state") == "open"]
+        if live:
+            p = max(live, key=lambda p: p.get("number", 0))
+            return f"intent done: clear it (PR #{p.get('number')} from {p['head']['ref']} is {pr_state(p)}; record it)"
         if hits:
             p = max(hits, key=lambda p: p.get("number", 0))
-            return f"intent done: clear it (PR #{p.get('number')} from {p['head']['ref']} is {pr_state(p)}; record it)"
-        return f"intent not done: redo it (no PR from {ref})"
-    m = re.fullmatch(r"post (.+)", intent)
+            return (f"intent not done: redo it (PR #{p.get('number')} from {p['head']['ref']} was closed without "
+                    f"merging; open a new one{ignored})")
+        return f"intent not done: redo it (no PR from {ref}{ignored})"
+    m = re.fullmatch(r"post (.+?)(?: after #(\d+))?", intent)
     kind = message_kind(m.group(1)) if m else None
     if kind:
-        # a numbered kind is unique in the room; any other counts only if posted after the intent was recorded
-        since = None if re.search(r"-\d+$", kind) else last_change(path, "intent")
-        hits = [x for x in leads if message_kind(x["text"]) == kind and
-                (since is None or (parse_time(x["at"]) or 0) >= since[1] - INTENT_SKEW)]
+        # 'intent' records the room's last comment ID with it: a later trusted lead message of the kind did it.
+        # Without one, only a numbered kind, unique in the room, can be judged. No clocks involved.
+        after = int(m.group(2)) if m.group(2) else None
+        if after is None and not re.search(r"-\d+$", kind):
+            return (f"intent unknown: which {kind}? Record post intents with '{ME} intent N \"post {kind}\"', "
+                    "which notes the room's last comment")
+        hits = [x for x in leads if message_kind(x["text"]) == kind and (after is None or x["id"] > after)]
         if hits:
             return f"intent done: clear it ({kind} is in the room: #{hits[-1]['id']})"
-        return f"intent not done: redo it (no {kind} in the room" + (" since the intent was recorded)" if since else ")")
+        return f"intent not done: redo it (no {kind} in the room" + (f" after #{after})" if after is not None else ")")
     if re.fullmatch(r"close (?:the )?room", intent):
-        if is_closed(a.room):
-            return f"intent done: clear it (room {a.room} is closed)"
-        return f"intent not done: redo it (room {a.room} is open)"
+        issue = gh(f"repos/{REPO}/issues/{a.room}") or {}
+        if issue.get("state") != "closed":
+            return f"intent not done: redo it (room {a.room} is open)"
+        # close closes the issue first, then posts its note: both must have happened (GitHub's clock on both)
+        closed = parse_time(issue.get("closed_at"))
+        notes = [x for x in leads if closed is not None and (parse_time(x["at"]) or 0) >= closed]
+        if notes:
+            return f"intent done: clear it (room {a.room} is closed, closing note #{notes[-1]['id']})"
+        return f"intent not done: redo it (room {a.room} is closed, but no lead message came after it closed)"
     return ("intent unknown: check it by hand (reconcile knows: merge PR #<n> at <sha>, open PR <branch or M<k>>, "
             "post <KIND>, close room)")
+
+
+def cmd_intent(a):
+    """Record before acting: the intent, in its own state write. A post intent also records the room's last
+    comment ID (post KIND after #ID), so reconcile can tell a later post of that kind from an earlier one."""
+    text = single_line("intent", a.intent)
+    if not text:
+        raise StateError("say what is about to happen (merge PR #<n> at <sha>, open PR <branch>, post <KIND>, "
+                         "close room), or none")
+    m = re.fullmatch(r"post\s+(.+)", text)
+    if m:
+        kind = message_kind(m.group(1))
+        if not kind:
+            raise StateError(f"a post intent names the message kind: post ESCALATION-3, post PAUSED…, not {text!r}")
+        text = f"post {kind} after #{max((c['id'] for c in comments(a.room)), default=0)}"
+    change_state(a, f"intent: {text}", lambda v: {"intent": text})
+    print(f"intent: {text}")
 
 
 def cmd_reconcile(a):
@@ -2321,7 +2569,8 @@ def cmd_reconcile(a):
     n = re.search(r"\d+", recorded) if recorded != "none" else None
     if n:
         p = pr(int(n.group()))
-        print(f"PR: #{n.group()} {pr_state(p) if p is not None else 'unreadable'}")
+        print(f"PR: #{n.group()} " + ("unreadable" if p is None else
+                                      f"ignored: {pr_problem(p)}" if pr_problem(p) else pr_state(p)))
     else:
         print("PR: none recorded")
 
@@ -2364,9 +2613,8 @@ def cmd_reconcile(a):
     print(f"intent: {intent}")
     if intent != "none":
         print(intent_hint(a, intent, path, msgs, pr))
-    if status_of(values) != "running":
-        print(f"status: {status_of(values)}: a lead that resumes the work sets it back after taking the lease "
-              f"('{ME} state set status=running')")
+    if halted(values):
+        print(f"status: {status_of(values)}: lease take sets it back to running when a lead resumes the work")
     drill = re.search(r"^drill:[ \t]*(\S.*?)[ \t]*$", pushed_text(path, "PLAYBOOK.md") or "", re.M)
     if drill:
         print(f"drill: {drill.group(1)}")
@@ -2378,7 +2626,9 @@ def phase_budget(playbook, phase):
     heading, else the default eight hours."""
     m = re.search(rf"^###[ \t]+Phase[ \t]+{re.escape(phase)}:[^\n]*\n(.*?)(?=^#{{1,3}}[ \t]|\Z)", playbook or "",
                   re.M | re.S)
-    b = re.search(r"Mission budget:\s*(\d+(?:\.\d+)?)\s*hours?\b", m.group(1), re.I) if m else None
+    # tolerant: markdown emphasis around the label or the number; h, hr, hrs, hour or hours; decimals
+    b = re.search(r"mission budget[*_` \t]*:[*_` \t]*(\d+(?:\.\d+)?|\.\d+)[*_` \t]*(?:hours?|hrs?|h)(?![a-z])",
+                  m.group(1), re.I) if m else None
     if b and float(b.group(1)) > 0:
         return float(b.group(1)), f"phase {phase} in PLAYBOOK.md"
     return float(DEFAULT_BUDGET_HOURS), "the default"
@@ -2412,9 +2662,9 @@ def add_unattended_commands(sub, common):
         s.set_defaults(fn=state_command(fn))
         return s
 
-    s = leaf("watchdog", cmd_watchdog, "the watchdog task, as role watchdog: post LEAD-SILENT (it buzzes) when "
-                                       "neither the recorded step nor a mission branch moved for DURATION; "
-                                       "never writes state or schedules anything")
+    s = leaf("watchdog", cmd_watchdog, "the watchdog task, as role watchdog: buzz and post LEAD-SILENT when no "
+                                       "state write (but the cursor's), mission branch push or mission PR merge "
+                                       "happened for DURATION; never writes state or schedules anything")
     s.add_argument("room", type=int)
     s.add_argument("--silent-after", type=duration_arg, default=3 * 3600, metavar="DURATION",
                    help="like 3h or 45m (default 3h; drills use a short one)")
@@ -2426,6 +2676,13 @@ def add_unattended_commands(sub, common):
                                      "and release the lease in one state write; prints the join line to schedule")
     s.add_argument("room", type=int)
     s.add_argument("--step", required=True, help="the step the successor starts at")
+    s.add_argument("--cursor", required=True, type=from_arg, metavar="ID",
+                   help="the last comment this lead acted on (from a [cursor: ID] line it handled), or none")
+    s = leaf("intent", cmd_intent, "record the intended outside action before taking it (needs the lease); a post "
+                                   "intent also records the room's last comment ID")
+    s.add_argument("room", type=int)
+    s.add_argument("intent", help='e.g. "post ESCALATION-3", "merge PR #12 at <sha>", "open PR mission/M2-x", '
+                                  '"close room", or none')
     s = leaf("reconcile", cmd_reconcile, "for a joining lead: the recorded state next to GitHub's facts, and a "
                                          "hint on the recorded intent; changes nothing")
     s.add_argument("room", type=int)
@@ -2486,8 +2743,9 @@ def main():
     if not REPO:
         sys.exit("which repo? Run inside the project's checkout, or pass --repo OWNER/NAME")
     try:
+        # v1: ROOM_TRUST adds logins to the gh login; it never replaces it
         env_trust = os.environ.get("ROOM_TRUST", "")
-        TRUST = {s.strip().lower() for s in env_trust.split(",") if s.strip()} or default_trust()
+        TRUST = default_trust() | {s.strip().lower() for s in env_trust.split(",") if s.strip()}
         sys.exit(a.fn(a) or 0)
     except GhError as e:
         sys.exit(f"github error: {e}")

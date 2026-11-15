@@ -122,6 +122,12 @@ def t_untrusted_ignored():
     run("say", "1", "architect", "from my other GitHub account", login="matt-alt")
     out = run("read", "1", "lead", role="lead", ROOM_TRUST="SigorMatt,matt-alt").stdout
     assert "other GitHub account" in out, out
+    # cold M4 R1-6: ROOM_TRUST adds to the gh login, as v1 says; it doesn't replace it
+    run("say", "1", "architect", "again from my other account", login="matt-alt")
+    run("say", "1", "architect", "and from my main account")
+    r = run("read", "1", "lead", role="lead", ROOM_TRUST="matt-alt")
+    assert "again from my other account" in r.stdout and "from my main account" in r.stdout, (r.stdout, r.stderr)
+    assert "untrusted" not in r.stderr, r.stderr
 
 
 def t_human_reaches_both():
