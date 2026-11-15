@@ -3,7 +3,8 @@
 
 FAKE_GH_STATE names a JSON file with the answers. Each value is a response body, or
 {"_status": N, "message": "..."} for an error:
-  repo        GET repos/O/N                         (default: push access, delete_branch_on_merge on)
+  repo        GET repos/O/N                         (default: push access, delete_branch_on_merge and
+                                                     allow_merge_commit on)
   protection  GET repos/O/N/branches/main/protection (default: 404 Branch not protected)
   rules       GET repos/O/N/rules/branches/main      (default: [])
   rulesets    {"<id>": body} for GET repos/O/N/rulesets/<id>
@@ -57,7 +58,7 @@ if method == "GET" and parts[0] == "repos" and len(parts) >= 3:
     rest = parts[3:]
     if rest == []:
         respond(cfg.get("repo", {"full_name": f"{parts[1]}/{parts[2]}", "permissions": {"push": True, "admin": True},
-                                 "delete_branch_on_merge": True}))
+                                 "delete_branch_on_merge": True, "allow_merge_commit": True}))
     if rest == ["branches", "main", "protection"]:
         respond(cfg.get("protection", {"_status": 404, "message": "Branch not protected"}))
     if rest == ["rules", "branches", "main"]:

@@ -1309,7 +1309,7 @@ def cmd_lease_take(a):
         seen.append((holder, gen))
         if holder not in ("none", sid) and not a.takeover:
             raise StateExit(EXIT_MOVED, f"lease held by {holder}: stand down (generation {gen}; "
-                                        "--takeover only for a lead Matthew starts after LEAD-SILENT)")
+                                        "--takeover only for a lead Matthew starts once the architect finds the old lead gone)")
         # a lead that takes the lease is running: a status left at paused, stopped or done mustn't mute the watchdog.
         # waiting_for_owner stays: a successor may join while the owner still hasn't answered, and a stale flag is
         # ended by a step or pr change, and doesn't mute the watchdog once anything has progressed since it was set
@@ -1478,6 +1478,17 @@ def cmd_preflight(a):
                   "Matthew: turn on 'Automatically delete head branches' (repo Settings > General > "
                   "Pull Requests), so merged mission branches are removed")
 
+    # merge commits allowed: `merge` uses merge_method=merge, which GitHub refuses when they are off
+    if repo is not None:
+        amc = repo.get("allow_merge_commit")
+        why = "(repo Settings > General > Pull Requests), because 'merge' uses a merge commit"
+        if amc is True:
+            check("✓", "merge commits are allowed")
+        elif amc is False:
+            check("✗", f"merge commits are not allowed: Matthew: turn on 'Allow merge commits' {why}")
+        else:
+            check("!", f"couldn't read allow_merge_commit; Matthew: check that 'Allow merge commits' is on {why}")
+
     # the state branch, with the architect's files and a pinned version: read from the pushed
     # branch after a fetch, so uncommitted edits in the worktree can't pass for it
     path = None
@@ -1589,7 +1600,7 @@ def add_state_commands(sub, common):
     s = leaf(lss, "take", cmd_lease_take, "take the lead lease: next generation, this session (exit 3 if another "
              "session holds it or pushed first)")
     s.add_argument("--takeover", action="store_true",
-                   help="take it even from another session: only for a lead Matthew starts after LEAD-SILENT")
+                   help="take it even from another session: only for a lead Matthew starts once the architect finds the old lead gone")
     leaf(lss, "release", cmd_lease_release, "the holder sets the lease to none (at HANDOFF, PAUSED, STOPPED, DONE)")
     leaf(lss, "check", cmd_lease_check, "exit 0 if this session holds the lease, else 5")
 
@@ -3342,7 +3353,8 @@ def add_unattended_commands(sub, common):
     s = leaf("join-line", cmd_join_line, "print the line that starts a lead")
     s.add_argument("room", type=int)
     s.add_argument("--takeover", action="store_true",
-                   help="for the lead Matthew starts after LEAD-SILENT: take the lease with lease take --takeover")
+                   help="for a lead Matthew starts once the architect finds the old lead gone: take the lease "
+                        "with lease take --takeover")
     s = leaf("handoff", cmd_handoff, "record step, cursor and intent=none holding the lease, post HANDOFF, then "
                                      "release the lease; prints the join line to schedule")
     s.add_argument("room", type=int)
@@ -3366,7 +3378,7 @@ def add_unattended_commands(sub, common):
 
 def from_arg(s):
     if s != "none" and not s.isdigit():
-        raise argparse.ArgumentTypeError("--from takes a comment ID, or none for the room's start")
+        raise argparse.ArgumentTypeError("takes a comment ID, or none for the room's start")
     return s
 
 
@@ -3395,7 +3407,7 @@ def main():
     s.add_argument("--from", dest="from_id", type=from_arg, metavar="ID",
                    help="set the cursor to comment ID first (none: the room's start)")
     s = cmd("wait", cmd_wait); s.add_argument("room", type=int); s.add_argument("role", type=role_arg)
-    s.add_argument("--timeout", type=int, default=1740, help="seconds (default 1740, under a 30-minute background limit)")
+    s.add_argument("--timeout", type=int, default=540, help="seconds (default 540: a foreground wait stays under the 10-minute command limit)")
     s.add_argument("--interval", type=float, default=5, help="seconds between polls (default 5)")
     s = cmd("cursor", cmd_cursor); s.add_argument("room", type=int); s.add_argument("role", type=role_arg)
     s = cmd("close", cmd_close); s.add_argument("room", type=int); s.add_argument("role", type=role_arg)

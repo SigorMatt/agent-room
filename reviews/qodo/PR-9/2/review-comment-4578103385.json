@@ -1,0 +1,71 @@
+{
+  "url": "https://api.github.com/repos/SigorMatt/agent-room/pulls/comments/4578103385",
+  "pull_request_review_id": 5910363199,
+  "id": 4578103385,
+  "node_id": "PRRC_kwDOVVYvuc8AAAABEOBQWQ",
+  "diff_hunk": "@@ -1,143 +1,55 @@\n ---\n name: agent-room\n-description: Run or join an agent room, a GitHub issue where Matthew's phone architect and a cloud build lead (which runs builder subagents) coordinate a build. Use when the user asks to start, join, check, or work in an agent room, or to escalate to or answer the architect.\n+description: Take part in the agent-room build pipeline as its architect or its lead, at the project's pinned version. Use when Matthew designs or continues a project in a chat, or asks to check, answer or work in an agent room (architect), or when a session is given a line starting \"Join agent room N in OWNER/NAME as lead\" (lead).\n ---\n \n-# Agent room\n+# agent-room\n \n-Two roles share one GitHub issue, labelled `agent-room`, in the project repo. Each comment is a message.\n+This skill only finds your protocol and loads it. The protocol is the authority: where it and this skill differ, follow the protocol, except for the safety rules at the end, which always hold.\n \n-- **architect**: a chat session with Matthew. It designs with him, owns the design docs and answers escalations. It acts only when Matthew brings it in.\n-- **lead**: a Claude Code cloud session on the project repo. It builds the plan by running builder subagents, answers their questions from the design, and escalates only what the design can't answer.\n+## 1. Pick your role\n \n-The docs in the project repo are the source of truth; the room only carries the conversation about them.\n-- `docs/DESIGN.md`: goals, non-goals, architecture, interfaces and data, plus a decision log (D-1, D-2…).\n-- `docs/BUILD_PLAN.md`: ordered tasks T-1…T-n, each with goal, files, done-when and depends-on, and a checkbox the lead ticks.\n+- **Architect:** a chat with Matthew, usually in the project's Claude Project, with no join line. Protocol `ARCHITECT.md`, tools directory `~/agent-room-tools`.\n+- **Lead:** a session given a join line: `Join agent room N in OWNER/NAME as lead, pipeline <version>. …`. Protocol `LEAD.md`, tools directory `~/agent-room`.\n+- Never take both roles. If neither fits, ask Matthew.\n \n-Matthew may also post in the issue from GitHub. His comments arrive as `human (SigorMatt)` and outrank both agents.\n+## 2. Find the pinned version\n \n-## Setup (both roles)\n+`<version>` is a release tag such as `v1.0.0`, or `main` before the first release.\n \n-1. **Access.** You need push access to the project repo `OWNER/NAME`. Check with `gh api repos/OWNER/NAME --jq .full_name`. If that fails, attach the repo with push access using your add-repo tool. The lead's session already has it.\n-2. **Client.**\n-   `curl -fsSL https://raw.githubusercontent.com/SigorMatt/agent-room/main/room.py -o ~/room.py`\n-   If that fails, attach `SigorMatt/agent-room` and run\n-   `gh api repos/SigorMatt/agent-room/contents/room.py -H \"Accept: application/vnd.github.raw\" > ~/room.py`.\n-   Below, `room` means `python3 ~/room.py`. Always add `--repo OWNER/NAME`.\n-3. **Trust.** Only comments from your own GitHub login count. If the two sessions post as different GitHub accounts, prefix commands with `ROOM_TRUST=login1,login2`.\n+1. **Lead:** the `pipeline` your join line names. It comes from `PLAYBOOK.md`.\n+2. **Architect:** if the chat can't reach `OWNER/NAME`, attach it with your add-repo tool. Then read the `pipeline:` line of the project's playbook on its state branch:\n+   ```bash\n+   gh api \"repos/OWNER/NAME/contents/docs/playbook/PLAYBOOK.md?ref=agent-room/state\" -H \"Accept: application/vnd.github.raw\" | grep '^pipeline:'\n+   ```\n+3. **New project** (that fails with 404: no state branch yet): the one line of agent-room's `STABLE` file.\n+   ```bash\n+   curl -fsSL https://raw.githubusercontent.com/SigorMatt/agent-room/main/STABLE || gh api repos/SigorMatt/agent-room/contents/STABLE -H \"Accept: application/vnd.github.raw\"\n+   ```\n \n-## Message kinds\n+## 3. Download room.py and the protocol at that version\n \n-| Kind | From | Buzzes Matthew |\n-|---|---|---|\n-| `ESCALATION-n: …` | lead | yes (`--buzz`) |\n-| `DONE: …` (plan finished) | lead | yes (`--buzz`) |\n-| `STATUS: …` (a task finished) | lead | no |\n-| `ACK DECISION-n` / `ACK CHANGE-n` | lead | no |\n-| `DECISION-n: …` / `CHANGE-n: …` | architect | no |\n-| `STOP: …` | architect or Matthew | no |\n+Set `DIR` and `DOC` for your role (architect: `~/agent-room-tools` and `ARCHITECT.md`; lead: `~/agent-room` and `LEAD.md`), and `V` to `<version>`:\n \n-Send with `room say N ROLE \"text\" --repo OWNER/NAME`, adding `--buzz` where the table says so. For multi-line text, write it to a file and run `room say N ROLE - --repo OWNER/NAME < msg.md`.\n+```bash\n+DIR=~/agent-room-tools DOC=ARCHITECT.md V=<version>\n+mkdir -p \"$DIR\" && cd \"$DIR\"\n+for f in room.py \"$DOC\"; do\n+  curl -fsSL \"https://raw.githubusercontent.com/SigorMatt/agent-room/$V/$f\" -o \"$f\" ||\n+    gh api \"repos/SigorMatt/agent-room/contents/$f?ref=$V\" -H \"Accept: application/vnd.github.raw\" > \"$f\"\n+done",
+  "path": ".claude/skills/agent-room/SKILL.md",
+  "commit_id": "647d1442e84d81c81392607d6fde3969e949914a",
+  "original_commit_id": "ea8170ab0d5c3b3e66fe3e5500e13b6918ed4b37",
+  "user": {
+    "login": "qodo-code-review[bot]",
+    "id": 151058649,
+    "node_id": "BOT_kgDOCQD42Q",
+    "avatar_url": "https://avatars.githubusercontent.com/in/484649?v=4",
+    "gravatar_id": "",
+    "url": "https://api.github.com/users/qodo-code-review%5Bbot%5D",
+    "html_url": "https://github.com/apps/qodo-code-review",
+    "followers_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/followers",
+    "following_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/following{/other_user}",
+    "gists_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/gists{/gist_id}",
+    "starred_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/starred{/owner}{/repo}",
+    "subscriptions_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/subscriptions",
+    "organizations_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/orgs",
+    "repos_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/repos",
+    "events_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/events{/privacy}",
+    "received_events_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/received_events",
+    "type": "Bot",
+    "user_view_type": "public",
+    "site_admin": false
+  },
+  "body": "<img src=\"https://img.shields.io/badge/Medium-634FD1?style=flat-square\" height=\"20px\" alt=\"Remediation recommended\">\n\n3\\. A failed download can leave a fake room.py that runs <code>🐞 Bug</code> <code>☼ Reliability</code>\n\n<pre>\nThe skill’s download loop redirects the <b><i>gh api</i></b> fallback into <b><i>$f</i></b> without checking whether it\nsucceeds, while the scheduled watchdog prompt invokes <b><i>python3 room.py watchdog</i></b> without first\nverifying the download. When both download methods fail, <b><i>room.py</i></b> can be empty or contain an error\nbody that Python treats as a no-op expression, so the watchdog never executes; the loop does not\nidentify the failed file, and disabled task notifications leave the missing stall alarm unnoticed.\n</pre>\n\n\n<details>\n<summary><strong>Agent Prompt</strong></summary>\n\n```\n## Issue description\nThe download instructions can leave `room.py` empty or containing a `gh api` error body after both download methods fail, then proceed to run it without identifying the failed file. The scheduled watchdog can consequently exit without executing its alarm logic while task notifications are disabled.\n\n## Fix Focus Areas\n- .claude/skills/agent-room/SKILL.md[37-40]\n- ARCHITECT.md[196-206]\n\n## Recommended Fix\nDownload the fallback output to a temporary file and move it into place only if `gh api` succeeds and the file is nonempty. On failure, remove the target, print `FAILED $f`, and stop the task with a nonzero status and a visible notification rather than invoking the watchdog. Before proceeding after a successful download, verify that `room.py` actually runs, for example with `python3 room.py --help >/dev/null`.\n```\n\n<code>ⓘ Copy this prompt and use it to remediate the issue with your preferred AI generation tools</code>\n</details>\n\n[Dismiss ↗](https://app.qodo.ai/findings/09f28bea-4337-4494-8041-d008537daede?action=dismiss&origin=git) | [View ↗](https://app.qodo.ai/findings/09f28bea-4337-4494-8041-d008537daede)",
+  "created_at": "2026-11-15T11:04:16Z",
+  "updated_at": "2026-11-15T11:04:16Z",
+  "html_url": "https://github.com/SigorMatt/agent-room/pull/9#discussion_r4578103385",
+  "pull_request_url": "https://api.github.com/repos/SigorMatt/agent-room/pulls/9",
+  "_links": {
+    "self": {
+      "href": "https://api.github.com/repos/SigorMatt/agent-room/pulls/comments/4578103385"
+    },
+    "html": {
+      "href": "https://github.com/SigorMatt/agent-room/pull/9#discussion_r4578103385"
+    },
+    "pull_request": {
+      "href": "https://api.github.com/repos/SigorMatt/agent-room/pulls/9"
+    }
+  },
+  "reactions": {
+    "url": "https://api.github.com/repos/SigorMatt/agent-room/pulls/comments/4578103385/reactions",
+    "total_count": 0,
+    "+1": 0,
+    "-1": 0,
+    "laugh": 0,
+    "hooray": 0,
+    "confused": 0,
+    "heart": 0,
+    "rocket": 0,
+    "eyes": 0
+  },
+  "start_line": 37,
+  "original_start_line": 37,
+  "start_side": "RIGHT",
+  "line": 42,
+  "original_line": 40,
+  "side": "RIGHT",
+  "author_association": "NONE",
+  "original_position": 67,
+  "position": 69,
+  "subject_type": "line",
+  "is_copilot_code_review": false,
+  "copilot_code_review_sources": []
+}
