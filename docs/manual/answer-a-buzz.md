@@ -57,7 +57,9 @@ The message reads `MERGE-HOLD-n: PR #<number>, reason <r> (…)`. One hold can n
 A lead finished its part but couldn't start the next one through the lead task. The message says why. Nothing is lost.
 
 1. The architect starts a lead with the normal join line, or gives it to you: [Start the next lead by hand](start-the-next-lead-by-hand.md).
-2. If the reason says `not configured` or `token rejected`, the lead task's token needs fixing, or the next handover fails too: [Set up the lead task](set-up-the-lead-task.md), "If you don't".
+2. Fix the cause too, or the next handover fails the same way:
+   - `not configured` or `token rejected`: the lead task's token needs fixing ([Set up the lead task](set-up-the-lead-task.md), "If you don't").
+   - `lead task … not found`: the task was deleted, or the playbook names an old one. The architect sets it up again with you and records its new ID ([Troubleshooting](troubleshooting.md), the new-task line).
 
 ### `PAUSED`: paused, as asked
 

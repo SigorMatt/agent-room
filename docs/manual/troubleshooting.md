@@ -34,7 +34,8 @@ Something looks wrong, and the page you were following doesn't cover it.
    | `LEAD-SILENT: the lead started at … made no progress` | The watchdog's takeover lead stalled too, so it started a second one, its last try for this stall. Answer the buzz ([Answer a buzz](answer-a-buzz.md)): the architect checks later that this lead moves, and if it doesn't, looks into the cause before anyone starts another lead |
    | `LEAD-SILENT: state unreadable (…)` | The `agent-room/state` branch or its records are broken, not the lead. [Answer a buzz](answer-a-buzz.md), `LEAD-SILENT`, step 1 |
    | Leads keep ending right after a merge, or at a mission boundary without a `HANDOFF` | A failure drill's `drill:` line is still in `PLAYBOOK.md`. Send the architect the drill line (below the table) |
-   | You deleted the lead task | That deleted every lead session it started, the running one too. Set it up again ([Set up the lead task](set-up-the-lead-task.md)), then send the architect the check line (below the table): it records the new task and starts a takeover lead |
+   | You deleted the lead task | That deleted every lead session it started, the running one too. Send the architect the new-task line (below the table). It sets the task up again with you ([Set up the lead task](set-up-the-lead-task.md)), records its new ID, and starts a takeover lead |
+   | `NEXT-LEAD-NEEDED` saying `lead task … not found` | The task was deleted, or the playbook names an old one. Send the architect the new-task line (below the table), then answer the buzz |
    | `GitHub access to this repository is not enabled for this session` | Architect chat: approve the repo. Lead: start the session on that repo ([Connect GitHub](connect-github.md)) |
    | `[ignored N message(s) from untrusted authors: X]` | Someone other than you commented; that's ignored by design. If X is another login of yours, add `ROOM_TRUST=X` to the `agent-room` environment |
    | Old `mission/…` branches pile up | Tick **Automatically delete head branches** ([Create the repo](create-the-repo.md), step 3), then delete merged ones on the repo's branches page with the bin icon. Never delete `main` or `agent-room/state` |
@@ -47,6 +48,12 @@ Something looks wrong, and the page you were following doesn't cover it.
 
      ```text
      check the room
+     ```
+
+   - **The new-task line,** to the architect, with the room number:
+
+     ```text
+     The lead task is gone. Set it up again with me (ARCHITECT.md 8.6), record its new ID, then check room N.
      ```
 
    - **The drill line,** to the architect:

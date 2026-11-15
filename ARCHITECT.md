@@ -371,7 +371,11 @@ Which line:
   python3 room.py join-line N --repo OWNER/NAME
   ```
 
-  For `NEXT-LEAD-NEEDED`, its reason says why the start failed. `not configured` or `token rejected` means the lead task's line or token needs fixing: check the `lead-task:` line, and have Matthew check the variable ([Set up the lead task](docs/manual/set-up-the-lead-task.md), step 9), so the next handover works.
+  For `NEXT-LEAD-NEEDED`, its reason says why the start failed. Fix the cause too, so the next handover works:
+  - `not configured` or `token rejected`: check the `lead-task:` line, and have Matthew check the variable ([Set up the lead task](docs/manual/set-up-the-lead-task.md), step 9).
+  - `lead task <ID> not found`: the task was deleted, or the line names an old one. Redo section 8, step 6 with Matthew: a new task, its token in the variable, and a new `lead-task:` line. The fire action fails with the old ID too, so until then start leads through the fallback (section 8, step 9).
+
+  After Matthew recreates the lead task for any reason, redo section 8, step 6 the same way, even though a `lead-task:` line exists.
 - **`LEAD-SILENT`:** no lead progress for three hours. A lead died, got stuck or never started.
   1. **`LEAD-SILENT: state unreadable (…)`:** the state branch or its block is broken, not the lead, and the watchdog starts no lead after this alarm. Check it: `state sync`, then `python3 room.py state get step --repo OWNER/NAME`. If the branch was deleted, restore it before any lead joins:
      - **Re-push it from any copy that still has it,** preferably: your own state worktree, a lead's, or a fork or local clone of Matthew's. From yours (if GitHub refuses a shallow copy, use another):
