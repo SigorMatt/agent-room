@@ -13,8 +13,8 @@ The build of the agent-room pipeline v1, as designed in [`v1.md`](v1.md). A fres
 | --- | --- | --- |
 | M0 | Commit design and build state | Done (#5) |
 | M1 | Platform check | In progress |
-| M2 | Core machinery | In progress (builders running; spec `m2-room-cli.md`) |
-| M3 | Review records, `gate` and `merge` (spec `m3-reviews-gate.md`) | Not started |
+| M2 | Core machinery | Done (#6) |
+| M3 | Review records, `gate` and `merge` (spec `m3-reviews-gate.md`) | In review (PR) |
 | M4 | Unattended operation (spec `m4-unattended.md`) | Not started |
 | M5 | Protocols (`ARCHITECT.md`, `LEAD.md`, briefs, thin skill), manuals and index | Not started |
 | M6 | Dress rehearsal on `pet-todo` (build lead plays the architect) | Not started |
@@ -96,5 +96,6 @@ Calls the build lead made that Matthew would normally make. Each is reversible; 
 | ID | Item | Milestone | From |
 | --- | --- | --- | --- |
 | B-1 | The gate exempts only known review-record file patterns under `reviews/`, not the whole directory, so code placed there can't skip coverage | M3 | Qodo PR #5, "Review exemption by directory lets code skip coverage" |
-| B-2 | Stale state worktrees, from cold M2 scoped-1: say when local work is moved aside and keep its commits (S1-3); recognise the project checkout and stale state worktrees whatever the current directory, with a marker file in the worktree's git dir (S1-4, S1-5) | M4 | cold M2 S1-3, S1-4, S1-5 |
-| B-3 | Strict machine-block parsing, from cold M2 scoped-3: the block is the only `agent-room-state` block and the first fenced block, its body only `key: value` or blank lines, closed by a bare fence; a second such block is refused on commit; a repair never deletes text, it prepends a fresh block and retires the damaged fence (S3-1, S3-2, S3-3) | M4 | cold M2 S3-1, S3-2, S3-3 |
+| B-2 | (Done in M2 after Qodo PR #6 flagged it as Action required.) Stale state worktrees, from cold M2 scoped-1: say when local work is moved aside and keep its commits (S1-3); recognise the project checkout and stale state worktrees whatever the current directory, with a marker file in the worktree's git dir (S1-4, S1-5) | M4 | cold M2 S1-3, S1-4, S1-5 |
+| B-3 | (Done in M2 after Qodo PR #6.) Strict machine-block parsing, from cold M2 scoped-3: the block is the only `agent-room-state` block and the first fenced block, its body only `key: value` or blank lines, closed by a bare fence; a second such block is refused on commit; a repair never deletes text, it prepends a fresh block and retires the damaged fence (S3-1, S3-2, S3-3) | M4 | cold M2 S3-1, S3-2, S3-3 |
+| B-4 | (M3 spec done; `LEAD.md` in M5.) The M3 spec and `LEAD.md` say that a cold finding of weakened tests is a sensitive-area hold (reason 5) by the lead's judgement; the gate holds only deleted tests mechanically | M3 | Qodo PR #6, "Weakened tests evade the merge hold" |
