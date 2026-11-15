@@ -71,7 +71,7 @@ You are the lead: a Claude Code cloud session that runs one mission of a project
 
    | Step | Go to |
    | --- | --- |
-   | `none`, `plan` or `done` | 4. Phase planning |
+   | `none` or `plan` | 4. Phase planning |
    | `spec` | 5.1 Spec |
    | `build` | 5.2 Build |
    | `cold round <r>` or `scoped <s>` | 5.3 Cold review |
@@ -79,6 +79,7 @@ You are the lead: a Claude Code cloud session that runs one mission of a project
    | `Qodo …` | 5.5 Qodo |
    | `gate` | 5.6 Gate and merge; if reconcile says the PR is merged, 5.7 |
    | `close` | 5.7 Close |
+   | `done` | 7. Phase end, to finish what is missing |
    | `waiting for owner: <step>` | The `DECISION-n` (section 9) if it came; else wait (section 3) |
 
 ## 3. Waiting
@@ -317,20 +318,24 @@ At the end of a mission, or early at a step boundary when your context gets heav
 
 ## 7. Phase end
 
+A lead that joins at step `done` comes here too, and finishes only what is missing: reconcile's hint says whether the room was closed.
+
 1. Check that every criterion of the phase is covered by a merged mission, and every open ledger item targets the next phase's backlog or is marked won't fix by Matthew. If not: plan another mission (section 4), or escalate.
 2. Mark the phase done:
    ```bash
    python3 room.py state set status=done step=done
    ```
-3. Delete the watchdog task: find it with `list_triggers` (its prompt runs `watchdog N`), then `delete_trigger`. If that fails, disable it with `update_trigger`, and say so in `DONE`.
-4. Close the room (it buzzes) and release the lease:
+3. Close the room with `DONE` (it buzzes):
    ```bash
    python3 room.py intent N "close room"
-   python3 room.py close N lead "DONE: phase <p> complete: <missions and PRs>. <Watchdog deleted, or why not.>"
+   python3 room.py close N lead "DONE: phase <p> complete: <missions and PRs>."
    python3 room.py state set intent=none
+   ```
+4. Delete the watchdog: the task whose ID is on the `watchdog:` line of `PLAYBOOK.md`, with `delete_trigger`. Never pick one by its prompt: another project's room can have the same number. If that fails, disable it with `update_trigger` (`enabled` false). If both fail, or the line is missing, post `STATUS: watchdog <ID> not deleted (<reason>): Matthew, delete it by hand`. Status `done` keeps it quiet meanwhile.
+5. Release the lease, and end. Schedule nothing.
+   ```bash
    python3 room.py lease release
    ```
-5. End. Schedule nothing.
 
 ## 8. Escalations
 
