@@ -75,7 +75,13 @@ The lead merged the last mission, checked every criterion, posted `DONE` and clo
 
 The watchdog saw nothing move. A lead died, got stuck or ran out of Claude usage, or the next one never started. Or the lead is alive but slow: it sees the alarm at its next check-in, within about 30 minutes, and answers in the room.
 
-1. If the buzz's message reads `LEAD-SILENT: state unreadable (…)`, the pipeline's records are broken, not the lead. The architect checks them first. If the `agent-room/state` branch was deleted, restore it before any lead starts: push it again from a clone that still has it, or let the architect recreate it (`Run state init.`). Then go on.
+1. If the buzz's message reads `LEAD-SILENT: state unreadable (…)`, the pipeline's records are broken, not the lead. The architect checks them first. If the `agent-room/state` branch was deleted, it is restored before any lead starts. Best: the architect pushes it again from its own copy, or you push it from a fork or a local clone that still has it. In a local clone, run:
+
+   ```bash
+   git push origin agent-room/state
+   ```
+
+   Only if no copy exists does the architect recreate it from scratch, and tell the next lead to rebuild its records from the merged pull requests and the room. Then go on.
 2. The architect tells you where the build stopped. Then it waits for the lead's next check-in, until about 35 minutes after the alarm. It checks back itself, or asks you to send it `check the room` then.
 3. If any lead message came after the alarm, the lead is alive: the architect tells you where it is, and you need no new lead. Stop here. If the lead posted or pushed work within the last hour, it may be busy with a helper and unable to check in yet: the architect waits one more check-in, about 35 minutes.
 4. Otherwise it gives you the **takeover line**. It ends with "Take over the lease … the previous lead stopped without handing over."
