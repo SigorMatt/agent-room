@@ -320,15 +320,20 @@ The lead sees them at its next check-in, within about 30 minutes. Neither gets a
   python3 room.py join-line N --repo OWNER/NAME
   ```
 
-- **`LEAD-SILENT`:** a lead died, got stuck, or never started, or a live lead made no progress. Read the room and `python3 room.py state get step --repo OWNER/NAME`.
-  - **A lead `STATUS` after the `LEAD-SILENT`:** the lead is alive and answered. Tell Matthew where it is; no new lead is needed.
-  - **Otherwise:** tell Matthew where it stopped, and give him the takeover line:
+- **`LEAD-SILENT`:** no lead progress for three hours. A lead died, got stuck or never started. Or a live lead is slow: it sees the alarm only at its next check-in, within about 30 minutes.
+  1. **`LEAD-SILENT: state unreadable (…)`:** the state branch or its block is broken, not the lead. Check it: `state sync`, then `python3 room.py state get step --repo OWNER/NAME`. If the branch was deleted, it is restored before any lead joins. Matthew re-pushes it from a clone that still has it. Or you run `state init` (5.1), which recreates it from the templates, and refill `PLAYBOOK.md` and `DESIGN.md`. The joining lead's `preflight --fix` (as `state init-lead`) then restores the lead-owned files as far as it can. Then go on with step 2.
+  2. Read the room and `python3 room.py state get step --repo OWNER/NAME`. Tell Matthew where the build stopped.
+  3. Wait for the lead's next check-in, until about 35 minutes after the alarm. Schedule `send_later` for then: "Check room N for a lead message after LEAD-SILENT." Without `send_later`, ask Matthew to come back then and say "check the room". If that time has passed, go on.
+  4. Read the room again.
+     - **Any lead message after the alarm** (a `STATUS`, a `LEAD ONLINE` or anything else): a lead is alive. Tell Matthew where it is; no new lead is needed.
+     - **None:** give him the takeover line:
 
-    ```bash
-    python3 room.py join-line N --takeover --repo OWNER/NAME
-    ```
+       ```bash
+       python3 room.py join-line N --takeover --repo OWNER/NAME
+       ```
 
-    If the old lead's session is still open in the Code tab, he archives it first.
+       If the old lead's session is still open in the Code tab, he archives it first.
+- **A lead that waits on Matthew and doesn't answer:** while the step is `waiting for owner: …`, the watchdog stays quiet, so a dead lead raises no `LEAD-SILENT`. If the lead's session doesn't answer "check the room" within about 35 minutes (9.6, step 4), treat it as dead: give the takeover line, as above, and Matthew archives the old session first if it's open.
 
 Matthew starts the lead as in section 8, step 9. Never delete a lead's one-time scheduled task: deleting a task deletes the sessions it started. It disables itself after firing.
 
@@ -341,7 +346,8 @@ Leads wait by check-ins about every 30 minutes, so an `ACK DECISION-n` or `ACK C
 3. At the check-in, read the room (9.1).
    - **`ACK` there:** tell Matthew in one line.
    - **The last lead message is `HANDOFF`, with no `LEAD ONLINE` after it:** the successor never started. Give the normal join line (9.5).
-   - **Otherwise:** tell Matthew to open the lead's session in the Code tab and send "check the room".
+   - **Otherwise:** tell Matthew to open the lead's session in the Code tab and send "check the room". Schedule another check-in about 35 minutes ahead, as in step 2.
+4. At that check-in, with still no `ACK` and no lead message since: if `python3 room.py state get step --repo OWNER/NAME` shows `waiting for owner: …`, the lead is dead and no `LEAD-SILENT` will come. Give the takeover line (9.5); Matthew archives the old session first if it's open. Otherwise the watchdog's `LEAD-SILENT` follows; handle it as in 9.5. If Matthew finds the lead's session gone, decide this at once, without waiting for the check-in.
 
 ### 9.7 `DONE`
 

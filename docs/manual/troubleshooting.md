@@ -26,9 +26,11 @@ Something looks wrong, and the page you were following doesn't cover it.
    | No ACK about 35 minutes after a `DECISION` or `CHANGE` | [Answer a buzz](answer-a-buzz.md), "If you don't" |
    | No `PAUSED` or `STOPPED` buzz about 35 minutes after asking | Open the lead's session in the Code tab and send `check the room` |
    | No `LEAD ONLINE` 10 minutes after starting a lead | Check the session's repository and environment; tell the architect `check the room` |
-   | A new lead says another lead holds the lease, and ends | After `LEAD-SILENT`, use the takeover line; otherwise a lead is already running ([Start the next lead by hand](start-the-next-lead-by-hand.md)) |
-   | `LEAD-SILENT` after your Claude usage ran out | The lead simply stopped. When usage is back, start a lead with the takeover line, or [Move a project to the other account](move-a-project-to-the-other-account.md) |
-   | You deleted a lead's scheduled task | That deleted the lead's session too. Wait for `LEAD-SILENT`, then start a lead with the takeover line |
+   | A new lead says another lead holds the lease, and ends | If the architect found the old lead gone, use the takeover line it gives you; otherwise a lead is already running ([Start the next lead by hand](start-the-next-lead-by-hand.md)) |
+   | `LEAD-SILENT` after your Claude usage ran out | The lead simply stopped. When usage is back, answer the buzz ([Answer a buzz](answer-a-buzz.md)): the architect gives you the takeover line. Or [Move a project to the other account](move-a-project-to-the-other-account.md) |
+   | `LEAD-SILENT: state unreadable (…)` | The `agent-room/state` branch or its records are broken, not the lead. [Answer a buzz](answer-a-buzz.md), `LEAD-SILENT`, step 1 |
+   | A lead waiting for your decision doesn't answer `check the room` | It's gone, and the watchdog stays quiet while a lead waits for you. Tell the architect; it gives you the takeover line ([Answer a buzz](answer-a-buzz.md), "If you don't") |
+   | You deleted a lead's scheduled task | That deleted the lead's session too. Tell the architect `check the room`: it gives you the takeover line once the lead is clearly gone, after a `LEAD-SILENT`, or at once if the lead was waiting for you |
    | `GitHub access to this repository is not enabled for this session` | Architect chat: approve the repo. Lead: start the session on that repo ([Connect GitHub](connect-github.md)) |
    | `[ignored N message(s) from untrusted authors: X]` | Someone other than you commented; that's ignored by design. If X is another login of yours, add `ROOM_TRUST=X` to the `agent-room` environment |
    | Old `mission/…` branches pile up | Tick **Automatically delete head branches** ([Create the repo](create-the-repo.md), step 3), then delete merged ones on the repo's branches page with the bin icon. Never delete `main` or `agent-room/state` |

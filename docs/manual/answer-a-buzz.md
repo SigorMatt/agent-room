@@ -64,12 +64,14 @@ The lead merged the last mission and closed the room.
 
 ### `LEAD-SILENT`: no progress for three hours
 
-The watchdog saw nothing move. A lead died, got stuck or ran out of Claude usage, or the next one never started. Or the lead is alive but made no progress: then it answers with a `STATUS`.
+The watchdog saw nothing move. A lead died, got stuck or ran out of Claude usage, or the next one never started. Or the lead is alive but slow: it sees the alarm at its next check-in, within about 30 minutes, and answers in the room.
 
-1. The architect reads the room. If a lead `STATUS` came after the `LEAD-SILENT`, the lead is alive: the architect tells you where it is, and you need no new lead. Stop here.
-2. Otherwise the architect tells you where the build stopped, and gives you the **takeover line**. It ends with "Take over the lease … the previous lead stopped without handing over."
-3. If the old lead's session is still open in the Code tab, archive it.
-4. Start a lead with the takeover line: [Start the next lead by hand](start-the-next-lead-by-hand.md). Use a takeover line only after `LEAD-SILENT`.
+1. If the buzz's message reads `LEAD-SILENT: state unreadable (…)`, the pipeline's records are broken, not the lead. The architect checks them first. If the `agent-room/state` branch was deleted, restore it before any lead starts: push it again from a clone that still has it, or let the architect recreate it (`Run state init.`). Then go on.
+2. The architect tells you where the build stopped. Then it waits for the lead's next check-in, until about 35 minutes after the alarm. It checks back itself, or asks you to send it `check the room` then.
+3. If any lead message came after the alarm, the lead is alive: the architect tells you where it is, and you need no new lead. Stop here.
+4. Otherwise it gives you the **takeover line**. It ends with "Take over the lease … the previous lead stopped without handing over."
+5. If the old lead's session is still open in the Code tab, archive it.
+6. Start a lead with the takeover line: [Start the next lead by hand](start-the-next-lead-by-hand.md). Use a takeover line only when the architect gives you one.
 
 ## What you should see
 
@@ -87,5 +89,6 @@ The watchdog saw nothing move. A lead died, got stuck or ran out of Claude usage
 
   - If the last lead message is `HANDOFF` with no `LEAD ONLINE` after it, the next lead never started. The architect gives you the normal join line: [Start the next lead by hand](start-the-next-lead-by-hand.md).
   - Otherwise, open the lead's session in the Code tab and send it `check the room`.
+  - Still no answer about 35 minutes later, or the session is gone: send the architect `check for the ACK` again. If the lead was waiting for your decision, the watchdog stays quiet, so the architect treats the lead as dead and gives you the takeover line. Archive the old session if it's open, then start a lead with that line.
 - Tapping the buzz didn't open the room: in GitHub, open the repo, then **Issues**, and filter by the label `agent-room`.
 - Something else: [Troubleshooting](troubleshooting.md).

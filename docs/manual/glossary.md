@@ -33,7 +33,7 @@ To look up a word used in the manuals, the room or a session.
    - **Decision, change:** the architect's answer to an escalation or hold (`DECISION-n`), and a design change mid-phase (`CHANGE-n`).
    - **ACK:** the lead's receipt for a decision or change.
    - **Join line:** the line you paste into a new Code session to start a lead.
-   - **Takeover line:** a join line that may replace a lead that stopped without handing over. Only after `LEAD-SILENT`.
+   - **Takeover line:** a join line that may replace a lead that stopped without handing over. Only when the architect finds the old lead gone: a `LEAD-SILENT` no lead answered, or a waiting lead that doesn't answer.
    - **Lease:** the record of which session is the lead, so only one lead acts at a time.
    - **Check-in:** a lead wakes about every 30 minutes to read the room. Why an ACK, a `PAUSE` or a `STOP` can take that long.
    - **Preflight:** the checklist the architect and each lead run on the repo, the state branch and the environment.
