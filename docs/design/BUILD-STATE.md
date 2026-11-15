@@ -62,6 +62,7 @@ Results of the eleven assumptions in `v1.md` ("To verify"). Evidence lives in is
 - **F. Builder worktrees start from the default branch,** not from the lead's current branch. A builder on a mission first merges the mission branch into its worktree branch, and every brief says so.
 - **G. Deleting a scheduled task deletes every session it started.** So a successor's one-time task is never deleted (it disables itself after firing), and a session started by a task can't delete that task (`update_trigger` with `enabled=false` stops it instead). The watchdog's runs are short, so deleting it at `DONE` is safe; the lead that deletes it was not started by it.
 - **H. An idle session's container is suspended within minutes.** Detached processes die; files survive; `send_later` wakes the session. So the lead never relies on a waiter alone: whenever it ends a turn waiting (for Matthew, Qodo or anything slow), it schedules a `send_later` check-in, and the watchdog catches the rest. This is the pre-approved fallback for check 9.
+- **I. Scheduled sessions have fewer tools.** A session started by a scheduled task had no background option on its Bash tool (idle probe 2, issue #4), so a lead started as a successor can't run a background waiter at all. The lead protocol therefore assumes only: foreground `room wait` with a timeout under ten minutes, `send_later` check-ins, and builders run in the background only if its Agent tool offers that, else one at a time (pre-approved fallback). Which Agent options a scheduled session has is checked in M6.
 - **C. A new repo may be completely empty** (`pet-todo` has no commits). Preflight detects this, and the architect's kickoff creates the first commit on `main`; no protection can exist yet, so this is safe.
 
 ## Decisions taken during the build
@@ -86,6 +87,9 @@ Calls the build lead made that Matthew would normally make. Each is reversible; 
 | A-2 | Milestones M3 and M4 are built and reviewed in parallel with M2, each on the previous one's branch, and merged in order | Saves hours; each still gets its own cold reviews, PR, Qodo and merge | Build them one after another |
 | A-3 | Low-severity findings from a scoped review that touch rare edge paths may be deferred to the next milestone already in flight (B-2 to M4) instead of looping more scoped reviews | v1 allows deferral to a later mission; keeps reviews converging | Fix them in the same milestone |
 | A-4 | No buzz overnight unless the build is blocked | Matthew is asleep and asked to be told on return | — |
+| A-5 | The lease is the machine block of the latest state commit whose block parses; `room.py` refuses any commit that breaks the block or changes the lease outside `lease take`/`release` | Three scoped reviews showed that a lenient reading of a broken block either locks out a takeover or lets a superseded lead through | Accept a stuck lead when the block is hand-damaged |
+| A-6 | Low-severity gate findings that assume a hostile lead are fixed only when the fix is small; the gate is a mechanical aid for a cooperative lead | Keeps M3 converging; v1 leaves scope to the lead's judgement | Harden further in a patch release |
+| A-7 | Probe 3 (what a scheduled session's Agent tool can do) wasn't created: creating a scheduled task suddenly asked for approval at night. The protocol covers both answers, and M6 checks it | Matthew asleep | Run the probe when Matthew is back |
 
 ## Deferred to later milestones
 
@@ -93,3 +97,4 @@ Calls the build lead made that Matthew would normally make. Each is reversible; 
 | --- | --- | --- | --- |
 | B-1 | The gate exempts only known review-record file patterns under `reviews/`, not the whole directory, so code placed there can't skip coverage | M3 | Qodo PR #5, "Review exemption by directory lets code skip coverage" |
 | B-2 | Stale state worktrees, from cold M2 scoped-1: say when local work is moved aside and keep its commits (S1-3); recognise the project checkout and stale state worktrees whatever the current directory, with a marker file in the worktree's git dir (S1-4, S1-5) | M4 | cold M2 S1-3, S1-4, S1-5 |
+| B-3 | Strict machine-block parsing, from cold M2 scoped-3: the block is the only `agent-room-state` block and the first fenced block, its body only `key: value` or blank lines, closed by a bare fence; a second such block is refused on commit; a repair never deletes text, it prepends a fresh block and retires the damaged fence (S3-1, S3-2, S3-3) | M4 | cold M2 S3-1, S3-2, S3-3 |

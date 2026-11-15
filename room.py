@@ -561,7 +561,11 @@ PLAYBOOK_DIR = "docs/playbook"
 ARCHITECT_FILES = ("PLAYBOOK.md", "DESIGN.md", "HANDOFF.md")
 LEAD_FILES = ("MISSIONS.md", "LEDGER.md", "QODO-VALUE.md")
 LEAD_PATHS = {f"{PLAYBOOK_DIR}/{n}" for n in LEAD_FILES}
+MISSIONS = f"{PLAYBOOK_DIR}/MISSIONS.md"
+LEASE_KEYS = ("lease_session", "lease_generation")
+LEASE_HISTORY = 200  # commits of MISSIONS.md walked back to find the last valid block
 STATE_BLOCK = re.compile(r"^```agent-room-state[ \t]*\n(.*?)^```[ \t]*$", re.M | re.S)
+BROKEN_BLOCK = re.compile(r"^```[ \t]*agent-room-state\b[^\n]*\n.*?^```[ \t]*$\n?", re.M | re.S)  # a damaged fence
 STATE_KEY = re.compile(r"[a-z][a-z0-9_]*")
 TEMPLATE_URL = "https://raw.githubusercontent.com/{repo}/{version}/templates/playbook/{name}"
 FIRST_GITIGNORE = "__pycache__/\n*.pyc\n.venv/\nnode_modules/\n.env\n.DS_Store\n"
@@ -575,7 +579,8 @@ class StateMoved(Exception):
 
 
 class BlockUnreadable(StateError):
-    """MISSIONS.md, or the machine block in it, is missing or broken: no lease can be read."""
+    """MISSIONS.md, or the machine block in it, is missing or broken (the lease then comes from the
+    last valid block in the branch's history: see pushed_lease)."""
 
 
 class StateExit(Exception):
@@ -904,6 +909,10 @@ def add_missing(names, msg):
     sync(path, discard=False)
     missing = [n for n in names if not os.path.exists(os.path.join(path, PLAYBOOK_DIR, n))]
     texts = {n: render(n) for n in missing}  # render all first, so a failed download writes nothing
+    if "MISSIONS.md" in texts:
+        values, _ = pushed_lease(path)
+        if values:  # deleted outside room.py: carry the last valid block, so no generation or counter repeats
+            texts["MISSIONS.md"] = with_block(texts["MISSIONS.md"], values)
     for n, text in texts.items():
         os.makedirs(os.path.join(path, PLAYBOOK_DIR), exist_ok=True)
         with open(os.path.join(path, PLAYBOOK_DIR, n), "w") as f:
@@ -943,6 +952,28 @@ def write_block(text, updates):
     return text[:m.start(1)] + "".join(line + "\n" for line in lines) + text[m.end(1):]
 
 
+def render_block(values):
+    return "```agent-room-state\n" + "".join(f"{k}: {v}\n" for k, v in values.items()) + "```\n"
+
+
+def with_block(text, values):
+    """MISSIONS.md TEXT (None if missing) with its machine block holding VALUES: updated in place if it
+    parses, rewritten in place if only its fence is damaged, else prepended under the title. A missing
+    file starts from the template."""
+    if text is None:
+        text = template("MISSIONS.md")
+    if STATE_BLOCK.search(text):
+        return write_block(text, values)
+    block = render_block(values)
+    m = BROKEN_BLOCK.search(text)
+    if m:
+        return text[:m.start()] + block + text[m.end():]
+    first, _, rest = text.partition("\n")
+    if first.startswith("# "):
+        return f"{first}\n\n{block}\n" + rest.lstrip("\n")
+    return f"{block}\n{text}"
+
+
 def missions_text(path):
     f = os.path.join(path, PLAYBOOK_DIR, "MISSIONS.md")
     if not os.path.isfile(f):
@@ -966,57 +997,102 @@ def require_lease(values, sid, doing="not written"):
 
 
 def change_state(a, msg, fn, need_lease=True):
-    """Sync, check that this session holds the lease (unless need_lease is False), apply
-    fn(values) -> {key: value} to the machine block, commit and push. Returns the updates."""
+    """Sync, read the lease (the last valid block, see pushed_lease), check that this session holds it
+    (unless need_lease is False), apply fn(values) -> {key: value}, and write the whole block back,
+    which restores it if the pushed one is damaged or gone. Commit and push. Returns the updates."""
     path = ensure_worktree()
     sync(path, discard=False)
-    text = missions_text(path)
-    values = read_block(text)
+    f = os.path.join(path, MISSIONS)
+    text = open(f).read() if os.path.isfile(f) else None
+    values, note = pushed_lease(path)
+    if text is None and not values:
+        raise StateError(f"{MISSIONS} is missing: the lead runs '{ME} state init-lead'")
     if need_lease:
         require_lease(values, session_id(a))
     updates = fn(values)
-    with open(os.path.join(path, PLAYBOOK_DIR, "MISSIONS.md"), "w") as f:
-        f.write(write_block(text, updates))
-    commit_and_push(path, msg)
+    if note:
+        print(f"[{note}; this write restores it]", file=sys.stderr)
+    with open(f, "w") as fh:
+        fh.write(with_block(text, {**values, **updates}))
+    commit_and_push(path, msg + (" (restores the machine block)" if note else ""))
     return updates
 
 
-def pushed_text(path, name):
-    """A playbook file as last fetched from the state branch, or None if it isn't there."""
-    r = git("show", f"{STATE_REF}:{PLAYBOOK_DIR}/{name}", cwd=path, check=False)
+def pushed_text(path, name, ref=STATE_REF):
+    """A playbook file as last fetched from the state branch (or at REF), or None if it isn't there."""
+    r = git("show", f"{ref}:{PLAYBOOK_DIR}/{name}", cwd=path, check=False)
     return r.stdout if r.returncode == 0 else None
 
 
-def pushed_state():
-    """(worktree path, machine block) of MISSIONS.md on the remote state branch, freshly fetched. Reads
-    git objects only, so local work in the worktree is neither used nor touched."""
-    path = ensure_worktree()  # fetched
+def pushed_lease(path):
+    """The lease: the machine block of the most recent state-branch commit whose MISSIONS.md block
+    parses, walking back at most LEASE_HISTORY commits of MISSIONS.md. Returns (values, note): values
+    is {} when no block parses, which means no session holds the lease; note is None when the pushed
+    tip's own block parses, else a line for a warning. A damaged block never frees the lease, and
+    nothing outside the block (a quoted line, say) can decide it."""
     text = pushed_text(path, "MISSIONS.md")
-    if text is None:
-        raise BlockUnreadable(f"{PLAYBOOK_DIR}/MISSIONS.md is missing on {STATE_BRANCH}: run '{ME} state init-lead'")
-    return path, read_block(text)
+    if text is not None:
+        try:
+            return read_block(text), None
+        except BlockUnreadable:
+            pass
+    what = f"{MISSIONS} is missing" if text is None else f"{MISSIONS} has no valid agent-room-state block"
+    if git_out("rev-parse", "--is-shallow-repository", cwd=path) == "true":  # a clone of depth 1
+        git("fetch", "-q", f"--depth={LEASE_HISTORY}", "origin", f"+refs/heads/{STATE_BRANCH}:{STATE_REF}",
+            cwd=path, check=False)
+    for sha in git_out("log", "--format=%H", "-n", str(LEASE_HISTORY), STATE_REF, "--", MISSIONS, cwd=path).split():
+        old = pushed_text(path, "MISSIONS.md", sha)
+        try:
+            values = read_block(old) if old is not None else None
+        except BlockUnreadable:
+            values = None
+        if values is not None:
+            return values, f"{what} on {STATE_BRANCH}; the lease is read from {sha[:7]}, its last valid block"
+    return {}, f"{what} on {STATE_BRANCH}, and no earlier commit has a valid one: no session holds the lease"
+
+
+def pushed_state():
+    """(worktree path, machine block, note) on the freshly fetched state branch: the pushed block, else the
+    last valid one (see pushed_lease), and a note saying so; the block is {} when none parses. Reads git
+    objects only, so local work in the worktree is neither used nor touched."""
+    path = ensure_worktree()  # fetched
+    values, note = pushed_lease(path)
+    return path, values, note
+
+
+def recorded_state():
+    """(path, block) from pushed_state for commands that only read it: a note goes to stderr, and no valid
+    block anywhere in the history is an error."""
+    path, values, note = pushed_state()
+    if not values:
+        raise BlockUnreadable(f"{note}: the lead runs '{ME} state init-lead'")
+    if note:
+        print(f"[{note}]", file=sys.stderr)
+    return path, values
 
 
 def lease_holder():
-    """(session, generation) of the lease on the remote state branch, freshly fetched."""
-    return lease_of(pushed_state()[1])
+    """(session, generation, note) of the lease on the freshly fetched state branch (see pushed_lease)."""
+    _, values, note = pushed_state()
+    holder, gen = lease_of(values)
+    return holder, gen, note
 
 
 def lease_guard(a, kind=None):
     """Lease check on send, for say and close: a lead with a state worktree may not post while
     another session holds the lease (exit 5). A released lease (none) doesn't block, so a
-    retiring lead can still post NEXT-LEAD-NEEDED, and neither does an unreadable one (a missing
-    MISSIONS.md or a broken block), with a warning. No kind is exempt; KIND is unused."""
+    retiring lead can still post NEXT-LEAD-NEEDED. While the pushed block is damaged, the last valid
+    one decides (with a warning), so its holder can still report the problem. No kind is exempt;
+    KIND is unused."""
     if a.role != "lead" or not state_worktree_exists():
         return
     sid = session_id(a)
     try:
-        holder, gen = lease_holder()
-    except BlockUnreadable as e:  # no session can be shown to hold it, and the lead must be able to say so
-        print(f"[lease unreadable, posting anyway: {e}]", file=sys.stderr)
-        return
+        holder, gen, note = lease_holder()
     except StateError as e:
         sys.exit(f"not sent: lease check failed: {e}")
+    if note:
+        print(f"[{note}]", file=sys.stderr)
     if holder not in (sid, "none"):
         print(f"not sent: the lease is held by {holder} (generation {gen}), not this session ({sid})",
               file=sys.stderr)
@@ -1074,18 +1150,33 @@ def changed_paths(path):
     return out
 
 
+def check_missions(path, current):
+    """Refuse (exit 1) a MISSIONS.md that loses its valid block or changes the lease by hand: only
+    lease take, lease release and room.py's own writes change lease_session and lease_generation."""
+    f = os.path.join(path, MISSIONS)
+    try:
+        new = read_block(open(f).read()) if os.path.isfile(f) else None
+    except BlockUnreadable:
+        new = None
+    if new is None or lease_of(new) != lease_of(current):
+        holder, gen = lease_of(current)
+        raise StateError(f"not committed: MISSIONS.md must keep a valid agent-room-state block with the current "
+                         f"lease (lease_session: {holder}, lease_generation: {gen}); only 'lease take' and "
+                         "'lease release' change the lease")
+
+
 def cmd_state_commit(a):
     path = ensure_worktree()
-    touched = sorted(changed_paths(path) & LEAD_PATHS)
+    changed = changed_paths(path)
+    touched = sorted(changed & LEAD_PATHS)
     if touched:  # lead-owned files need the lease, read from the freshly fetched branch
         fetch(path)
-        text = pushed_text(path, "MISSIONS.md")
-        try:
-            if text is None:
-                raise BlockUnreadable(f"{PLAYBOOK_DIR}/MISSIONS.md is missing on {STATE_BRANCH}")
-            require_lease(read_block(text), session_id(a), f"not committed ({', '.join(touched)} are lead-owned)")
-        except BlockUnreadable as e:  # no one holds a lease that can't be read; let the repair through
-            print(f"[lease unreadable, committing anyway: {e}]", file=sys.stderr)
+        values, note = pushed_lease(path)
+        require_lease(values, session_id(a), f"not committed ({', '.join(touched)} are lead-owned)")
+        if MISSIONS in changed:
+            check_missions(path, values)
+        elif note:
+            print(f"[{note}; the holder's next state write restores it]", file=sys.stderr)
     if commit_and_push(path, a.message):
         print(f"pushed {git_out('rev-parse', '--short', 'HEAD', cwd=path)} to {STATE_BRANCH}")
     else:
@@ -1095,7 +1186,11 @@ def cmd_state_commit(a):
 def cmd_state_get(a):
     path = ensure_worktree()
     refresh(path)
-    values = read_block(missions_text(path))
+    try:
+        values = read_block(missions_text(path))
+    except BlockUnreadable:
+        values, note = pushed_lease(path)  # the last valid block
+        print(f"[{note}]", file=sys.stderr)
     if a.key not in values:
         raise StateError(f"no key '{a.key}' in the state block")
     print(values[a.key])
@@ -1115,6 +1210,8 @@ def cmd_state_set(a):
         if not sep or not STATE_KEY.fullmatch(key):
             raise StateError(f"expected KEY=VALUE with a lowercase key, got {pair!r}")
         value = single_line(key, value)
+        if key in LEASE_KEYS:
+            raise StateError(f"{key} changes only through 'lease take' and 'lease release'")
         if key == "status" and value not in STATUSES:
             raise StateError(f"status must be one of {', '.join(STATUSES)}, not {value!r}")
         if key == "mission_started" and value != "none" and parse_time(value) is None:
@@ -1134,6 +1231,8 @@ def next_int(values, key):
 def cmd_state_next(a):
     if not STATE_KEY.fullmatch(a.key):
         raise StateError(f"bad key {a.key!r}")
+    if a.key in LEASE_KEYS:
+        raise StateError(f"{a.key} changes only through 'lease take' and 'lease release'")
     print(change_state(a, f"state: next {a.key}", lambda v: {a.key: next_int(v, a.key)})[a.key])
 
 
@@ -1157,7 +1256,7 @@ def cmd_lease_take(a):
             return 0
         except StateMoved:
             # the push lost to some other write; only a lease that another session took means stand down
-            holder, gen = lease_holder()
+            holder, gen, _ = lease_holder()
             if holder not in ("none", sid) and (holder, gen) != seen[-1]:
                 print(f"lease not taken: {holder} took it first (generation {gen}); stand down", file=sys.stderr)
                 return EXIT_MOVED
@@ -1178,7 +1277,9 @@ def cmd_lease_release(a):
 
 def cmd_lease_check(a):
     sid = session_id(a)
-    holder, gen = lease_holder()
+    holder, gen, note = lease_holder()
+    if note:
+        print(f"[{note}]", file=sys.stderr)
     if holder == sid:
         print(f"lease held by this session ({sid}, generation {gen})")
         return 0
@@ -1357,7 +1458,8 @@ def cmd_preflight(a):
                     read_block(pushed_text(path, "MISSIONS.md"))
                     check("✓", "lead-owned files exist")
                 except StateError as e:
-                    check("✗", f"lead-owned files: {e}")
+                    check("✗", f"lead-owned files: {e}; the lease holder's next state write restores it "
+                               "('lease take --takeover' if the holder is gone)")
         # environment
         if os.environ.get("ROOM_NTFY_TOPIC", "").strip():
             check("✓", "ROOM_NTFY_TOPIC is set")
@@ -2047,7 +2149,9 @@ def run_gate(a, expect_sha=None):
 
     # 2. the lease
     sid = session_id(a)
-    holder, gen = lease_holder()
+    holder, gen, note = lease_holder()
+    if note:
+        print(f"[{note}]", file=sys.stderr)
     if holder != sid:
         print(f"✗ lease: held by {holder} (generation {gen}), not this session ({sid})")
         print("gate: lease lost")
@@ -2325,7 +2429,7 @@ def mission_merge():
 
 
 def cmd_watchdog(a):
-    path, values = pushed_state()  # fetched and read from git objects: the watchdog never writes state
+    path, values = recorded_state()  # fetched and read from git objects: the watchdog never writes state
     step, mission = values.get("step") or "none", values.get("mission") or "none"
     why = quiet_reason(a, values, pushed_text(path, "PLAYBOOK.md"))
     if why:
@@ -2403,10 +2507,9 @@ def cmd_handoff(a):
     if p:  # change_state would refuse after HANDOFF is posted; refuse before it instead
         raise StateError(f"not handed off: the state worktree {path} has {p}: push them with '{ME} state commit "
                          f"-m MSG', or drop them with '{ME} state sync'")
-    text = pushed_text(path, "MISSIONS.md")
-    if text is None:
-        raise StateError(f"{PLAYBOOK_DIR}/MISSIONS.md is missing on {STATE_BRANCH}: run '{ME} state init-lead'")
-    values = read_block(text)
+    values, note = pushed_lease(path)  # the last valid block when the pushed one is damaged
+    if note:
+        print(f"[{note}]", file=sys.stderr)
     require_lease(values, sid, "not handed off")
     # the last comment the lead acted on, which it names: the cursor file also moves when the waiter merely reads
     cursor = a.cursor
@@ -2549,7 +2652,7 @@ def cmd_intent(a):
 
 
 def cmd_reconcile(a):
-    path, values = pushed_state()  # it changes nothing: no state write, no cursor move
+    path, values = recorded_state()  # it changes nothing: no state write, no cursor move
     print(f"recorded state ({PLAYBOOK_DIR}/MISSIONS.md on {STATE_BRANCH} at "
           f"{git_out('rev-parse', '--short', STATE_REF, cwd=path)}):")
     for k, v in values.items():
@@ -2635,7 +2738,7 @@ def phase_budget(playbook, phase):
 
 
 def cmd_budget(a):
-    path, values = pushed_state()
+    path, values = recorded_state()
     mission, phase = values.get("mission") or "none", values.get("phase") or "1"
     started = values.get("mission_started") or "none"
     if started == "none":
