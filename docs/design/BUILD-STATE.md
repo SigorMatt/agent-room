@@ -16,8 +16,8 @@ The build of the agent-room pipeline v1, as designed in [`v1.md`](v1.md). A fres
 | M2 | Core machinery | Done (#6) |
 | M3 | Review records, `gate` and `merge` (spec `m3-reviews-gate.md`) | Done (#7) |
 | M4 | Unattended operation (spec `m4-unattended.md`) | Done (#8) |
-| M5 | Protocols (`ARCHITECT.md`, `LEAD.md`, briefs, thin skill), manuals and index | In review (PR) |
-| M6 | Dress rehearsal on `pet-todo` (build lead plays the architect) | Prepared: design, playbook, room 1, watchdog; waiting for M5 and Matthew to start the first lead |
+| M5 | Protocols (`ARCHITECT.md`, `LEAD.md`, briefs, thin skill), manuals and index | Done (#9) |
+| M6 | Dress rehearsal on `pet-todo` (build lead plays the architect) | In progress: M1 merged (pet-todo #2), M2 merged (#3); both handovers needed Matthew (finding L) |
 | M7 | Matthew's owner run, then tag `v1.0.0` | Not started |
 
 ## Pre-approved fallbacks (Matthew, 2026-11-14)
@@ -65,6 +65,9 @@ Results of the eleven assumptions in `v1.md` ("To verify"). Evidence lives in is
 - **I. Scheduled sessions have fewer tools.** A session started by a scheduled task had no background option on its Bash tool (idle probe 2, issue #4), so a lead started as a successor can't run a background waiter at all. The lead protocol therefore assumes only: foreground `room wait` with a timeout under ten minutes, `send_later` check-ins, and builders run in the background only if its Agent tool offers that, else one at a time (pre-approved fallback). Which Agent options a scheduled session has is checked in M6.
 - **J. A subagent writing under `.claude/` with the file tool can stall on an approval prompt** that an unattended session never answers (an M5 writer waited half an hour on `.claude/skills/agent-room/SKILL.md`). Briefs that touch `.claude/` tell the builder to write through Python in the shell; `LEAD.md` says so for any project file under `.claude/`.
 - **K. Creating a scheduled task from an interactive session may ask Matthew for approval** (it did at night, and again in the morning), while sessions started by a scheduled task run in auto mode. So the first lead Matthew starts from the Code tab should run in a mode that doesn't ask, or its handover waits for him; the lead checks the successor task's approval setting (`LEAD.md` section 6).
+- **L. A scheduled task created from a Code-tab session comes out bare:** no permission mode (its runs ask for approval) and no repository source. Tasks created from a Cowork chat (this build chat, an architect chat) carry the chat's repos and auto mode. So a Code-tab lead can't start an unattended successor: it disables the task and posts `NEXT-LEAD-NEEDED` (`LEAD.md` 6), and Matthew starts the next lead by hand. The Code tab's own mode picker (Auto, the default) doesn't change this. Seen at both M6 handovers.
+- **M. Free ntfy is rate-limited per IP, and cloud sessions share their outgoing IPs,** so a lead's buzz can fail with "daily limit for this shared IP" through no traffic of ours. Seen in M6 on `NEXT-LEAD-NEEDED`. `room.py` reports it and supports `ROOM_NTFY_TOKEN`; a paid plan is Matthew's decision.
+- **N. A task created from a chat runs in that chat's environment.** The pet-todo watchdog was created from this build chat, which isn't in Matthew's `agent-room` environment, so its buzz found no topic. The architect must create the watchdog in the `agent-room` environment (`ARCHITECT.md` 8.4 says so); the build chat can't choose environments.
 - **C. A new repo may be completely empty** (`pet-todo` has no commits). Preflight detects this, and the architect's kickoff creates the first commit on `main`; no protection can exist yet, so this is safe.
 
 ## Decisions taken during the build
@@ -92,6 +95,7 @@ Calls the build lead made that Matthew would normally make. Each is reversible; 
 | A-5 | The lease is the machine block of the latest state commit whose block parses; `room.py` refuses any commit that breaks the block or changes the lease outside `lease take`/`release` | Three scoped reviews showed that a lenient reading of a broken block either locks out a takeover or lets a superseded lead through | Accept a stuck lead when the block is hand-damaged |
 | A-6 | Low-severity gate findings that assume a hostile lead are fixed only when the fix is small; the gate is a mechanical aid for a cooperative lead | Keeps M3 converging; v1 leaves scope to the lead's judgement | Harden further in a patch release |
 | A-7 | Probe 3 (what a scheduled session's Agent tool can do) wasn't created: creating a scheduled task suddenly asked for approval at night. The protocol covers both answers, and M6 checks it | Matthew asleep | Run the probe when Matthew is back |
+| A-8 | For the M6 rehearsal the build lead wrote pet-todo's design and playbook as architect, without Matthew's review | M6 is the build lead's rehearsal; M7 is Matthew's own run | — |
 
 ## Deferred to later milestones
 
