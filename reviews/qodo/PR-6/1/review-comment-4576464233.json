@@ -1,0 +1,71 @@
+{
+  "url": "https://api.github.com/repos/SigorMatt/agent-room/pulls/comments/4576464233",
+  "pull_request_review_id": 5908285741,
+  "id": 4576464233,
+  "node_id": "PRRC_kwDOVVYvuc8AAAABEMdNaQ",
+  "diff_hunk": "@@ -318,10 +526,915 @@ def repo_arg(s):\n     return s\n \n \n+# --- state branch, lease, preflight\n+#\n+# The playbook and pipeline state live on branch agent-room/state of the project repo, under\n+# docs/playbook/. room.py keeps a git worktree of that branch at $ROOM_STATE_DIR (default\n+# ~/agent-room-state/OWNER__NAME): `git worktree add` from the project checkout when run inside\n+# one, else a shallow clone of the branch from $ROOM_STATE_REMOTE (default the GitHub URL).\n+# Every state write is a push that fails if anyone else pushed first; the lead lease rests on that.\n+#\n+#   state init | init-lead | path | sync | commit -m MSG | get KEY | set KEY=VALUE... | next KEY\n+#   lease take [--takeover] | release | check          preflight --role architect|lead [--fix]\n+#\n+# Writes to lead-owned state (state set, state next, state commit of a lead-owned file) need the lease.\n+# Exit codes: 3 the state branch moved under us (re-read and re-apply), or lease take must stand down;\n+# 5 the lease is not this session's.\n+\n+STATE_BRANCH = \"agent-room/state\"\n+STATE_REF = f\"refs/remotes/origin/{STATE_BRANCH}\"\n+PLAYBOOK_DIR = \"docs/playbook\"\n+ARCHITECT_FILES = (\"PLAYBOOK.md\", \"DESIGN.md\", \"HANDOFF.md\")\n+LEAD_FILES = (\"MISSIONS.md\", \"LEDGER.md\", \"QODO-VALUE.md\")\n+LEAD_PATHS = {f\"{PLAYBOOK_DIR}/{n}\" for n in LEAD_FILES}\n+MISSIONS = f\"{PLAYBOOK_DIR}/MISSIONS.md\"\n+LEASE_KEYS = (\"lease_session\", \"lease_generation\")\n+LEASE_HISTORY = 200  # commits of MISSIONS.md walked back to find the last valid block\n+STATE_BLOCK = re.compile(r\"^```agent-room-state[ \\t]*\\n(.*?)^```[ \\t]*$\", re.M | re.S)\n+BROKEN_BLOCK = re.compile(r\"^```[ \\t]*agent-room-state\\b[^\\n]*\\n.*?^```[ \\t]*$\\n?\", re.M | re.S)  # a damaged fence",
+  "path": "room.py",
+  "commit_id": "870f10beea0d145859842b5a254b52c98d2cfb39",
+  "original_commit_id": "870f10beea0d145859842b5a254b52c98d2cfb39",
+  "user": {
+    "login": "qodo-code-review[bot]",
+    "id": 151058649,
+    "node_id": "BOT_kgDOCQD42Q",
+    "avatar_url": "https://avatars.githubusercontent.com/in/484649?v=4",
+    "gravatar_id": "",
+    "url": "https://api.github.com/users/qodo-code-review%5Bbot%5D",
+    "html_url": "https://github.com/apps/qodo-code-review",
+    "followers_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/followers",
+    "following_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/following{/other_user}",
+    "gists_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/gists{/gist_id}",
+    "starred_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/starred{/owner}{/repo}",
+    "subscriptions_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/subscriptions",
+    "organizations_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/orgs",
+    "repos_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/repos",
+    "events_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/events{/privacy}",
+    "received_events_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/received_events",
+    "type": "Bot",
+    "user_view_type": "public",
+    "site_admin": false
+  },
+  "body": "<img src=\"https://img.shields.io/badge/High-634FD1?style=flat-square\" height=\"20px\" alt=\"Action required\">\n\n2\\. A damaged block restores an old lead <code>🐞 Bug</code> <code>≡ Correctness</code>\n\n<pre>\n<b><i>STATE_BLOCK</i></b> can treat a later fence as the missing closing fence, and <b><i>read_block</i></b> accepts the\nfirst parseable matching block even if it is a quoted copy below the real one. After an outside edit\ndamages either fence, an old lease copied into mission notes can become authoritative without a\nwarning, allowing a superseded lead to post, close the room, or reuse a counter.\n</pre>\n\n\n<details>\n<summary><strong>Agent Prompt</strong></summary>\n\n```\n## Issue description\nMalformed fences or a quoted second block can make the current state appear to grant the lease to a superseded lead.\n## Fix Focus Areas\n- room.py[553-554]\n- room.py[839-850]\n- room.py[941-965]\n## Recommended Fix\nRequire one canonical machine block in the expected position, with a correctly closed fence and only valid body lines. Reject ambiguous or damaged tips so lease reads fall back to the last valid commit; refuse duplicate blocks on commit.\n```\n\n<code>ⓘ Copy this prompt and use it to remediate the issue with your preferred AI generation tools</code>\n</details>\n\n[Dismiss ↗](https://app.qodo.ai/findings/27a2daf3-2852-442d-9730-c64c93919820?action=dismiss&origin=git) | [View ↗](https://app.qodo.ai/findings/27a2daf3-2852-442d-9730-c64c93919820)",
+  "created_at": "2026-11-15T00:53:35Z",
+  "updated_at": "2026-11-15T00:53:36Z",
+  "html_url": "https://github.com/SigorMatt/agent-room/pull/6#discussion_r4576464233",
+  "pull_request_url": "https://api.github.com/repos/SigorMatt/agent-room/pulls/6",
+  "_links": {
+    "self": {
+      "href": "https://api.github.com/repos/SigorMatt/agent-room/pulls/comments/4576464233"
+    },
+    "html": {
+      "href": "https://github.com/SigorMatt/agent-room/pull/6#discussion_r4576464233"
+    },
+    "pull_request": {
+      "href": "https://api.github.com/repos/SigorMatt/agent-room/pulls/6"
+    }
+  },
+  "reactions": {
+    "url": "https://api.github.com/repos/SigorMatt/agent-room/pulls/comments/4576464233/reactions",
+    "total_count": 0,
+    "+1": 0,
+    "-1": 0,
+    "laugh": 0,
+    "hooray": 0,
+    "confused": 0,
+    "heart": 0,
+    "rocket": 0,
+    "eyes": 0
+  },
+  "start_line": 553,
+  "original_start_line": 553,
+  "start_side": "RIGHT",
+  "line": 554,
+  "original_line": 554,
+  "side": "RIGHT",
+  "author_association": "NONE",
+  "original_position": 510,
+  "position": 510,
+  "subject_type": "line",
+  "is_copilot_code_review": false,
+  "copilot_code_review_sources": []
+}
