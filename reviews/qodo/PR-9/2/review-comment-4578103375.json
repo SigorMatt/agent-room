@@ -1,0 +1,71 @@
+{
+  "url": "https://api.github.com/repos/SigorMatt/agent-room/pulls/comments/4578103375",
+  "pull_request_review_id": 5910363199,
+  "id": 4578103375,
+  "node_id": "PRRC_kwDOVVYvuc8AAAABEOBQTw",
+  "diff_hunk": "@@ -0,0 +1,95 @@\n+# Survey brief\n+\n+**Who reads this:** a fresh survey subagent, started by the architect when a project starts from a discussion plus existing code ([`ARCHITECT.md`](../ARCHITECT.md), section 5.3). The architect fills in every `<placeholder>` and passes the whole brief as the prompt.\n+\n+You inventory an existing repo, so the architect can write the playbook's Phase 0: what exists, the known debt, and whether `main` is green. You report facts. You decide nothing and change nothing.\n+\n+## Inputs\n+\n+- **Repo:** `<OWNER/NAME>`, checked out at `<checkout path>`, branch `main`, commit `<sha>`.\n+- **Digest of the discussion:** `<digest path>`, or `none`. It lists the decisions, contradictions and open questions from the chat where the project was discussed.\n+- **Report file:** write your inventory to `<report path>`. It is outside the checkout.\n+\n+## What to do\n+\n+1. Read the layout, the README, the build and dependency files, the CI configuration and the tests. Skim the source enough to say what each part does.\n+2. Find the test command. Run it once from the checkout. You may install the dependencies the repo itself declares. Stop after about 10 minutes, and record why it didn't finish.",
+  "path": "briefs/survey.md",
+  "commit_id": "50eaa347e38f040b537d9fb06896a850d67d2e89",
+  "original_commit_id": "ea8170ab0d5c3b3e66fe3e5500e13b6918ed4b37",
+  "user": {
+    "login": "qodo-code-review[bot]",
+    "id": 151058649,
+    "node_id": "BOT_kgDOCQD42Q",
+    "avatar_url": "https://avatars.githubusercontent.com/in/484649?v=4",
+    "gravatar_id": "",
+    "url": "https://api.github.com/users/qodo-code-review%5Bbot%5D",
+    "html_url": "https://github.com/apps/qodo-code-review",
+    "followers_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/followers",
+    "following_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/following{/other_user}",
+    "gists_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/gists{/gist_id}",
+    "starred_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/starred{/owner}{/repo}",
+    "subscriptions_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/subscriptions",
+    "organizations_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/orgs",
+    "repos_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/repos",
+    "events_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/events{/privacy}",
+    "received_events_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/received_events",
+    "type": "Bot",
+    "user_view_type": "public",
+    "site_admin": false
+  },
+  "body": "<img src=\"https://img.shields.io/badge/High-634FD1?style=flat-square\" height=\"20px\" alt=\"Action required\">\n\n1\\. Survey tests can expose project credentials <code>🐞 Bug</code> <code>⛨ Security</code>\n\n<pre>\n<b><i>briefs/survey.md</i></b> tells the survey subagent to install repository-declared dependencies and run the\nrepository&#x27;s test command without first isolating that execution from its credentials. When an\nexisting project&#x27;s checkout contains a malicious install hook or test script, that code runs in the\narchitect&#x27;s cloud environment, which can contain project secrets and authenticated GitHub access.\n</pre>\n\n\n<details>\n<summary><strong>Agent Prompt</strong></summary>\n\n```\n## Issue description\nThe survey runs repository-controlled install hooks and tests in an environment that may hold project credentials.\n## Fix Focus Areas\n- briefs/survey.md[15-28]\n- ARCHITECT.md[130-138]\n## Recommended Fix\nRequire the architect to run survey installs and tests in a disposable environment without GitHub authentication or project secrets, with restricted network access. Have the survey report tests as unverified when that isolation is unavailable.\n```\n\n<code>ⓘ Copy this prompt and use it to remediate the issue with your preferred AI generation tools</code>\n</details>\n\n[Dismiss ↗](https://app.qodo.ai/findings/bef7ab1b-cc5b-40f1-a954-1bca80fe6811?action=dismiss&origin=git) | [View ↗](https://app.qodo.ai/findings/bef7ab1b-cc5b-40f1-a954-1bca80fe6811)",
+  "created_at": "2026-11-15T11:04:16Z",
+  "updated_at": "2026-11-15T11:04:16Z",
+  "html_url": "https://github.com/SigorMatt/agent-room/pull/9#discussion_r4578103375",
+  "pull_request_url": "https://api.github.com/repos/SigorMatt/agent-room/pulls/9",
+  "_links": {
+    "self": {
+      "href": "https://api.github.com/repos/SigorMatt/agent-room/pulls/comments/4578103375"
+    },
+    "html": {
+      "href": "https://github.com/SigorMatt/agent-room/pull/9#discussion_r4578103375"
+    },
+    "pull_request": {
+      "href": "https://api.github.com/repos/SigorMatt/agent-room/pulls/9"
+    }
+  },
+  "reactions": {
+    "url": "https://api.github.com/repos/SigorMatt/agent-room/pulls/comments/4578103375/reactions",
+    "total_count": 0,
+    "+1": 0,
+    "-1": 0,
+    "laugh": 0,
+    "hooray": 0,
+    "confused": 0,
+    "heart": 0,
+    "rocket": 0,
+    "eyes": 0
+  },
+  "start_line": null,
+  "original_start_line": null,
+  "start_side": null,
+  "line": null,
+  "original_line": 16,
+  "side": "RIGHT",
+  "author_association": "NONE",
+  "original_position": 16,
+  "position": 1,
+  "subject_type": "line",
+  "is_copilot_code_review": false,
+  "copilot_code_review_sources": []
+}
