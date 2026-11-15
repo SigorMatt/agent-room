@@ -15,7 +15,7 @@ The build of the agent-room pipeline v1, as designed in [`v1.md`](v1.md). A fres
 | M1 | Platform check | In progress |
 | M2 | Core machinery | Done (#6) |
 | M3 | Review records, `gate` and `merge` (spec `m3-reviews-gate.md`) | Done (#7) |
-| M4 | Unattended operation (spec `m4-unattended.md`) | In review (PR) |
+| M4 | Unattended operation (spec `m4-unattended.md`) | Done (#8) |
 | M5 | Protocols (`ARCHITECT.md`, `LEAD.md`, briefs, thin skill), manuals and index | In progress (spec `m5-protocols-manuals.md`) |
 | M6 | Dress rehearsal on `pet-todo` (build lead plays the architect) | Not started |
 | M7 | Matthew's owner run, then tag `v1.0.0` | Not started |
@@ -63,6 +63,7 @@ Results of the eleven assumptions in `v1.md` ("To verify"). Evidence lives in is
 - **G. Deleting a scheduled task deletes every session it started.** So a successor's one-time task is never deleted (it disables itself after firing), and a session started by a task can't delete that task (`update_trigger` with `enabled=false` stops it instead). The watchdog's runs are short, so deleting it at `DONE` is safe; the lead that deletes it was not started by it.
 - **H. An idle session's container is suspended within minutes.** Detached processes die; files survive; `send_later` wakes the session. So the lead never relies on a waiter alone: whenever it ends a turn waiting (for Matthew, Qodo or anything slow), it schedules a `send_later` check-in, and the watchdog catches the rest. This is the pre-approved fallback for check 9.
 - **I. Scheduled sessions have fewer tools.** A session started by a scheduled task had no background option on its Bash tool (idle probe 2, issue #4), so a lead started as a successor can't run a background waiter at all. The lead protocol therefore assumes only: foreground `room wait` with a timeout under ten minutes, `send_later` check-ins, and builders run in the background only if its Agent tool offers that, else one at a time (pre-approved fallback). Which Agent options a scheduled session has is checked in M6.
+- **J. A subagent writing under `.claude/` with the file tool can stall on an approval prompt** that an unattended session never answers (an M5 writer waited half an hour on `.claude/skills/agent-room/SKILL.md`). Briefs that touch `.claude/` tell the builder to write through Python in the shell; `LEAD.md` says so for any project file under `.claude/`.
 - **C. A new repo may be completely empty** (`pet-todo` has no commits). Preflight detects this, and the architect's kickoff creates the first commit on `main`; no protection can exist yet, so this is safe.
 
 ## Decisions taken during the build
