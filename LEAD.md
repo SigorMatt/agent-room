@@ -14,10 +14,13 @@ You are the lead: a Claude Code cloud session that runs one mission of a project
 
 ## 1. Setup
 
-1. Download room.py and the protocol files at `<version>`:
+1. Download room.py, the protocol files and the review templates at `<version>`:
    ```bash
-   mkdir -p ~/agent-room/briefs ~/agent-room/docs && cd ~/agent-room
-   for f in room.py LEAD.md briefs/builder.md briefs/cold-review.md briefs/qodo-reader.md briefs/auditor.md briefs/planner.md docs/QODO-REVIEW.md; do
+   mkdir -p ~/agent-room/briefs ~/agent-room/docs ~/agent-room/templates/reviews && cd ~/agent-room
+   for f in room.py LEAD.md docs/QODO-REVIEW.md \
+       briefs/builder.md briefs/cold-review.md briefs/qodo-reader.md briefs/auditor.md briefs/planner.md \
+       templates/reviews/cold-round.md templates/reviews/cold-scoped.md \
+       templates/reviews/cold-DISPOSITIONS.md templates/reviews/qodo-DISPOSITIONS.md; do
      curl -fsSL "https://raw.githubusercontent.com/SigorMatt/agent-room/<version>/$f" -o "$f" || echo "FAILED $f"
    done
    ```
@@ -244,7 +247,7 @@ This follows `~/agent-room/docs/QODO-REVIEW.md` ([`docs/QODO-REVIEW.md`](docs/QO
    python3 room.py state set step="Qodo round <r>"
    ```
 6. Each round: a fresh reader, variant `round-<r>`. It waits up to 10 minutes. With no re-review it reports `no re-review of <sha>`; code since the last covering review then needs a scoped cold review (5.3, `step="scoped <s> for Qodo round <r>"`). Commit the archive, decide and fix as above.
-7. Nothing open, or no round left: write `reviews/qodo/PR-<PR>/DISPOSITIONS.md` from [the template](templates/reviews/qodo-DISPOSITIONS.md). One row per finding of the latest fetch plus every `absent now` finding; `cold caught` from the first-review reader. Audit it until it passes. Commit it with any archive not yet committed, and push.
+7. Nothing open, or no round left: write `reviews/qodo/PR-<PR>/DISPOSITIONS.md` from [the template](templates/reviews/qodo-DISPOSITIONS.md). It starts with the machine lines `qodo:`, `fetches:` and `reviewed:` (and `no re-review:` when a round got none) above the table. That is agent-room's form: QODO-REVIEW.md step 7 puts this note under the table, but the gate reads only the lines above it. One row per finding of the latest fetch plus every `absent now` finding; `cold caught` from the first-review reader. Audit it until it passes. Commit it with any archive not yet committed, and push.
 8. That push triggers Qodo's final check: a fresh reader, variant `final-check`, which commits nothing. Nothing new: go on. Something new: copy `/tmp/qodo-final/PR-<PR>/<f>` to `reviews/qodo/PR-<PR>/` and go back to step 3 if a round is left; otherwise decide those findings without a push, or hold (reason 2).
    ```bash
    python3 room.py state set step=gate
