@@ -820,7 +820,10 @@ def commit_and_push(path, msg):
 
     Raises StateMoved, with the worktree reset to the remote, if the branch moved under the work."""
     git("add", "-A", cwd=path)
-    if git("diff", "--cached", "--quiet", cwd=path, check=False).returncode == 1:
+    staged = git("diff", "--cached", "--quiet", cwd=path, check=False)
+    if staged.returncode not in (0, 1):  # 0: nothing staged, 1: changes; anything else is git failing
+        raise StateError(f"git diff: {(staged.stderr or staged.stdout).strip() or f'exited {staged.returncode}'}")
+    if staged.returncode == 1:
         git(*identity(path), "commit", "-q", "-m", msg, cwd=path)
     if git_out("rev-list", "--count", f"{STATE_REF}..HEAD", cwd=path) == "0":
         return False  # no local commits; the remote may be ahead, which is not ours to push

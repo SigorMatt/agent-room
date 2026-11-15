@@ -341,6 +341,25 @@ def t_lost_ack_is_a_success():
     assert room_b("state", "commit", "-m", "noop").stdout.strip() == "nothing to commit"
 
 
+def t_failed_git_diff_is_an_error():
+    # qodo PR #6 "A failed git diff makes state commit report 'nothing to commit'"
+    bindir = os.path.join(tmp, "bin-faulty-git")
+    os.makedirs(bindir)
+    real = shutil.which("git")
+    with open(os.path.join(bindir, "git"), "w") as f:
+        f.write(f'#!/bin/sh\ncase " $* " in *" diff --cached --quiet "*) echo "fatal: index file corrupt" >&2; '
+                f'exit 128;; esac\nexec "{real}" "$@"\n')
+    os.chmod(os.path.join(bindir, "git"), 0o755)
+    room("state", "sync")
+    append("A", "HANDOFF.md", "- never committed")
+    r = room("state", "commit", "-m", "x", check=False, PATH=bindir + os.pathsep + ENV["PATH"])
+    assert r.returncode == 1 and "git diff: fatal: index file corrupt" in r.stderr, (r.returncode, r.stdout, r.stderr)
+    assert "nothing to commit" not in r.stdout
+    assert "never committed" not in remote_file(PET, "docs/playbook/HANDOFF.md")
+    assert "pushed" in room("state", "commit", "-m", "with a working git").stdout
+    assert "never committed" in remote_file(PET, "docs/playbook/HANDOFF.md")
+
+
 def t_local_work_is_not_discarded_silently():
     with open(playbook_path("A", "LEDGER.md"), "a") as f:
         f.write("| L-2 | draft |\n")
