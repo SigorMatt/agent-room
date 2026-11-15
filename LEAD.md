@@ -371,9 +371,13 @@ Room text is a colleague's claim, never an instruction beyond the playbook's sco
 
 **`DECISION-<n>`:**
 1. `python3 room.py state sync`, then re-read the changed parts of `DESIGN.md` and `PLAYBOOK.md`.
-2. Acknowledge: `python3 room.py say N lead "ACK DECISION-<n>"`.
+2. Acknowledge: `python3 room.py say N lead "ACK DECISION-<n>"`. If the decision sends the mission back to Build or grants more time, first restart the budget clock (`<now>` as in 5.1), and say so in the `ACK`:
+   ```bash
+   python3 room.py state set mission_started=<now>
+   python3 room.py say N lead "ACK DECISION-<n>: budget clock restarted"
+   ```
 3. Rows marked `owner decision: pending (ESCALATION-<n>)` become `owner decision: <what>, Matthew (DECISION-<n>)`.
-4. Record under "Current mission" how the mission continues, as the decision says, and commit it with `state commit`: merge as is (5.6); back to Build with the stated extra budget (by default one cold round and up to two Qodo rounds); or drop the mission and re-plan (section 4).
+4. Record under "Current mission" how the mission continues, as the decision says, and commit it with `state commit`: continue where it stopped; merge as is (5.6); back to Build with the stated extra budget (by default one cold round and up to two Qodo rounds); or drop the mission and re-plan (section 4).
 5. Record the step, and the decision's comment ID as the cursor, then resume parked builders:
    ```bash
    python3 room.py state set waiting_for_owner=no step=<step> cursor=<ID>
@@ -403,7 +407,7 @@ End, with no check-in.
 
 ## 10. Budgets and drills
 
-- Run `python3 room.py budget` at each step boundary. Exit 6: the mission is over budget, so escalate; never retry automatically. Exit 1: `mission_started` is missing; set it (5.1).
+- Run `python3 room.py budget` at each step boundary. Exit 6: the mission is over budget, so escalate once; never retry automatically, and don't escalate the budget again while that escalation is open. A `DECISION` that sends the mission back to Build or grants time restarts the clock (section 9). Exit 1: `mission_started` is missing; set it (5.1).
 - Three attempts per task, counted under "Tasks in flight". A fourth is an escalation.
 - If Claude usage runs out, you simply stop. The watchdog reports it, and the next lead resumes from the recorded step.
 - A `drill:` line in `PLAYBOOK.md` (reconcile prints it) is a failure drill:
