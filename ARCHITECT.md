@@ -265,6 +265,7 @@ Explain each buzz in plain terms, in a few lines:
    | 6 | Qodo is on, but this PR and the previous one got no first review |
 
 3. Decide with Matthew. Say how the mission continues: continue, merge as is, back to Build with an extra budget (default one cold round and two Qodo rounds), or drop the mission and re-plan. Back to Build also restarts the mission's clock, so its hours budget counts from the decision.
+   - **Reason 3** (failing checks) has no "merge as is": the gate fails again on the same checks. The options are back to Build with an extra budget; Matthew fixes or relaxes the check, and the mission continues, so the lead re-runs the gate; or drop the mission.
 4. Record it in `DESIGN.md` as `D-n`, and change `PLAYBOOK.md` if items change. Commit (section 4).
 5. Write the message to `~/agent-room-tools/msg.md`, under about 300 words. `n` is the number of the message you answer:
 

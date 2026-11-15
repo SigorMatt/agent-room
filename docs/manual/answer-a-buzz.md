@@ -37,7 +37,8 @@ The message reads `MERGE-HOLD-n: PR #<number>, reason <r> (…)`. One hold can n
 
 1. The architect explains the reason. Open the pull request on GitHub if you want to look.
 2. Choose how the mission continues:
-   - **merge as is;**
+   - **merge as is,** except for reason 3: failing checks would fail the gate again;
+   - for reason 3 only, **fix or relax the check** yourself, for example a flaky test or a check that no longer fits; the lead then runs the gate again;
    - **back to Build** with an extra budget: by default one more cold-review round and up to two Qodo rounds. The mission's hours budget starts again from your decision;
    - **drop the mission and re-plan.**
 3. The architect records it and posts `DECISION-n`. Wait for the ACK.
