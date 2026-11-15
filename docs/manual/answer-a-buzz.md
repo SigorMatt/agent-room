@@ -82,7 +82,12 @@ The watchdog saw nothing move. A lead died, got stuck or ran out of Claude usage
    ```
 
    Only if no copy exists does the architect recreate it from scratch, and tell the next lead to rebuild its records from the merged pull requests and the room. Then go on.
-2. The architect tells you where the build stopped. Then it waits for the lead's next check-in, until about 35 minutes after the alarm. It checks back itself, or asks you to send it `check the room` then.
+2. The architect tells you where the build stopped. Then it waits for the lead's next check-in, until about 35 minutes after the alarm. It checks back itself, or asks you to send it this then:
+
+   ```text
+   check the room
+   ```
+
 3. If any lead message came after the alarm, the lead is alive: the architect tells you where it is, and you need no new lead. Stop here. If the lead posted or pushed work within the last hour, it may be busy with a helper and unable to check in yet: the architect waits one more check-in, about 35 minutes.
 4. Otherwise it gives you the **takeover line**. It ends with "Take over the lease … the previous lead stopped without handing over."
 5. If the old lead's session is still open in the Code tab, archive it.
@@ -90,7 +95,12 @@ The watchdog saw nothing move. A lead died, got stuck or ran out of Claude usage
 
 ## What you should see
 
-- After a `DECISION-n`: `ACK DECISION-n` in the room. The lead checks the room about every 30 minutes, so the ACK can take that long. The architect tells you when to expect it (about 35 minutes) and checks back itself, or asks you to send it `check for the ACK` then.
+- After a `DECISION-n`: `ACK DECISION-n` in the room. The lead checks the room about every 30 minutes, so the ACK can take that long. The architect tells you when to expect it (about 35 minutes) and checks back itself, or asks you to send it this then:
+
+  ```text
+  check for the ACK
+  ```
+
 - After you start a lead: `LEAD ONLINE` in the room within about 10 minutes.
 - After `DONE`: the room closed, and no watchdog task left.
 
@@ -103,7 +113,18 @@ The watchdog saw nothing move. A lead died, got stuck or ran out of Claude usage
   ```
 
   - If the last lead message is `HANDOFF` with no `LEAD ONLINE` after it, the next lead never started. The architect gives you the normal join line: [Start the next lead by hand](start-the-next-lead-by-hand.md).
-  - Otherwise, open the lead's session in the Code tab and send it `check the room`.
-  - Still no answer about 35 minutes later, or the session is gone: send the architect `check for the ACK` again. If the lead was waiting for your decision, the watchdog stays quiet, so the architect treats the lead as dead and gives you the takeover line. Archive the old session if it's open, then start a lead with that line.
+  - Otherwise, open the lead's session in the Code tab and send it
+
+    ```text
+    check the room
+    ```
+
+  - Still no answer about 35 minutes later, or the session is gone: send the architect again
+
+    ```text
+    check for the ACK
+    ```
+
+    If the lead was waiting for your decision, the watchdog stays quiet, so the architect treats the lead as dead and gives you the takeover line. Archive the old session if it's open, then start a lead with that line.
 - Tapping the buzz didn't open the room: in GitHub, open the repo, then **Issues**, and filter by the label `agent-room`.
 - Something else: [Troubleshooting](troubleshooting.md).

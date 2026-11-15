@@ -47,5 +47,10 @@ The lead sees your comment at its next check-in, within about 30 minutes, and an
 
 ## If you don't
 
-- No answer after about 35 minutes: open the lead's session in the Code tab and send it `check the room`.
+- No answer after about 35 minutes: open the lead's session in the Code tab and send it
+
+  ```text
+  check the room
+  ```
+
 - A handover was under way (the last lead message is `HANDOFF`): the next lead reads your comment when it joins.

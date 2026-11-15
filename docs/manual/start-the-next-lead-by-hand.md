@@ -44,4 +44,9 @@
   - otherwise a lead is already running, for example a successor that did start. Nothing to do.
 - Two leads started by mistake: harmless. Only one takes over; the other ends without changing anything.
 - Your Claude usage ran out: wait until it resets, or move the project ([Move a project to the other account](move-a-project-to-the-other-account.md)).
-- No `LEAD ONLINE` after about 10 minutes: check the session's repository and environment, then tell the architect `check the room`.
+- No `LEAD ONLINE` after about 10 minutes: check the session's repository and environment, then tell the architect
+
+  ```text
+  check the room
+  ```
+
