@@ -1143,6 +1143,35 @@ def t_checks():
 
 
 
+
+def t_required_check_from_its_app():  # qodo PR #7: The gate passes checks from the wrong app
+    s = mission()
+    sha = s["head"]
+
+    def run(app, name="ci", id=1):
+        return {"id": id, "name": name, "status": "completed", "conclusion": "success", "check_suite": {"id": id},
+                "app": {"id": app, "slug": f"app-{app}"}}
+
+    try:
+        gh_cfg(protection={"required_status_checks": {"contexts": ["ci"], "checks": [{"context": "ci", "app_id": 15368}]}},
+               check_runs={sha: [run(999)]}, statuses={sha: [{"context": "ci", "state": "success"}]})
+        r = gate()
+        failed(r, "checks", "required but missing: ci (from app 15368)")
+        assert verdict(r) == "gate: FAIL hold reasons 3", out(r)
+        gh_cfg(check_runs={sha: [run(999), run(15368, id=2)]})
+        assert gate().returncode == 0
+        gh_cfg(protection={"required_status_checks": {"checks": [{"context": "ci", "app_id": -1}]}},
+               check_runs={sha: []})
+        assert gate().returncode == 0, "app_id -1 lets any app, or a status, satisfy it"
+        gh_reset()
+        gh_cfg(rules=[{"type": "required_status_checks", "ruleset_id": 4, "parameters": {
+            "required_status_checks": [{"context": "e2e", "integration_id": 42}]}}], check_runs={sha: [run(7, "e2e")]})
+        failed(gate(), "checks", "required but missing: e2e (from app 42)")
+        gh_cfg(check_runs={sha: [run(42, "e2e")]})
+        assert gate().returncode == 0
+    finally:
+        gh_reset()
+
 def t_late_required_context_holds_after_an_hour():  # cold M3 S1-5
     def run(name, status):
         return {"id": 1, "name": name, "status": status, "conclusion": None, "check_suite": {"id": 1},

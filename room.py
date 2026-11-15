@@ -2192,24 +2192,35 @@ def check_dispositions(g, root, head, rec, ledger_text, room, phase=None):
 
 
 def required_contexts():
-    """(set of required status contexts on main, or None, error text)."""
+    """({(context, app id or None)} required on main, or None, error text). A check that names its app
+    (app_id in classic protection, integration_id in rulesets; -1 or none: any app) is satisfied only by
+    a check run from that app; a name required without one by any run or status of that name."""
     req = set()
+
+    def add(context, app):
+        if context:
+            req.add((context, app if isinstance(app, int) and app >= 0 else None))
+
     status, prot = gh_try(f"repos/{REPO}/branches/main/protection")
     if status == 200 and isinstance(prot, dict):
         rsc = prot.get("required_status_checks") or {}
-        req |= set(rsc.get("contexts") or [])
-        req |= {c["context"] for c in rsc.get("checks") or [] if c.get("context")}
+        for context in rsc.get("contexts") or []:
+            add(context, None)
+        for c in rsc.get("checks") or []:
+            add(c.get("context"), c.get("app_id"))
     elif not unprotected(status, prot):
         return None, f"can't read main's protection: {prot}"
     status, rules = gh_try(f"repos/{REPO}/rules/branches/main")
     if status == 200 and isinstance(rules, list):
         for rule in rules:
             if rule.get("type") == "required_status_checks":
-                params = rule.get("parameters") or {}
-                req |= {c["context"] for c in params.get("required_status_checks") or [] if c.get("context")}
+                for c in (rule.get("parameters") or {}).get("required_status_checks") or []:
+                    add(c.get("context"), c.get("integration_id"))
     elif status != 200 and not unprotected(status, rules):
         return None, f"can't read main's rules: {rules}"
-    return req, None
+    # classic protection lists every check under contexts too: a name bound to an app keeps only that binding
+    bound = {c for c, app in req if app is not None}
+    return {(c, app) for c, app in req if app is not None or c not in bound}, None
 
 
 def gh_pages(path, key):
@@ -2241,18 +2252,19 @@ def check_checks(g, root, head, pr_updated=None):
         if run.get("name") and run.get("id", 0) >= runs.get(key, {}).get("id", 0):
             runs[key] = run
     results = [(name, "pending" if run.get("status") != "completed" else
-                "ok" if run.get("conclusion") in ("success", "neutral", "skipped") else "failed")
+                "ok" if run.get("conclusion") in ("success", "neutral", "skipped") else "failed",
+                (run.get("app") or {}).get("id"))
                for (_, name), run in runs.items()]
     statuses = {}
     for s in gh_pages(f"repos/{REPO}/commits/{head}/status", "statuses"):
         if s.get("context"):  # a context reported twice counts at its worst
             v = {"success": "ok", "pending": "pending"}.get(s.get("state"), "failed")
             statuses[s["context"]] = max(statuses.get(s["context"], v), v, key=rank.get)
-    results += list(statuses.items())
-    names = {name for name, _ in results}
-    failed = sorted({c for c, v in results if v == "failed"})
-    missing = sorted(required - names)
-    pending = sorted({c for c, v in results if v == "pending"})
+    results += [(context, v, None) for context, v in statuses.items()]  # a status names no app
+    failed = sorted({c for c, v, _ in results if v == "failed"})
+    missing = sorted(context + (f" (from app {app})" if app is not None else "") for context, app in required
+                     if not any(c == context and (app is None or a == app) for c, _, a in results))
+    pending = sorted({c for c, v, _ in results if v == "pending"})
     if failed:
         g.fail("checks", [(t, 3) for t in (f"failed: {', '.join(failed)}",
                                             f"required but missing: {', '.join(missing)}" if missing else None) if t])
@@ -2284,7 +2296,7 @@ def check_checks(g, root, head, pr_updated=None):
     elif not results:
         g.ok("checks", "no checks ran for HEAD" if workflows else "no checks configured")
     else:
-        g.ok("checks", f"{len(results)} passed" + (f" (required: {', '.join(sorted(required))})" if required else "")
+        g.ok("checks", f"{len(results)} passed" + (f" (required: {', '.join(sorted({c for c, _ in required}))})" if required else "")
              + ("; no GitHub Actions runs for HEAD" if no_actions else ""))
 
 
