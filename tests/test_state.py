@@ -1125,6 +1125,12 @@ def t_preflight_approving_reviews():
     r = room("preflight", "--role", "architect")
     expect(r, "approving reviews", "✓")
     expect(r, "admin bypass", "✓")
+    # qodo PR #6 "Preflight can report no admin bypass when it couldn't read the ruleset"
+    for detail in ({"_status": 403, "message": "Resource not accessible by integration"}, ["not", "an object"]):
+        gh_cfg(rules=[{"type": "deletion", "ruleset_id": 9}], rulesets={"9": detail})
+        r = room("preflight", "--role", "architect")
+        expect(r, "admin bypass", "!")
+        assert "couldn't read ruleset 9" in line(r, "admin bypass"), r.stdout
 
 
 def t_preflight_lead():

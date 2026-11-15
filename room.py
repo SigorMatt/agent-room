@@ -1355,12 +1355,14 @@ def cmd_preflight(a):
         if status != 200 and not unprotected(status, rules):
             errors.append(f"rules: {rules}")
         rules = []
-    rulesets = {}
+    rulesets, unread = {}, []  # unread: rulesets whose details couldn't be read, so their bypass is unknown
     for rule in rules:
         rid = rule.get("ruleset_id")
         if rid is not None and rid not in rulesets:
             s, rs = gh_try(f"repos/{REPO}/rulesets/{rid}")
             rulesets[rid] = rs if s == 200 and isinstance(rs, dict) else {}
+            if not (s == 200 and isinstance(rs, dict)):
+                unread.append(rid)
 
     def ruleset_name(rid, rule=None):
         name = rulesets.get(rid, {}).get("name")
@@ -1393,6 +1395,7 @@ def cmd_preflight(a):
         if actors:
             who = ", ".join(f"{x.get('actor_type', '?')} {x.get('actor_id', '')}".strip() for x in actors)
             bypass.append(f"{ruleset_name(rid)} has bypass actors: {who}")
+    bypass += [f"couldn't read ruleset {rid}, so its bypass actors are unknown" for rid in unread]
     if bypass:
         check("!", "admin bypass: " + "; ".join(bypass) + " (report only: the lead never pushes to main)")
     elif errors:
