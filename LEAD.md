@@ -411,7 +411,7 @@ End.
 
 - Run `python3 room.py budget` at each step boundary while the step is `build`, a cold review or a Qodo round; never at the PR, the gate, close or while waiting for the owner. Exit 6: the mission is over budget, so escalate once; never retry automatically, and don't escalate the budget again while that escalation is open. A `DECISION` that sends the mission back to Build, says merge as is, or grants time restarts the clock (section 9). Exit 1: `mission_started` is missing; set it (5.1).
 - Three attempts per task, counted under "Tasks in flight". A fourth is an escalation.
-- If Claude usage runs out, you simply stop. The watchdog reports it and starts a takeover lead, which resumes from the recorded step.
+- If Claude usage runs out, you simply stop. The watchdog reports it and starts a takeover lead, which resumes from the recorded step. It tries at most two takeovers per stall; after that it only alarms, and the architect looks into it.
 - A `drill:` line in `PLAYBOOK.md` (reconcile prints it) is a failure drill:
 
   | `drill:` | You |

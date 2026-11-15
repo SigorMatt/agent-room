@@ -205,7 +205,7 @@ For the first phase and every later one. For a later phase, first add its `### P
 
    The second command removes a download that failed or came back empty or broken, so the watchdog can't run a fake `room.py`; even if the run goes on, the third command then fails.
 
-   Besides alarming, `watchdog` starts leads through the lead task itself: a takeover lead after a `LEAD-SILENT`, and a lead after Matthew's decision when nobody started one (9.2, 9.5). For a project without a lead task, or a drill that should only alarm, end the third command with `--no-start`: `python3 room.py watchdog N --repo OWNER/NAME --no-start`.
+   Besides alarming, `watchdog` starts leads through the lead task itself: a takeover lead after a `LEAD-SILENT`, at most two per stall, and a lead after Matthew's decision when nobody started one (9.2, 9.5). For a project without a lead task, or a drill that should only alarm, end the third command with `--no-start`: `python3 room.py watchdog N --repo OWNER/NAME --no-start`.
 
    If the result says its runs will ask for approval, tell Matthew to switch the task to "Automatically approve" in its settings. The run inherits this chat's repos, so create it from this chat, after step 1 of Setup.
 5. Set `watchdog: <task ID>` in `PLAYBOOK.md`. Commit. At `DONE` you delete the task by this ID (9.7); a lead can't.
@@ -270,7 +270,7 @@ Explain each buzz in plain terms, in a few lines:
 | `ESCALATION-n` | The lead needs a decision the design doesn't settle | 9.2 |
 | `MERGE-HOLD-n` | A PR is ready but held, with a reason | 9.2 |
 | `NEXT-LEAD-NEEDED` | The lead couldn't start its successor; the message says why | 9.5 |
-| `LEAD-SILENT` | The watchdog saw no lead progress for three hours and, if the lead task is set up, started a takeover lead (a `LEAD-STARTED` follows) | 9.5 |
+| `LEAD-SILENT` | The watchdog saw no lead progress for three hours and, if the lead task is set up, started a takeover lead (a `LEAD-STARTED` follows), at most two per stall | 9.5 |
 | `PAUSED` / `STOPPED` | The lead paused or halted, as asked, and ended | 9.4 |
 | `DONE` | The phase is complete and the room is closed | 9.7 |
 
@@ -386,7 +386,9 @@ Which line:
   2. Read the room and `python3 room.py state get step --repo OWNER/NAME`. Tell Matthew where the build stopped.
   3. With the lead task set up, the watchdog started a takeover lead right after the alarm, and posted `LEAD-STARTED`. Its `LEAD ONLINE` should follow within about 15 minutes. If that time hasn't passed, schedule `send_later` for then: "Check room N for LEAD ONLINE after LEAD-SILENT." Without `send_later`, ask Matthew to come back then and say "check the room".
   4. Read the room again.
-     - **A `LEAD ONLINE` after the alarm:** a lead is running. Tell Matthew where it is; nothing else is needed.
+     - **A `LEAD ONLINE` after the alarm:** a takeover lead joined. Tell Matthew where it is. That doesn't settle the stall: if the new lead makes no progress either, the watchdog alarms again (`LEAD-SILENT: the lead started at <time> made no progress …`) and starts a second takeover.
+     - **The alarm says `the lead started at … made no progress`:** this is the watchdog's second and last start for the stall. Once its lead is online, check again about three hours later (`send_later`, or ask Matthew to say "check the room" then) that the step changed or the mission branch moved.
+     - **Two watchdog `LEAD-STARTED`s for the same stall, and still no progress since** (no step change or mission-branch push): nothing more starts on its own. Leads keep failing at that step, so look into why before starting another: read the room since the first alarm, the state (section 4) and the mission branch, and tell Matthew what you find. Start a takeover lead by hand (below) once the cause is understood or fixed. If agent-room itself is at fault, Matthew reports it, as for a pipeline fault (9.2).
      - **No `LEAD-STARTED` after the alarm** (no lead task, or the watchdog's start was refused or failed), **or no `LEAD ONLINE` after it:** start a takeover lead by hand, with the takeover line:
 
        ```bash

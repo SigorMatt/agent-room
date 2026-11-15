@@ -77,7 +77,7 @@ The lead merged the last mission, checked every criterion, posted `DONE`, closed
 
 ### `LEAD-SILENT`: no progress for three hours
 
-The watchdog saw nothing move. A lead died, got stuck or ran out of Claude usage, or the next one never started. With the lead task set up, the watchdog has already started a takeover lead: a `LEAD-STARTED` follows in the room, then that lead's `LEAD ONLINE`.
+The watchdog saw nothing move. A lead died, got stuck or ran out of Claude usage, or the next one never started. With the lead task set up, the watchdog has already started a takeover lead: a `LEAD-STARTED` follows in the room, then that lead's `LEAD ONLINE`. It tries at most two takeovers for the same stall.
 
 1. If the buzz's message reads `LEAD-SILENT: state unreadable (…)`, the pipeline's records are broken, not the lead. The architect checks them first. If the `agent-room/state` branch was deleted, it is restored before any lead starts. Best: the architect pushes it again from its own copy, or you push it from a fork or a local clone that still has it. In a local clone, run:
 
@@ -92,8 +92,8 @@ The watchdog saw nothing move. A lead died, got stuck or ran out of Claude usage
    check the room
    ```
 
-3. If a `LEAD ONLINE` came after the alarm, a lead is running: the architect tells you where it is, and you need no new lead. Stop here.
-4. Otherwise the architect starts a takeover lead itself, or gives you the **takeover line**. It ends with "Take over the lease … the previous lead stopped without handing over."
+3. If a `LEAD ONLINE` came after the alarm, a takeover lead joined: the architect tells you where it is, and you need no new lead for now. If that lead makes no progress either, a second `LEAD-SILENT` follows ("the lead started at … made no progress") with one more takeover, the watchdog's last try. Answer that buzz too: the architect checks later that this lead moves, and if it doesn't, looks into why leads keep failing before anyone starts another.
+4. If no takeover lead came online, the architect starts a takeover lead itself, or gives you the **takeover line**. It ends with "Take over the lease … the previous lead stopped without handing over."
 5. If the old lead's session is still open, archive it.
 6. Start a lead with the takeover line: [Start the next lead by hand](start-the-next-lead-by-hand.md). Use a takeover line only when the architect gives you one.
 
