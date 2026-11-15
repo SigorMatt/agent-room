@@ -3353,7 +3353,8 @@ def add_unattended_commands(sub, common):
     s = leaf("join-line", cmd_join_line, "print the line that starts a lead")
     s.add_argument("room", type=int)
     s.add_argument("--takeover", action="store_true",
-                   help="for the lead Matthew starts after LEAD-SILENT: take the lease with lease take --takeover")
+                   help="for a lead Matthew starts once the architect finds the old lead gone: take the lease "
+                        "with lease take --takeover")
     s = leaf("handoff", cmd_handoff, "record step, cursor and intent=none holding the lease, post HANDOFF, then "
                                      "release the lease; prints the join line to schedule")
     s.add_argument("room", type=int)
