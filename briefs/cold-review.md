@@ -57,14 +57,14 @@ One criteria row per criterion the spec names. With no findings, keep the findin
 
 **What to review:** `git -C <checkout> diff <base>...<head>`. Your report is `round-1.md`, with IDs `R1-1`, `R1-2`, ….
 
-## Variant: round 2
+## Variant: round 2 and later
 
-A different reviewer did round 1. Its report is `reviews/cold/M<k>/round-1.md`, and the dispositions are in `reviews/cold/M<k>/DISPOSITIONS.md`. Check that each fix holds: run its regression test, and try to break the fix. Then look for new problems anywhere in the diff, especially ones the fixes introduced.
+Other reviewers did the earlier rounds and any scoped reviews: every report under `reviews/cold/M<k>/`. The dispositions of their findings are in `reviews/cold/M<k>/DISPOSITIONS.md`. Check that each fix holds: run its regression test, and try to break the fix. Then look for new problems anywhere in the diff, especially ones the fixes introduced.
 
-**What to review:** `git -C <checkout> diff <base>...<head>`. Your report is `round-2.md`, headed `# Cold review M<k> round 2`, with IDs `R2-1`, `R2-2`, …. Before `## Scope`, add this section, with one row per round-1 finding:
+**What to review:** `git -C <checkout> diff <base>...<head>`. Your report is `round-<r>.md`, headed `# Cold review M<k> round <r>`, with IDs `R<r>-1`, `R<r>-2`, …. Before `## Scope`, add this section, with one row per earlier finding:
 
 ```text
-## Round 1 fixes
+## Earlier fixes
 
 | ID | holds | evidence |
 | --- | --- | --- |
