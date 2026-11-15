@@ -1309,7 +1309,7 @@ def cmd_lease_take(a):
         seen.append((holder, gen))
         if holder not in ("none", sid) and not a.takeover:
             raise StateExit(EXIT_MOVED, f"lease held by {holder}: stand down (generation {gen}; "
-                                        "--takeover only for a lead Matthew starts after LEAD-SILENT)")
+                                        "--takeover only for a lead Matthew starts once the architect finds the old lead gone)")
         # a lead that takes the lease is running: a status left at paused, stopped or done mustn't mute the watchdog.
         # waiting_for_owner stays: a successor may join while the owner still hasn't answered, and a stale flag is
         # ended by a step or pr change, and doesn't mute the watchdog once anything has progressed since it was set
@@ -1600,7 +1600,7 @@ def add_state_commands(sub, common):
     s = leaf(lss, "take", cmd_lease_take, "take the lead lease: next generation, this session (exit 3 if another "
              "session holds it or pushed first)")
     s.add_argument("--takeover", action="store_true",
-                   help="take it even from another session: only for a lead Matthew starts after LEAD-SILENT")
+                   help="take it even from another session: only for a lead Matthew starts once the architect finds the old lead gone")
     leaf(lss, "release", cmd_lease_release, "the holder sets the lease to none (at HANDOFF, PAUSED, STOPPED, DONE)")
     leaf(lss, "check", cmd_lease_check, "exit 0 if this session holds the lease, else 5")
 
