@@ -2122,18 +2122,17 @@ def run_gate(a, expect_sha=None):
     head_repo = (head.get("repo") or {}).get("full_name") or ""
     if head_repo.lower() != REPO.lower():
         problems.append(f"has its head in {head_repo or 'an unknown repo'}, not {REPO}")
-    m = re.fullmatch(r"mission/(M\d+)(?:-.+)?", ref)
-    named = re.findall(r"(?<![A-Za-z0-9])M\d+(?![A-Za-z0-9])", ref)  # missions the head ref names
-    if not ref.startswith("mission/") or not (m or a.mission):
+    m = re.fullmatch(r"mission/(M\d+)(?:-.+)?", ref)  # the mission is the token right after mission/
+    if not m:
         problems.append(f"has head {ref or '?'}, not a mission/M<k>-… branch")
-    elif a.mission and a.mission not in named:
-        problems.append(f"has head {ref}, which names {', '.join(named) or 'no mission'}, not --mission {a.mission}")
+    elif a.mission and a.mission != m.group(1):
+        problems.append(f"has head {ref}, whose mission is {m.group(1)}, not --mission {a.mission}")
     if not SHA40.fullmatch(sha):
         problems.append("has no head sha")
     if problems:
         g.fail("PR", [(f"PR #{a.pr} " + ", ".join(problems), None)])
         return g.verdict(None), None
-    mission = a.mission or m.group(1)
+    mission = m.group(1)
     if expect_sha and sha != expect_sha:
         print(f"✗ PR: PR #{a.pr} head is {sha}, not {expect_sha}")
         print("head moved: re-run gate")
@@ -2244,7 +2243,7 @@ def add_gate_commands(sub, common):
         s.add_argument("pr", type=int)
         if name == "merge":
             s.add_argument("--sha", type=sha_arg, required=True, help="the head commit the gate checked")
-        s.add_argument("--mission", type=mission_arg, help="M<k> (default: from the head branch mission/M<k>-…)")
+        s.add_argument("--mission", type=mission_arg, help="M<k>: must be the mission of the head branch mission/M<k>-…")
         s.add_argument("--allow-hold", choices=("5",), help="let a sensitive-path match pass, with --decision")
         s.add_argument("--decision", type=decision_arg,
                        help="the DECISION-<n> in the room that answers the lead's MERGE-HOLD-<n> for this PR")

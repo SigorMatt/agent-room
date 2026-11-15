@@ -1112,20 +1112,19 @@ def t_pr_check():
         assert verdict(r) == "gate: FAIL hold reasons none; fix first: PR"
     set_pr(s["c2"])  # the PR says one head, origin has another
     failed(gate(), "PR", "it moved")
-    g("push", "-q", "-f", "origin", "HEAD:refs/heads/mission/gate-M3")
-    set_pr(s["head"], ref="mission/gate-M3")
-    failed(gate(), "PR", "not a mission/M<k>-… branch")
+    # --mission must be the mission right after mission/ in the head ref (cold M3 R1-8, R2-8)
+    for ref, flag, needle in (("mission/gate-M3", None, "has head mission/gate-M3, not a mission/M<k>-… branch"),
+                              ("mission/gate-M3", "M3", "has head mission/gate-M3, not a mission/M<k>-… branch"),
+                              ("mission/M4-close-M3-ledger", "M3", "whose mission is M4, not --mission M3"),
+                              (BRANCH, "M2", "has head mission/M3-gate, whose mission is M3, not --mission M2")):
+        g("push", "-q", "-f", "origin", f"HEAD:refs/heads/{ref}")
+        set_pr(s["head"], ref=ref)
+        r = gate(*(("--mission", flag) if flag else ()))
+        assert r.returncode == 6, out(r)
+        failed(r, "PR", needle)
+    set_pr(s["head"])
     r = gate("--mission", "M3")
     assert r.returncode == 0 and "(mission M3)" in line(r, "PR"), out(r)
-    # --mission must agree with the mission the head ref names (cold M3 R1-8)
-    failed(gate("--mission", "M2"), "PR", "has head mission/gate-M3, which names M3, not --mission M2")
-    g("push", "-q", "-f", "origin", "HEAD:refs/heads/mission/gate-x")
-    set_pr(s["head"], ref="mission/gate-x")
-    failed(gate("--mission", "M3"), "PR", "which names no mission, not --mission M3")
-    set_pr(s["head"])
-    r = gate("--mission", "M2")
-    assert r.returncode == 6 and "which names M3, not --mission M2" in line(r, "PR"), out(r)
-    assert gate("--mission", "M3").returncode == 0
     r = room("gate", "99")
     assert r.returncode == 1 and "github error" in r.stderr, out(r)
     set_pr(s["head"])
