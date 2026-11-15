@@ -1310,9 +1310,10 @@ def cmd_lease_take(a):
         if holder not in ("none", sid) and not a.takeover:
             raise StateExit(EXIT_MOVED, f"lease held by {holder}: stand down (generation {gen}; "
                                         "--takeover only for a lead Matthew starts after LEAD-SILENT)")
-        # a lead that takes the lease is running: a status left at paused, stopped or done mustn't mute the watchdog
-        return {"lease_session": sid, "lease_generation": next_int(values, "lease_generation"), "status": "running",
-                "waiting_for_owner": "no"}
+        # a lead that takes the lease is running: a status left at paused, stopped or done mustn't mute the watchdog.
+        # waiting_for_owner stays: a successor may join while the owner still hasn't answered, and a stale flag is
+        # ended by a step or pr change, and doesn't mute the watchdog once anything has progressed since it was set
+        return {"lease_session": sid, "lease_generation": next_int(values, "lease_generation"), "status": "running"}
 
     for _ in range(2):
         try:

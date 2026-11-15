@@ -11,7 +11,7 @@ status: running            # running | paused | stopped | done
 mission_started: none      # ISO-8601 UTC, set when a mission's spec is recorded
 ```
 
-`state set` accepts only those four statuses and an ISO-8601 time (or `none`) for `mission_started`. `lease take` sets `status: running` and `waiting_for_owner: no` in its own write, so neither outlives the next lead. A state write that changes `step` or `pr` also sets `waiting_for_owner` back to `no`, unless that same write sets it.
+`state set` accepts only those four statuses and an ISO-8601 time (or `none`) for `mission_started`. `lease take` sets `status: running` in its own write, so a halted status never outlives the next lead. It leaves `waiting_for_owner` alone, since a successor may join while the owner still hasn't answered. A state write that changes `step` or `pr` sets `waiting_for_owner` back to `no`, unless that same write sets it, and the watchdog ignores a flag once anything has progressed since it was set.
 
 ## `room.py watchdog N [--silent-after DURATION]`
 

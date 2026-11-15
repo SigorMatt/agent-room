@@ -526,7 +526,8 @@ def t_watchdog_quiet_while_waiting_for_owner():
 
 
 def t_waiting_for_owner_does_not_outlive_the_wait():
-    # cold M4 R2-1: a write that moves the step sets it back to no, unless that write sets it; so does lease take
+    # cold M4 R2-1: a write that moves the step sets it back to no, unless that write sets it. (Lease take no longer
+    # does: qodo PR #8, below)
     age_alarms()
     set_state("step=gate", "waiting_for_owner=yes", hours=6)  # MERGE-HOLD posted
     set_state("step=build", hours=5)  # DECISION sends the mission back to Build
@@ -539,12 +540,20 @@ def t_waiting_for_owner_does_not_outlive_the_wait():
     assert block()["waiting_for_owner"] == "yes", "the step didn't move"
     room("handoff", "1", "--step", "gate 2", "--cursor", "none", check=True)
     assert block()["waiting_for_owner"] == "yes", "a handoff at the same step keeps it"
+    # qodo PR #8 "A waiting successor gets a false silence alarm": the successor's take keeps the flag, so a wait
+    # still in progress past DURATION stays quiet
     room("lease", "take", check=True, ROOM_SESSION="L2")
-    assert block()["waiting_for_owner"] == "no" and block()["lease_session"] == "L2"
+    assert block()["waiting_for_owner"] == "yes" and block()["lease_session"] == "L2"
+    r = watchdog()
+    assert r.stdout.strip().startswith("quiet: waiting_for_owner is yes (set at "), out(r)
+    # the owner answers and the successor moves on: the step change ends the wait
+    room("state", "set", "step=build 2", check=True, ROOM_SESSION="L2", **ago(5)[1])
+    assert block()["waiting_for_owner"] == "no"
     r = watchdog()
     assert "alarm: no progress for 5h" in r.stdout, out(r)
     room("lease", "release", check=True, ROOM_SESSION="L2")
     room("lease", "take", check=True)
+    assert block()["waiting_for_owner"] == "no", "nor does a take set it"
 
 
 def t_waiting_for_owner_mutes_only_until_progress():
