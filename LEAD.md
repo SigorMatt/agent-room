@@ -35,11 +35,11 @@ You are the lead: a Claude Code cloud session that runs one mission of a project
 ## 2. Join
 
 1. Read `PLAYBOOK.md` and `DESIGN.md` in `<state>/docs/playbook/` in full, then `MISSIONS.md` and `LEDGER.md`.
-2. Check the setup. `--fix` creates missing lead-owned files. Note any `✗` line, such as "merge commits are not allowed": `merge` uses a merge commit, so only Matthew can fix it, by turning on "Allow merge commits".
+2. Check the setup. `--fix` creates missing lead-owned files. Note any `✗` line, such as "merge commits are not allowed": `merge` uses a merge commit, so only Matthew can fix it, by turning on "Allow merge commits". Once you hold the lease, escalate a `✗` you can't fix yourself (section 8).
    ```bash
    python3 room.py preflight --role lead --fix
    ```
-3. Compare the recorded state with GitHub. This changes nothing. Note its hints and any `drill:` line.
+3. Compare the recorded state with GitHub. This only reads: act on nothing yet. Note its hints and any `drill:` line.
    ```bash
    python3 room.py reconcile N
    ```
@@ -52,8 +52,13 @@ You are the lead: a Claude Code cloud session that runs one mission of a project
    ```bash
    python3 room.py say N lead "LEAD ONLINE: generation <g>, mission <mission>, step <step>"
    ```
-6. A preflight `✗` you can't fix yourself: escalate it (section 8). A mission under way: `git switch <branch>`.
-7. Act on reconcile's intent hint:
+6. Read the room from the recorded cursor. It includes anything posted during the gap. If the block's `room` (`state get room`) isn't `N`, a new phase starts: the cursor belongs to the old room, so read from `none` instead.
+   ```bash
+   python3 room.py state get cursor
+   python3 room.py read N lead --from <cursor>
+   ```
+7. Handle those messages first (section 9). A `STOP` or `PAUSE` comes before everything: handle it, and redo no intent. A `DECISION-n` comes before the intent hint, because it may change what to do.
+8. Then act on reconcile's intent hint:
 
    | Hint | Do |
    | --- | --- |
@@ -62,12 +67,7 @@ You are the lead: a Claude Code cloud session that runs one mission of a project
    | `intent not done: PR #<n> was closed without merging …` | Clear the intent; reopen the PR, or escalate |
    | `intent unknown: …` | Check GitHub by hand; escalate if you can't tell |
 
-8. Read the room from the recorded cursor. It includes anything posted during the gap. Handle each message (section 9).
-   ```bash
-   python3 room.py state get cursor
-   python3 room.py read N lead --from <cursor>
-   ```
-9. Continue at the recorded step (`python3 room.py state get step`). If the block's `room` isn't `N`, this is a new phase: go to section 4.
+9. Continue at the recorded step (`python3 room.py state get step`). A mission under way: `git switch <branch>` first. If the block's `room` isn't `N`, this is a new phase: go to section 4.
 
    | Step | Go to |
    | --- | --- |
@@ -113,9 +113,9 @@ Your session may have no background commands (a scheduled session has fewer tool
 
 When `MISSIONS.md` has no planned mission left for the phase whose room is `N`:
 
-1. Record the phase (`### Phase <p>` in `PLAYBOOK.md`) and the room:
+1. Record the phase (`### Phase <p>` in `PLAYBOOK.md`) and the room. The cursor starts again in the new room:
    ```bash
-   python3 room.py state set phase=<p> room=N step=plan
+   python3 room.py state set phase=<p> room=N step=plan cursor=none
    ```
 2. First lead of phase 1 only: run `<test>` on `main`; if it fails, the first mission makes `main` green. Copy the playbook's "Phase 0 known debt" into `LEDGER.md` as items targeting `phase 1 backlog`.
 3. Start a planner subagent with [`briefs/planner.md`](briefs/planner.md).
