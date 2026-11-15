@@ -139,7 +139,7 @@ Do 5.2 first. Then, in the fresh Project chat:
 5. When it replies, copy `~/survey/SURVEY.md` into the state worktree as `docs/playbook/SURVEY.md` and commit it (section 4).
 6. Go through its "Disagreements with the digest" with Matthew. Record each answer as a `D-n` entry in `DESIGN.md`.
 7. In `PLAYBOOK.md`, fill `## Phase 0 known debt`: what exists, then one bullet per known debt item. The first lead moves these into the ledger as phase 1 backlog. Start the merge-hold list from the survey's globs.
-8. If the test command doesn't pass on `main`, make the first phase 1 item `P1-1: the test command passes on main`.
+8. Set `test:` to the survey's test command. The survey reads files only and runs none of the repo's code, so whether it passes is unknown: make the first phase 1 item `P1-1: the test command passes on main`. The first lead runs it.
 9. Continue as in 5.1, step 4.
 
 ## 6. Writing `DESIGN.md`
