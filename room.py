@@ -3366,7 +3366,7 @@ def add_unattended_commands(sub, common):
 
 def from_arg(s):
     if s != "none" and not s.isdigit():
-        raise argparse.ArgumentTypeError("--from takes a comment ID, or none for the room's start")
+        raise argparse.ArgumentTypeError("takes a comment ID, or none for the room's start")
     return s
 
 
@@ -3395,7 +3395,7 @@ def main():
     s.add_argument("--from", dest="from_id", type=from_arg, metavar="ID",
                    help="set the cursor to comment ID first (none: the room's start)")
     s = cmd("wait", cmd_wait); s.add_argument("room", type=int); s.add_argument("role", type=role_arg)
-    s.add_argument("--timeout", type=int, default=1740, help="seconds (default 1740, under a 30-minute background limit)")
+    s.add_argument("--timeout", type=int, default=540, help="seconds (default 540: a foreground wait stays under the 10-minute command limit)")
     s.add_argument("--interval", type=float, default=5, help="seconds between polls (default 5)")
     s = cmd("cursor", cmd_cursor); s.add_argument("room", type=int); s.add_argument("role", type=role_arg)
     s = cmd("close", cmd_close); s.add_argument("room", type=int); s.add_argument("role", type=role_arg)
