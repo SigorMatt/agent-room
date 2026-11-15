@@ -3011,10 +3011,21 @@ def unreadable_state_alarm(a, path, reason):
         return 0
     # only an earlier "state unreadable" alarm reports this, and only as the newest alarm: an ordinary stall alarm,
     # or one after which the state came back, says nothing of the state being gone now
-    seen = alarms_since(a, progress)
+    every = alarms_since(a, progress, failed=True)
+    seen = [m for m in every if not re.search(r"\(buzz failed\b", m["text"])]
     seen = seen[-1:] if seen and "LEAD-SILENT: state unreadable" in seen[-1]["text"] else []
+    # the cap (finding P, cold M6b R1-9) counts the newest run of state unreadable alarms, failed buzzes included,
+    # so an ordinary stall alarm before them doesn't count, and one after them starts a new count
+    run = 0
+    for m in reversed(every):
+        if "LEAD-SILENT: state unreadable" not in m["text"]:
+            break
+        run += 1
     if seen:
         print(f"quiet: LEAD-SILENT #{seen[-1]['id']} at {seen[-1]['at']} already reports this stall")
+        return 0
+    if run >= ALARM_CAP:
+        print(f"quiet: {ALARM_CAP} alarms already posted for this stall (state unreadable: {reason})")
         return 0
     print(f"alarm: state unreadable ({reason})")
     alarm(a, f"LEAD-SILENT: state unreadable ({reason})")

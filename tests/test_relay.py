@@ -792,6 +792,36 @@ def t_start_lead_refuses_a_pin_the_prompt_rejects():
     online()
 
 
+def without_state_branch():
+    """Delete the state branch on the remote; returns its tip, for put_state_branch_back."""
+    tip = state_sha()
+    g("--git-dir", PET, "update-ref", "-d", "refs/heads/agent-room/state")
+    return tip
+
+
+def put_state_branch_back(tip):
+    g("--git-dir", PET, "update-ref", "refs/heads/agent-room/state", tip)
+
+
+def t_state_unreadable_alarms_are_capped():
+    # cold M6b R1-9: while buzzes fail, a lost state branch gets the first alarm and two retries, then quiet
+    tip = without_state_branch()
+    try:
+        n = len(comments())
+        for i in range(3):
+            r = watchdog(ROOM_NTFY_TOPIC=None)
+            assert r.returncode == 0 and "alarm: state unreadable (agent-room/state doesn't exist in SigorMatt/pet)" \
+                in r.stdout, (i, out(r))
+        assert all(text_of(c).endswith("(buzz failed: ROOM_NTFY_TOPIC is not set)") for c in comments()[n:])
+        for env in (dict(ROOM_NTFY_TOPIC=None), {}):
+            r = watchdog(**env)
+            assert r.returncode == 0 and "quiet: 3 alarms already posted for this stall" in r.stdout, out(r)
+        assert len(comments()) == n + 3
+    finally:
+        put_state_branch_back(tip)
+    age_watchdog()
+
+
 setup()
 for name, fn in list(globals().items()):
     if name.startswith("t_"):
