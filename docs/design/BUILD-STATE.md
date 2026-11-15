@@ -80,6 +80,7 @@ Results of the eleven assumptions in `v1.md` ("To verify"). Evidence lives in is
 - **P. One scheduled watchdog run missed an alarm.** The 20:14Z run succeeded but posted nothing, while the same command run by hand at 20:21Z alarmed correctly (no progress for 1h36m). Its output isn't visible from here. Also, while buzzes can't work (no topic in the watchdog's environment), every run re-alarms, by design of the failed-buzz retry.
 - **Q. A session can start a scheduled task through its API trigger** (probes 6 and 7, issue #4). A session in the `agent-room` environment POSTed to the task's `/fire` endpoint with the token from `ROOM_FIRE_TOKEN` (HTTP 200, no block, no approval); the run started at once, in auto mode, in the task's environment with its repository, and received the fire text intact. Starting a task from this chat with `fire_trigger` works the same way. API triggers and tokens can only be made in the web UI, so Matthew creates each project's lead task there once.
 - **R. A run of a task created in the web UI has `add_repo` and a GitHub connector, and its `gh` reaches only the task's repositories** (probe 6b posted to agent-room issue #4 through the connector after attaching the repo). A lead's room is in its own repository, so this doesn't matter for leads; M6c confirms it with real leads.
+- **S. An agent can edit only the scheduled tasks it created.** `update_trigger` on a task Matthew made in the web UI fails ("created via http_api, not by an agent"), so he edits the lead task himself, and the architect gives him the prompt text.
 - **C. A new repo may be completely empty** (`pet-todo` has no commits). Preflight detects this, and the architect's kickoff creates the first commit on `main`; no protection can exist yet, so this is safe.
 
 ## Decisions taken during the build
@@ -110,6 +111,8 @@ Calls the build lead made that Matthew would normally make. Each is reversible; 
 | A-6 | Low-severity gate findings that assume a hostile lead are fixed only when the fix is small; the gate is a mechanical aid for a cooperative lead | Keeps M3 converging; v1 leaves scope to the lead's judgement | Harden further in a patch release |
 | A-7 | Probe 3 (what a scheduled session's Agent tool can do) wasn't created: creating a scheduled task suddenly asked for approval at night. The protocol covers both answers, and M6 checks it | Matthew asleep | Run the probe when Matthew is back |
 | A-8 | For the M6 rehearsal the build lead wrote pet-todo's design and playbook as architect, without Matthew's review | M6 is the build lead's rehearsal; M7 is Matthew's own run | — |
+| A-9 | For M6c the build lead wrote pet-todo phase 2 (D-2 to D-4, items P2-1 to P2-4), with one question deliberately left open (Q-1, the busy-lock behaviour) so the lead escalates, and answers it as architect | The rehearsal needs a real escalation and a lead that parks | — |
+| A-10 | M6c's watchdog runs hourly with `--silent-after 60m`, and a one-time kickoff task starts the first lead at 04:00Z, so the rehearsal runs overnight | Matthew approved both before bed; after his decision the watchdog starts the next lead, since starting it from this chat needs his approval | Delete the kickoff task |
 
 ## M6 dress rehearsal results (2026-11-15)
 
