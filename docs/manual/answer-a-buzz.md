@@ -56,9 +56,9 @@ The lead stopped its helpers, recorded what it verified and what it couldn't, an
 
 ### `DONE`: the phase is complete
 
-The lead merged the last mission and closed the room.
+The lead merged the last mission, checked every criterion, posted `DONE` and closed the room. Then it deleted the watchdog task and ended.
 
-1. The architect checks every item's criteria and deletes the watchdog task if it's still there.
+1. The architect checks every item's criteria. If the watchdog task is still there (the lead stopped before deleting it), the architect deletes it.
 2. Then either plan more ([Start a new phase](start-a-new-phase.md)) or finish ([Wrap up an architect session](wrap-up-an-architect-session.md)).
 3. Optional: on `https://github.com/SigorMatt/<repo>/branches`, delete leftover `mission/…` branches whose pull request is merged, with the bin icon. Never delete `main` or `agent-room/state`.
 

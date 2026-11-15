@@ -203,7 +203,7 @@ For the first phase and every later one. For a later phase, first add its `### P
      ```
 
    If the result says its runs will ask for approval, tell Matthew to switch the task to "Automatically approve" in its settings. The run inherits this chat's repos, so create it from this chat, after step 1 of Setup.
-5. Set `watchdog: <task ID>` in `PLAYBOOK.md`. Commit. The lead deletes the task at `DONE`.
+5. Set `watchdog: <task ID>` in `PLAYBOOK.md`. Commit. At phase end the lead deletes the task by this ID, right after posting `DONE` and closing the room.
 6. Run preflight. Exit 0 means no `✗`.
 
    ```bash
@@ -351,15 +351,17 @@ Leads wait by check-ins about every 30 minutes, so an `ACK DECISION-n` or `ACK C
 
 ### 9.7 `DONE`
 
+The lead's order: criteria and ledger checks, `status=done`, `DONE` with the room closed, the watchdog deleted by its `watchdog:` task ID, then the lease released.
+
 1. Confirm the room is closed and every phase item's criteria are met.
-2. List the scheduled tasks. If `agent-room watchdog OWNER/NAME room N` is still there, delete it. Its runs are short, so that is safe.
+2. List the scheduled tasks. If the one with the `watchdog:` ID from `PLAYBOOK.md` (named `agent-room watchdog OWNER/NAME room N`) is still there, the lead stopped before deleting it: delete it. Its runs are short, so that is safe.
 3. Plan the next phase with Matthew (section 8), or wrap up (section 10).
 
 ### 9.8 Moving to the other account
 
 Matthew may move a project to his other Claude account. A scheduled task stays in the account that created it, so the watchdog is deleted in the old account and recreated in the new one.
 
-1. **The old architect,** in the old account: post `PAUSE` (9.4) and wait for the `PAUSED` buzz. List the scheduled tasks and delete `agent-room watchdog OWNER/NAME room N`; its runs are short, so that is safe. Then wrap up (section 10). Matthew archives the lead session and stops using that chat.
+1. **The old architect,** in the old account: post `PAUSE` (9.4) and wait for the `PAUSED` buzz. List the scheduled tasks and delete the one with the `watchdog:` ID from `PLAYBOOK.md` (`agent-room watchdog OWNER/NAME room N`); its runs are short, so that is safe. Then wrap up (section 10). Matthew archives the lead session and stops using that chat.
 2. **The new architect,** in a chat of the project's Claude Project in the other account: do Setup (section 3), then recreate the watchdog as in section 8, steps 4 and 5, which records the new `watchdog:` line. Give Matthew the normal join line (9.5).
 
 ## 10. Session end and chat rotation
