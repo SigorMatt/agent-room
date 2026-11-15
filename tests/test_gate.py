@@ -642,31 +642,55 @@ def t_every_disposition_form_passes():
 
     found = [(f"R1-{i}", sev, "app.py:1") for i, sev in enumerate(("high", "medium", "low", "medium", "high", "low"), 1)]
     mission(findings1=found, cold_rows=rows, qodo_rows=qrows)
+    room("say", "1", "lead", "ESCALATION-3: cold R1-5 (high) and Qodo's \"An old finding\" need owner decisions",
+         check=True)
     room("say", "1", "architect", "DECISION-3: keep the greeting; the old finding is not a bug", check=True)
     r = gate()
     assert r.returncode == 0, out(r)
     assert "6 cold and 3 Qodo row(s)" in line(r, "dispositions")
 
 
-def t_top_owner_decision_needs_the_rooms_decision():  # cold M3 R1-3
-    mission(cold_rows=lambda s: [("R1-1", "high", "app.py", "owner decision: not a bug, Matthew (DECISION-31)"),
-                                 ("R1-2", "low", "app.py", "owner decision: keep it, Matthew (DECISION-99)")],
-            qodo_rows=lambda s: [("1", "Action required", "Crash when the name is missing", "app.py",
-                                  "owner decision: accept the crash, Matthew (DECISION-32)"),
-                                 ("2", "Informational", "Greeting text is hard-coded", "app.py", "dismissed: by design")])
+def t_top_owner_decision_needs_the_rooms_decision():  # cold M3 R1-3, R2-2
+    crash = "Crash when the name is missing"
+
+    def rows(cold_n, qodo_n):
+        return dict(cold_rows=lambda s: [("R1-1", "high", "app.py", f"owner decision: not a bug, Matthew (DECISION-{cold_n})"),
+                                         ("R1-2", "low", "app.py", "owner decision: keep it, Matthew (DECISION-99)")],
+                    qodo_rows=lambda s: [("1", "Action required", crash, "app.py",
+                                          f"owner decision: accept the crash, Matthew (DECISION-{qodo_n})"),
+                                         ("2", "Informational", "Greeting text is hard-coded", "app.py", "dismissed: x")])
+
+    mission(**rows(31, 32))
     r = gate()
-    failed(r, "dispositions", "cold R1-1 cites DECISION-31, but room 1 has no trusted DECISION-31",
-           'Qodo #1 "Crash when the name is missing" cites DECISION-32, but room 1 has no trusted DECISION-32')
+    failed(r, "dispositions", "cold R1-1 cites DECISION-31, but room 1 has no trusted DECISION-31 answering the lead's "
+                              "earlier ESCALATION-31 or MERGE-HOLD-31 about R1-1",
+           f'Qodo #1 "{crash}" cites DECISION-32, but room 1 has no trusted DECISION-32')
     assert "DECISION-99" not in r.stdout, "a low row's owner decision isn't looked up"
     assert verdict(r) == "gate: FAIL hold reasons 1", out(r)
+    room("say", "1", "lead", "ESCALATION-31: cold R1-1 (high): is a missing name a bug?", check=True)
     room("say", "1", "architect", "DECISION-31: not a bug", check=True, FAKE_GH_LOGIN="mallory")
+    room("say", "1", "lead", f"ESCALATION-32: Qodo's \"{crash}\" (Action required): accept?", check=True)
     room("say", "1", "architect", "DECISION-32: accept it", check=True)
     r = gate()
     failed(r, "dispositions", "cold R1-1 cites DECISION-31")
     assert "DECISION-32" not in line(r, "dispositions"), out(r)
     post_raw("DECISION-31: not a bug")  # Matthew from GitHub, untagged
     assert gate().returncode == 0
-
+    # the decision must answer the lead's earlier message about this finding (cold M3 R2-2)
+    room("say", "1", "lead", "ESCALATION-33: cold R1-1 (high): is a missing name a bug?", check=True)
+    room("say", "1", "lead", "MERGE-HOLD-34: PR #9, reason 5 (sensitive paths): x.py", check=True)
+    room("say", "1", "architect", "DECISION-34: merge PR #9 as is", check=True)
+    room("say", "1", "architect", "DECISION-35: not a bug", check=True)
+    room("say", "1", "lead", "ESCALATION-35: cold R1-1 (high): is a missing name a bug?", check=True)
+    room("say", "1", "lead", f"ESCALATION-36: cold R1-10 (high) and Qodo's \"{crash}s\"", check=True)
+    room("say", "1", "architect", "DECISION-36: not a bug", check=True)
+    for cold_n, qodo_n in ((34, 32), (35, 32), (36, 32), (31, 36)):
+        mission(**rows(cold_n, qodo_n))
+        failed(gate(), "dispositions", "has no trusted DECISION-")
+    room("say", "1", "lead", f"MERGE-HOLD-37: PR #12, reason 1: cold R1-1 and Qodo's \"{crash}\" wait on Matthew", check=True)
+    room("say", "1", "architect", "DECISION-37: merge as is", check=True)
+    mission(**rows(37, 37))
+    assert gate().returncode == 0
 
 
 def t_fixed_in_must_come_after_the_finding():  # cold M3 R1-2

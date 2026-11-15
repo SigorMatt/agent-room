@@ -1816,8 +1816,10 @@ def judge(root, head, label, cell, top, file_cell, ledger, reported=None, room=N
         return [(f"{label} waits on an open owner decision ({m.group(1)})", 1)]
     if top and form in ("dismissed", "deferred"):
         return [(f"{label} is top severity, so only a fix or an owner decision closes it, not '{form}'", 1)]
-    if top and form == "owner" and room is not None and not room.decision(m.group(2)):
-        return [(f"{label} cites {m.group(2)}, but {room.where()} has no trusted {m.group(2)}", 1)]
+    if top and form == "owner" and room is not None and finding and not room.answers(m.group(2), finding):
+        n, what = m.group(2).rsplit("-", 1)[1], finding[2]
+        return [(f"{label} cites {m.group(2)}, but {room.where()} has no trusted {m.group(2)} answering the lead's "
+                 f"earlier ESCALATION-{n} or MERGE-HOLD-{n} about {what}", 1)]
     if form == "deferred" and m.group(1) not in ledger:
         return [(f"{label}: {m.group(1)} is not in {PLAYBOOK_DIR}/LEDGER.md on {STATE_BRANCH}", None)]
     if form == "deferred" and finding:
@@ -2061,6 +2063,21 @@ class RoomLog:
 
     def decision(self, kind):
         return next(iter(self.decisions(kind)), None)
+
+    def answers(self, decision, finding):
+        """The trusted DECISION-n that answers the lead's earlier ESCALATION-n or MERGE-HOLD-n naming FINDING:
+        ("cold", M<k>, ID), named by its ID, or ("qodo", PR, title), named by its title."""
+        n = decision.rsplit("-", 1)[1]
+        kind, _, what = finding
+
+        def names(text):
+            if kind == "cold":
+                return re.search(rf"(?<![\w-]){re.escape(what)}(?![\w-])", text)
+            return re.search(rf"(?<!\w){re.escape(title_key(what))}(?!\w)", title_key(text))
+
+        asks = [m["id"] for m in self.messages() if m["role"] == "lead" and names(m["text"])
+                and message_kind(m["text"]) in (f"ESCALATION-{n}", f"MERGE-HOLD-{n}")]
+        return next((d for d in self.decisions(decision) if asks and min(asks) < d["id"]), None)
 
     def holds(self, kind):
         """The lead's trusted messages of KIND (MERGE-HOLD-n)."""
