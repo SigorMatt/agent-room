@@ -2693,12 +2693,16 @@ def intent_hint(a, intent, path, msgs, pr):
         issue = gh(f"repos/{REPO}/issues/{a.room}") or {}
         if issue.get("state") != "closed":
             return f"intent not done: redo it (room {a.room} is open)"
-        # close closes the issue first, then posts its note: both must have happened (GitHub's clock on both)
+        # close closes the issue first, then posts its note: both must have happened (GitHub's clock on both), and
+        # the note is the lead's DONE or STOPPED, not any later message such as a new lead's LEAD ONLINE
         closed = parse_time(issue.get("closed_at"))
-        notes = [x for x in leads if closed is not None and (parse_time(x["at"]) or 0) >= closed]
+        notes = [x for x in leads if closed is not None and (parse_time(x["at"]) or 0) >= closed and
+                 message_kind(x["text"]) in ("DONE", "STOPPED")]
         if notes:
-            return f"intent done: clear it (room {a.room} is closed, closing note #{notes[-1]['id']})"
-        return f"intent not done: redo it (room {a.room} is closed, but no lead message came after it closed)"
+            kind = message_kind(notes[-1]["text"])
+            return f"intent done: clear it (room {a.room} is closed, closing {kind} #{notes[-1]['id']})"
+        return (f"intent not done: redo it (room {a.room} is closed, but no lead DONE or STOPPED came after it "
+                "closed)")
     return ("intent unknown: check it by hand (reconcile knows: merge PR #<n> at <sha>, open PR <branch or M<k>>, "
             "post <KIND>, close room)")
 

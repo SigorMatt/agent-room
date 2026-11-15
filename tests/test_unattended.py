@@ -947,16 +947,21 @@ def t_reconcile_close_room_intent():
     set_state("intent=close room")
     assert hint(reconcile("3")) == "intent not done: redo it (room 3 is open)"
     room("close", "3", "lead", "DONE: phase 3", check=True)
-    assert hint(reconcile("3")) == f"intent done: clear it (room 3 is closed, closing note #{comments('3')[-1]['id']})"
+    assert hint(reconcile("3")) == f"intent done: clear it (room 3 is closed, closing DONE #{comments('3')[-1]['id']})"
     # cold M4 R1-12: close closes the issue, then posts; a lead that dies in between leaves no DONE
     subprocess.run([os.path.join(BIN, "gh"), "api", "-X", "PATCH", "repos/SigorMatt/pet/issues/4", "--input", "-"],
                    input=json.dumps({"state": "closed"}), env=ENV, capture_output=True, text=True, check=True)
-    assert hint(reconcile("4")) == "intent not done: redo it (room 4 is closed, but no lead message came after it closed)"
+    missing = "intent not done: redo it (room 4 is closed, but no lead DONE or STOPPED came after it closed)"
+    assert hint(reconcile("4")) == missing
     room("say", "4", "architect", "DECISION-1: not the closing note", check=True, ROOM_SESSION="arch")
     room("say", "4", "lead", "DONE: phase 4", "--no-buzz", check=True, FAKE_GH_LOGIN="mallory")
-    assert hint(reconcile("4")).startswith("intent not done: redo it (room 4 is closed, but no lead message")
-    room("close", "4", "lead", "DONE: phase 4", check=True)  # the redo: closing again is harmless
-    assert hint(reconcile("4")) == f"intent done: clear it (room 4 is closed, closing note #{comments('4')[-1]['id']})"
+    assert hint(reconcile("4")) == missing
+    # cold M4 R2-6: a later lead's LEAD ONLINE or STATUS in the closed room isn't the closing note either
+    room("say", "4", "lead", "LEAD ONLINE", check=True)
+    room("say", "4", "lead", "STATUS: redoing the close", check=True)
+    assert hint(reconcile("4")) == missing
+    room("close", "4", "lead", "STOPPED: halted on STOP", check=True)  # the redo: closing again is harmless
+    assert hint(reconcile("4")) == f"intent done: clear it (room 4 is closed, closing STOPPED #{comments('4')[-1]['id']})"
 
 
 def t_reconcile_unknown_intent_status_and_drill():
