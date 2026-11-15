@@ -2956,17 +2956,51 @@ def watchdog_start(a, takeover):
         print(f"note: no lead started: {why}")
 
 
-def start_after_alarm(a, progress, takeover):
-    """After a stall's alarm, posted now or by an earlier run: start a lead, once per stall. Nothing starts when a
-    trusted watchdog LEAD-STARTED is newer than PROGRESS (pre-start, PROGRESS None: any), so a start that failed is
-    tried again by the next run, and one that worked isn't repeated."""
+def second_start_due(a, since):
+    """(the trusted watchdog LEAD-STARTEDs newer than SINCE, the stall's progress time (None, pre-start: all in the
+    room); the one of them whose lead made no progress, when a second start is due, else None). A second start is
+    due with exactly one such LEAD-STARTED once silent-after has passed since the started lead's first trusted LEAD
+    ONLINE after it, or since the LEAD-STARTED itself if none followed (cold M6b R1-2)."""
+    starts = watchdog_messages(a, "LEAD-STARTED", since)
+    if a.no_start or len(starts) != 1:
+        return starts, None
+    first = starts[0]
+    joined = sorted((m for m in map(parse, comments(a.room)) if m["id"] > first["id"] and m["role"] == "lead" and
+                     trusted(m) and message_kind(m["text"]) == "LEAD ONLINE"), key=lambda m: m["id"])
+    base = parse_time((joined[0] if joined else first)["at"])
+    return starts, (first if base is not None and time.time() - base >= a.silent_after else None)
+
+
+def second_alarm_and_start(a, since, first, about, takeover):
+    """The second and last start of a stall, after its own alarm (within the cap): the lead started by FIRST, a
+    watchdog LEAD-STARTED, made no progress. ABOUT says where the pipeline stands. A failed start is retried by the
+    next run without a new alarm, unless that alarm's buzz failed."""
+    phrase = f"the lead started at {iso(parse_time(first['at']))} made no progress"
+    every = alarms_since(a, since, failed=True)
+    told = [m for m in every if phrase in m["text"] and not re.search(r"\(buzz failed\b", m["text"])]
+    if told:
+        print(f"quiet: LEAD-SILENT #{told[0]['id']} at {told[0]['at']} already reports that {phrase}")
+    elif len(every) >= ALARM_CAP:
+        print(f"quiet: {ALARM_CAP} alarms already posted for this stall")
+    else:
+        print(f"alarm: {phrase}")
+        alarm(a, f"LEAD-SILENT: {phrase} ({about})")
+    watchdog_start(a, takeover)
+
+
+def start_after_alarm(a, starts, takeover):
+    """After a stall's alarm, posted now or by an earlier run: start a lead unless one of STARTS (the stall's watchdog
+    LEAD-STARTEDs) already did, so a start that failed is tried again by the next run, and one that worked isn't
+    repeated; the second start is second_alarm_and_start's."""
     if a.no_start:
         return
-    started = watchdog_messages(a, "LEAD-STARTED", progress)
-    if started:
-        print(f"note: LEAD-STARTED #{started[-1]['id']} at {started[-1]['at']} already started a lead for this stall")
-        return
-    watchdog_start(a, takeover)
+    if not starts:
+        watchdog_start(a, takeover)
+    elif len(starts) == 1:
+        print(f"note: LEAD-STARTED #{starts[0]['id']} at {starts[0]['at']} already started a lead for this stall; a "
+              f"second, last start follows if that lead makes no progress for {span(a.silent_after)}")
+    else:
+        print(f"note: {len(starts)} leads already started for this stall: alarms only")
 
 
 def pending_decision(a, values, playbook):
@@ -3049,6 +3083,10 @@ def prestart_alarm(a):
         print(f"quiet: no lead has joined room {a.room} yet" +
               (f" (opened {span(time.time() - opened)} ago)" if opened is not None else ""))
         return 0
+    starts, due = second_start_due(a, None)  # every watchdog LEAD-STARTED in the room counts
+    if due:
+        second_alarm_and_start(a, None, due, f"no lead has joined room {a.room}", takeover=None)
+        return 0
     seen = alarms_since(a, None)  # only one alarm for it
     if seen:
         print(f"quiet: no lead has joined room {a.room} yet; LEAD-SILENT #{seen[-1]['id']} already reports it")
@@ -3057,7 +3095,7 @@ def prestart_alarm(a):
     else:
         print(f"alarm: no lead has joined room {a.room} in {PRESTART_HOURS}h (opened {iso(opened)})")
         alarm(a, f"LEAD-SILENT: no lead has joined room {a.room} in {PRESTART_HOURS}h")
-    start_after_alarm(a, None, takeover=None)  # plain, unless a lease is held
+    start_after_alarm(a, starts, takeover=None)  # plain, unless a lease is held
     return 0
 
 
@@ -3122,6 +3160,11 @@ def cmd_watchdog(a):
         print(f"quiet: progress {span(now - progress)} ago ({what} at {iso(progress)}), "
               f"under {span(a.silent_after)}")
         return 0
+    takeover = lease_of(values)[0] != "none"
+    starts, due = second_start_due(a, stall)  # at most two starts per stall (cold M6b R1-2)
+    if due:
+        second_alarm_and_start(a, stall, due, f"step {step}, mission {mission}", takeover)
+        return 0
     seen = alarms_since(a, stall)  # one alarm per stall
     if seen:
         print(f"quiet: LEAD-SILENT #{seen[0]['id']} at {seen[0]['at']} already reports this stall")
@@ -3131,7 +3174,7 @@ def cmd_watchdog(a):
     else:
         print(f"alarm: no progress for {span(now - progress)} ({what} at {iso(progress)})")
         alarm(a, f"LEAD-SILENT: no progress since {iso(progress)} (step {step}, mission {mission})")
-    start_after_alarm(a, stall, takeover=lease_of(values)[0] != "none")
+    start_after_alarm(a, starts, takeover)
     return 0
 
 
@@ -3706,7 +3749,8 @@ def add_unattended_commands(sub, common):
 
     s = leaf("watchdog", cmd_watchdog, "the watchdog task, as role watchdog: buzz and post LEAD-SILENT when no "
                                        "step or pr change, mission branch push or mission PR merge happened for "
-                                       "DURATION, then start a lead through the lead task, once per stall; also "
+                                       "DURATION, then start a lead through the lead task, at most twice per "
+                                       "stall; also "
                                        "start the lead after Matthew's decision to a parked lead; never writes state")
     s.add_argument("room", type=int)
     s.add_argument("--silent-after", type=duration_arg, default=3 * 3600, metavar="DURATION",

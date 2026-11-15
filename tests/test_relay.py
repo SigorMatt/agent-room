@@ -926,6 +926,59 @@ def t_waiting_for_owner_with_the_lease_held():
     age_watchdog()
 
 
+def t_a_second_start_when_the_started_lead_makes_no_progress():
+    # cold M6b R1-2: at most two starts per stall; the second, with its own alarm, once the lead the watchdog started
+    # has made no progress for silent-after since its LEAD ONLINE (or since its LEAD-STARTED, if it never joined)
+    online()
+    age_watchdog()
+    set_state("step=build 20", hours=10)  # L1 stops
+    nf = len(fires())
+    r = watchdog()
+    assert "alarm: no progress for 10h" in r.stdout and "started: https://claude.ai/code/" in r.stdout, out(r)
+    first = comments()[-1]
+    # the takeover lead joins, then stops at the same step before any progress
+    room("lease", "take", "--takeover", check=True, ROOM_SESSION="T1")
+    room("say", "1", "lead", "LEAD ONLINE", "--no-buzz", check=True, ROOM_SESSION="T1")
+    t1 = comments()[-1]["id"]
+    r = watchdog()  # no second start right after it joined
+    assert "already reports this stall" in r.stdout and "already started a lead for this stall" in r.stdout, out(r)
+    assert len(fires()) == nf + 1
+    backdate(lambda c: c["id"] == t1, 200)
+    n = len(comments())
+    r = watchdog()
+    phrase = f"the lead started at {first['created_at']} made no progress"
+    assert r.returncode == 0 and f"alarm: {phrase}" in r.stdout and "started: https://claude.ai/code/" in r.stdout, \
+        out(r)
+    alarm2, second = comments()[n:]
+    assert text_of(alarm2) == f"LEAD-SILENT: {phrase} (step build 20, mission M1) (buzz sent)", text_of(alarm2)
+    assert text_of(second).endswith("(takeover join line, started by watchdog)") and tag(second)[0] == "watchdog"
+    assert [request(x)["body"]["text"].endswith(TAKEOVER) for x in fires()[nf:]] == [True, True]
+    # after two starts, alarms only
+    backdate(lambda c: c["id"] == second["id"], 200)
+    r = watchdog()
+    assert "note: 2 leads already started for this stall: alarms only" in r.stdout and len(fires()) == nf + 2, out(r)
+    # a started lead that never joins: the second start comes silent-after after its LEAD-STARTED
+    room("lease", "take", "--takeover", check=True)
+    age_watchdog()
+    set_state("step=build 21", hours=10)
+    nf = len(fires())
+    assert "started: https://claude.ai/code/" in watchdog().stdout
+    first = comments()[-1]
+    r = watchdog()
+    assert "already started a lead for this stall" in r.stdout and len(fires()) == nf + 1, out(r)
+    backdate(lambda c: c["id"] == first["id"], 200)
+    first = comments()[-1]  # its new date
+    r = watchdog()
+    assert f"alarm: the lead started at {first['created_at']} made no progress" in r.stdout and len(fires()) == nf + 2, \
+        out(r)
+    assert text_of(comments()[-1]).endswith("(takeover join line, started by watchdog)")
+    r = watchdog("--no-start")  # and --no-start never starts a second one
+    assert "start" not in r.stdout.replace("already started", "") and len(fires()) == nf + 2, out(r)
+    online()
+    set_state("step=build 22")
+    age_watchdog()
+
+
 setup()
 for name, fn in list(globals().items()):
     if name.startswith("t_"):
