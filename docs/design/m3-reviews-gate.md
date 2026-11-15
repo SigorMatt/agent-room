@@ -95,20 +95,21 @@ The M2 templates under `templates/playbook/` are aligned to these formats in thi
 
 Run by the lead in the project checkout. Prints one line per check (`✓`/`✗`, with the reason), then a verdict line.
 
-1. **PR:** read `pulls/<PR>`: open, base `main`, head ref `mission/M<k>-…` (the mission comes from it unless `--mission`, which must be a mission the head ref names). `git fetch origin <head ref> main`; the fetched head must equal the PR's head sha. All later checks use that sha, called HEAD here.
+1. **PR:** read `pulls/<PR>`: open, base `main`, head ref `mission/M<k>-…` (the mission is the token right after `mission/`; `--mission`, if given, must equal it). `git fetch origin <head ref> main`; the fetched head must equal the PR's head sha. All later checks use that sha, called HEAD here.
 2. **Lease:** `lease check` passes.
 3. **Coverage:** collect the covered commits: every cold report's `covers:` and, when the Qodo dispositions file says `qodo: on`, the reviewed commit of the latest Qodo archive of this PR (its Code Review comment's commit marker). Passes when some covered commit X is an ancestor of HEAD (or equal), and `git diff --name-only X HEAD` has no path outside the exempt set. Otherwise lists the uncovered paths.
 4. **Dispositions:**
     - the cold dispositions file exists and has a row for every finding ID in every cold report;
     - when `QODO_REVIEW=on`, the Qodo dispositions file exists. When an archive of this PR exists, the file exists and its `qodo:` is `on`, whatever `QODO_REVIEW` says;
     - with `qodo: on`, it has a row for every finding title of every archived fetch of this PR, absent-now ones included. Titles are compared after unescaping entities and folding case and whitespace, the archive's title as the tool prints it (markup and the resolved mark removed), the table cell as written. A title's severity is the strictest any finding of that title had in any fetch; severity badges inside code (`<pre>`, `<code>`, fenced blocks) don't count;
-    - `QODO-REVIEW.md` rule 5: in every archived Code Review comment, the header's open count must equal the open findings that parse. Otherwise: "Qodo comment did not parse: read it";
-    - every row's disposition parses, and top severity rows use only the allowed forms. An `owner decision … (DECISION-<n>)` on a top-severity row needs a trusted `DECISION-<n>` in the room (from the architect, or untagged from Matthew), or it is an open owner decision;
-    - `fixed in <sha>`: the sha is an ancestor of HEAD, is not on `origin/main`, and is not an ancestor of (or equal to) the commit the finding was reported against: the `covers:` of the cold report that holds it, or the reviewed commit of the first Qodo fetch that holds the title. When a file is given, the commit's diff against its first parent touches it, so a lead's merge of a builder branch counts for what it brought in;
-    - `deferred: L-<n> to <target>`: `LEDGER.md` on the state branch has row `L-<n>` with status `open`, the same target, and a source naming this finding (the mission and cold ID, or `PR #<n>` and the title);
+    - the archive is whole: its fetch directories are numbered 1 to k, as the tool numbers them, and equal the `fetches:` line, and `reviewed:` names the last fetch's reviewed commit. Otherwise the lead fixes the records first;
+    - `QODO-REVIEW.md` rule 5: in every archived Code Review comment, the header's open count must equal the open findings that parse, and every finding has a known severity. Otherwise "Qodo comment did not parse: read it" or "severity did not parse: read the comment". The records can't fix either: Qodo's format moved, and room.py's parser needs a patch;
+    - every row's disposition parses, and top severity rows use only the allowed forms. An `owner decision … (DECISION-<n>)` on a top-severity row needs a trusted `DECISION-<n>` in the room (from the architect, or untagged from Matthew) posted after the lead's trusted `ESCALATION-<n>` or `MERGE-HOLD-<n>` that names the finding (its cold ID, or the Qodo title); otherwise it is an open owner decision;
+    - `fixed in <sha>`: the sha is an ancestor of HEAD, is not on `origin/main`, and is not an ancestor of (or equal to) the commit the finding was reported against: the `covers:` of the cold report that holds it, or the reviewed commit of the first Qodo fetch that shows the finding open. When no fetch shows it open, any commit of the PR that is off `main` and touches the file passes. When a file is given, the commit's diff against its first parent touches it, so a lead's merge of a builder branch counts for what it brought in;
+    - `deferred: L-<n> to <target>`: the target is later than this mission: `M<j>` with `j` above this mission's number, or `phase <p> backlog` with `p` above the current phase in `MISSIONS.md`. `LEDGER.md` on the state branch has row `L-<n>` with status `open`, the same target, and a source naming this finding (the mission and cold ID, or `PR #<n>` and the title);
     - an open owner decision or an undecided row fails with hold reason 1 or 2.
-5. **Checks:** check runs (`filter=latest`, told apart by check suite and name) and commit statuses on HEAD. Required contexts come from `main`'s protection and rulesets (404 or the upgrade 403: none). Fails if a required context is missing or not successful, or any completed run failed (hold reason 3). Pending runs give the wait verdict. With no runs or statuses at all: if HEAD's tree has `.github/workflows/*.y*ml`, the gate waits while HEAD's commit is under 10 minutes old, then passes noted as "no checks ran for HEAD"; otherwise it passes noted as "no checks configured". A missing required context still fails once the wait is over.
-6. **Sensitive paths:** the changed paths (`git diff --name-status origin/main...HEAD`) against the globs of the "## Merge-hold list" section of `PLAYBOOK.md` on the state branch. The template has one bullet per area, ``- <label>: `glob`, `glob` ``; every backticked glob in a bullet counts, including globs on indented continuation lines. `*` matches within a path segment, `**` across segments, and `**/` any number of directories, none included (`**/go.mod` matches `go.mod` and `lib/go.mod`). A bullet whose label contains "deleted" (any case) matches only deleted paths, so adding or editing tests never holds; weakened tests are the cold reviewer's to flag. A match fails with hold reason 5, naming the path and the glob, unless `--allow-hold 5 --decision DECISION-<n>` is given and the room holds both a trusted `DECISION-<n>` (from the architect, or untagged from Matthew) and the lead's trusted `MERGE-HOLD-<n>`, with the same `n`, whose text names `PR #<PR>`, `reason 5` and every matched path. The lead posts the hold in this form, which the gate prints when it fails:
+5. **Checks:** check runs (`filter=latest`, told apart by check suite and name) and commit statuses on HEAD. Required contexts come from `main`'s protection and rulesets (404 or the upgrade 403: none). Fails if a required context is missing or not successful, or any completed run failed (hold reason 3). Pending runs give the wait verdict, and so does a required context that hasn't reported while another check is still pending. If HEAD's tree has `.github/workflows/*.y*ml` and HEAD has no GitHub Actions check run (app `github-actions`; other apps' runs and statuses don't count), the gate waits for 10 minutes from the later of HEAD's committer date and the PR's `updated_at`, then judges what is there, noting "no checks ran for HEAD" when nothing is. Without workflow files, no checks at all passes as "no checks configured". A missing required context fails once nothing is pending and the wait is over.
+6. **Sensitive paths:** the changed paths (`git diff --name-status origin/main...HEAD`) against the globs of the "## Merge-hold list" section of `PLAYBOOK.md` on the state branch. The template has one bullet per area, ``- <label>: `glob`, `glob` ``; every backticked glob in a bullet counts, including globs on indented continuation lines. A glob that starts or ends with `/` can never match a changed path and fails as such. `*` matches within a path segment, `**` across segments, and `**/` any number of directories, none included (`**/go.mod` matches `go.mod` and `lib/go.mod`). A bullet whose label contains "deleted" (any case) matches only deleted paths, so adding or editing tests never holds; weakened tests are the cold reviewer's to flag. A match fails with hold reason 5, naming the path and the glob, unless `--allow-hold 5 --decision DECISION-<n>` is given and the room holds both a trusted `DECISION-<n>` (from the architect, or untagged from Matthew) posted after the lead's trusted `MERGE-HOLD-<n>`, with the same `n`, whose text names `PR #<PR>`, `reason 5` and every matched path, each as a whole token (backticked, or set off by whitespace, commas or parentheses). The lead posts the hold in this form; a failing gate names the missing message but never prints hold text:
 
     ```text
     MERGE-HOLD-<n>: PR #<PR>, reason 5 (sensitive paths): <path>, <path>, …
@@ -137,9 +138,13 @@ Insert a short section right after the "For the session" paragraph, headed "In a
 
 `tests/test_gate.py`, with the fake `gh` extended for check runs, statuses, PR objects and the merge endpoint (200, 405, 409), and a local bare remote for the mission and state branches. Cover each check's pass and fail, every disposition form including top-severity misuse, coverage with a record-only commit after the last review, an uncovered file under `reviews/`, a deleted test file, `--allow-hold` with and without a matching decision, merge success, 409 and 405, and the doc extraction.
 
-## Changes after cold review round 1
+## Changes after cold review
 
-`reviews/cold/M3/round-1.md` found 17 holes in the first implementation; each fix has a regression test in `tests/test_gate.py`.
+Each fix has a regression test in `tests/test_gate.py`.
+
+### Round 1
+
+`reviews/cold/M3/round-1.md` found 17 holes in the first implementation.
 
 - R1-1, R1-11: the template's dependency and test globs start with `**/`, which matches no directory as well as many; globs on a bullet's continuation lines count.
 - R1-2: `fixed in` must name a commit after the review that found the finding, off `main`, and touches files by its first-parent diff.
@@ -152,3 +157,17 @@ Insert a short section right after the "For the session" paragraph, headed "In a
 - R1-12, R1-13: a blank line inside a table doesn't end it; badges inside code aren't severities (`qodo_review.py` has the same weakness).
 - R1-16: a merge whose state update fails exits 1 with the reconcile message.
 - R1-17: a deferral needs its own open ledger row with the same target.
+
+### Round 2
+
+`reviews/cold/M3/round-2.md` found 12 more. The gate is a mechanical aid for a cooperative lead, not a defence against a hostile one, so each fix is small. R2-4 was dismissed: v1 says Qodo's marks don't count, and a reopened finding is handled at triage.
+
+- R2-1, R2-10: the `DECISION-<n>` that allows a hold is posted after the `MERGE-HOLD-<n>`; hold paths match as whole tokens; a failing gate names the missing message instead of printing hold text.
+- R2-2: a top-severity owner decision answers the lead's earlier `ESCALATION-<n>` or `MERGE-HOLD-<n>` naming the finding.
+- R2-3: a Qodo fix is bounded by the first fetch showing the finding open, or only by the PR's own commits when none does.
+- R2-5, R2-9: the Qodo archive runs 1..k and matches `fetches:` and `reviewed:`; a finding without a known severity fails; parse failures say a parser patch is the fix.
+- R2-6: with workflow files, the gate waits for GitHub Actions runs, timed from the later of HEAD's commit and the PR's last update; a late required context waits while others run.
+- R2-7: the template's merge-hold list covers common auth, crypto, secret, migration, manifest, lock-file and test layouts.
+- R2-8: `--mission` must equal the mission right after `mission/`.
+- R2-11: a glob starting or ending with `/` fails as one that can never match.
+- R2-12: a deferral targets a later mission or a later phase's backlog.
