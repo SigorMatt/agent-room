@@ -31,3 +31,9 @@
 | R2-10 | low | room.py | Hold paths match as substrings | fixed in e316da3 | Whole tokens only; regression test |
 | R2-11 | low | room.py | Globs with a leading or trailing `/` silently never match | fixed in 2cfbdc0 | Fail as "can never match"; regression test |
 | R2-12 | low | room.py | A deferral may target this or an earlier mission | fixed in fc07bf2 | Must target a later mission or a later phase's backlog; regression test |
+| S1-1 | high | templates/playbook/PLAYBOOK.md | Case-sensitive globs miss CamelCase auth files, security modules, env and key files | fixed in d4393fb | Globs match case-insensitively; security, env, key, credential and account patterns added; regression test with every reviewer path |
+| S1-2 | medium | room.py | Hold paths with parentheses can't be named, and the hold form isn't shown | fixed in 5b19649 | Tokens split on whitespace and commas, backticks and quotes accepted; the form is printed with `<n>`; regression test |
+| S1-3 | low | room.py | An escalation that points at the dispositions record doesn't name its findings | fixed in 5b19649 | The record path names every finding in it; regression test |
+| S1-4 | low | templates/playbook/PLAYBOOK.md | The substring globs hold unrelated files and additive migrations | dismissed: over-holding is the safe direction and v1 makes the merge-hold list editable per project; the template now says the list is broad on purpose and the architect trims it (d4393fb) | — |
+| S1-5 | low | room.py | A required check that never reports makes the gate wait forever | fixed in b59963f | Holds (reason 3) an hour after the later of the commit and the PR update; regression test |
+| S1-6 | low | room.py | The `reviewed:` line is compared literally | fixed in 79c61eb | Backticks stripped, 7+ hex prefix accepted, trailing text ignored; regression test |
