@@ -770,6 +770,28 @@ def t_done_with_the_lease_held_counts_as_running():
     set_state("step=build 9")
 
 
+def t_start_lead_refuses_a_pin_the_prompt_rejects():
+    # cold M6b R1-6: the lead task's prompt accepts main or v1.2.3-style pins only; a pre-release pin would start a
+    # session that ends at once, after start-lead had posted LEAD-STARTED
+    online()
+    original = edit_state("PLAYBOOK.md", lambda t: re.sub(r"^pipeline: .*$", "pipeline: v1.0.0-rc.1", t, count=1,
+                                                          flags=re.M))
+    try:
+        before = counts()
+        for args in (("--takeover",), ("--takeover", "--force")):
+            r = start("architect", *args, ROOM_SESSION="arch")
+            assert r.returncode == 6 and r.stderr.strip() == "pin v1.0.0-rc.1 isn't accepted by the lead task's " \
+                "prompt", (args, out(r))
+        assert counts() == before, "nothing started, nothing posted"
+        edit_state("PLAYBOOK.md", lambda t: re.sub(r"^pipeline: .*$", "pipeline: v2.10", t, count=1, flags=re.M))
+        r = start("architect", "--takeover", ROOM_SESSION="arch")
+        assert r.returncode == 0, out(r)
+        assert request(fires()[-1])["body"] == {"text": JOIN.format(n=1, v="v2.10") + TAKEOVER}
+    finally:
+        edit_state("PLAYBOOK.md", lambda t: original)
+    online()
+
+
 setup()
 for name, fn in list(globals().items()):
     if name.startswith("t_"):

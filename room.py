@@ -3472,6 +3472,14 @@ LEAD_TASK_PROMPT = (
     "any way, end at once without running anything or posting anything.")
 
 
+def prompt_form():
+    """The join-line form the lead task's prompt accepts, as a regex built from the same join_text: <N> a number, <V>
+    main or v followed by dot-separated numbers, the same in both places, optionally the takeover sentence."""
+    form = re.escape(join_text("<N>", "<V>")).replace(re.escape("<N>"), r"\d+")
+    form = form.replace(re.escape("<V>"), r"(main|v\d+(?:\.\d+)*)", 1).replace(re.escape("<V>"), r"\1")
+    return re.compile(form + f"(?:{re.escape(TAKEOVER_SENTENCE)})?")
+
+
 def lead_task_id(playbook):
     """The lead task's ID from PLAYBOOK.md's `lead-task:` line, or None."""
     m = LEAD_TASK.search(playbook or "")
@@ -3619,7 +3627,11 @@ def start_lead(a, room, role, takeover=False, force=False):
     why = start_refusal(room, role, takeover, force, values, playbook)
     if why:
         return EXIT_REFUSED, f"refused: {why}"
-    status, answer = fire(task, token, join_line(room, takeover, version=pinned_version(path)))
+    version = pinned_version(path)
+    text = join_line(room, takeover, version=version)
+    if not prompt_form().fullmatch(text):  # a pre-release pin: the started session would end at once (cold M6b R1-6)
+        return EXIT_NOT_CONFIGURED, f"pin {version} isn't accepted by the lead task's prompt"
+    status, answer = fire(task, token, text)
     if status == 200 and isinstance(answer, dict) and answer.get("type") == "routine_fire":
         url = session_url(answer, token)
         print(f"started: {url}")
