@@ -37,5 +37,10 @@
 
 ## If you don't
 
-- No buzz after about 35 minutes: open the lead's session in the Code tab and send it `check the room`.
+- No buzz after about 35 minutes: open the lead's session in the Code tab and send it
+
+  ```text
+  check the room
+  ```
+
 - After `STOP`, the lead lists something as unknown, such as a helper's unfinished work: nothing that wasn't pushed reaches GitHub, and the next lead starts from what was pushed.

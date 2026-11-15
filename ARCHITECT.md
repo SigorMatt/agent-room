@@ -264,7 +264,8 @@ Explain each buzz in plain terms, in a few lines:
    | 5 | The PR touches a merge-hold area; the message names the paths |
    | 6 | Qodo is on, but this PR and the previous one got no first review |
 
-3. Decide with Matthew. Say how the mission continues: continue, merge as is, back to Build with an extra budget (default one cold round and two Qodo rounds), or drop the mission and re-plan. Back to Build also restarts the mission's clock, so its hours budget counts from the decision.
+3. Decide with Matthew. Say how the mission continues: continue, merge as is, back to Build with an extra budget (default one cold round and two Qodo rounds), or drop the mission and re-plan. Back to Build also restarts the mission's clock, so its hours budget counts from the decision; after a long hold, "continue" and "merge as is" give it more time too.
+   - **Reason 3** (failing checks) has no "merge as is": the gate fails again on the same checks. The options are back to Build with an extra budget; Matthew fixes or relaxes the check, and the mission continues, so the lead re-runs the gate; or drop the mission.
 4. Record it in `DESIGN.md` as `D-n`, and change `PLAYBOOK.md` if items change. Commit (section 4).
 5. Write the message to `~/agent-room-tools/msg.md`, under about 300 words. `n` is the number of the message you answer:
 
@@ -272,7 +273,7 @@ Explain each buzz in plain terms, in a few lines:
    DECISION-n: <the answer, in one to three lines>.
    Mission: <continue | merge as is | back to Build, extra budget <rounds> | drop the mission and re-plan>.
    Findings: <one per finding: ID, owner decision or won't fix>. Omit the line if none.
-   Time: more time granted. Omit the line unless the mission is over its budget and should continue; "back to Build" restarts the clock anyway.
+   Time: more time granted. Usually omit it: "continue", "merge as is" and "back to Build" already give the mission more time, even after a long hold.
    Docs: DESIGN.md D-<k> at <short sha>.
    ```
 
@@ -285,6 +286,12 @@ Explain each buzz in plain terms, in a few lines:
 7. Check for the `ACK` (9.6).
 
 A "merge as is" for reason 5 lets the lead merge citing your `DECISION-n`, so name the hold in it.
+
+**A pipeline fault** (an `ESCALATION-n` quoting a gate line that says `the records can't fix this`) needs a fix in agent-room itself:
+
+1. Ask Matthew for a patched release ([Report a pipeline problem](docs/manual/report-a-pipeline-problem.md)). The mission waits meanwhile.
+2. When it is out, bump the pin (section 11, patch).
+3. Post `DECISION-n: pin bumped to <version>: re-download and retry the gate.`, with `Mission: continue`. The lead re-downloads at the new pin, then runs the gate again.
 
 ### 9.3 `CHANGE-n`
 
@@ -323,12 +330,27 @@ The lead sees them at its next check-in, within about 30 minutes. Neither gets a
   ```
 
 - **`LEAD-SILENT`:** no lead progress for three hours. A lead died, got stuck or never started. Or a live lead is slow: it sees the alarm only at its next check-in, within about 30 minutes.
-  1. **`LEAD-SILENT: state unreadable (…)`:** the state branch or its block is broken, not the lead. Check it: `state sync`, then `python3 room.py state get step --repo OWNER/NAME`. If the branch was deleted, have it restored before any lead joins: Matthew re-pushes it from a clone that still has it, or you run `state init` (5.1), which recreates it from the templates, and refill `PLAYBOOK.md` and `DESIGN.md`. The joining lead's `preflight --fix` (as `state init-lead`) then restores the lead-owned files as far as it can. Then go on with step 2.
+  1. **`LEAD-SILENT: state unreadable (…)`:** the state branch or its block is broken, not the lead. Check it: `state sync`, then `python3 room.py state get step --repo OWNER/NAME`. If the branch was deleted, restore it before any lead joins:
+     - **Re-push it from any copy that still has it,** preferably: your own state worktree, a lead's, or a fork or local clone of Matthew's. From yours (if GitHub refuses a shallow copy, use another):
+
+       ```bash
+       git -C ~/agent-room-state/OWNER__NAME push origin HEAD:refs/heads/agent-room/state
+       ```
+
+     - **Only if no copy exists:** run `state init` (5.1) and refill `PLAYBOOK.md` and `DESIGN.md`. Then post a `DECISION-n`, with `n` one above the room's highest `ESCALATION` or `MERGE-HOLD` number, telling the next lead to rebuild `MISSIONS.md` from the merged PRs and the room, and to set `counter=n`, `room=N` and `phase=<p>`.
+
+     Then go on with step 2.
   2. Read the room and `python3 room.py state get step --repo OWNER/NAME`. Tell Matthew where the build stopped.
   3. Wait for the lead's next check-in, until about 35 minutes after the alarm. Schedule `send_later` for then: "Check room N for a lead message after LEAD-SILENT." Without `send_later`, ask Matthew to come back then and say "check the room". If that time has passed, go on.
   4. Read the room again.
      - **Any lead message after the alarm** (a `STATUS`, a `LEAD ONLINE` or anything else): a lead is alive. Tell Matthew where it is; no new lead is needed.
-     - **None:** give him the takeover line:
+     - **None, but a lead `STATUS` or a push to the mission branch less than an hour old:** a lead running builders in the foreground can't check in until the builder returns. Wait one more check-in, about 35 minutes, then read again; still no lead message means the takeover line, below. The branch is under "Current mission" in `MISSIONS.md`; its newest commit time:
+
+       ```bash
+       gh api "repos/OWNER/NAME/commits?sha=<branch>&per_page=1" --jq '.[0].commit.committer.date'
+       ```
+
+     - **None, and nothing that recent:** give him the takeover line:
 
        ```bash
        python3 room.py join-line N --takeover --repo OWNER/NAME
@@ -390,7 +412,7 @@ Releases are immutable tags. Read `CHANGELOG.md` at the new tag first: its kind 
 1. Set `pipeline: <new version>` in `PLAYBOOK.md`. Commit.
 2. Update the watchdog task's prompt to the new version (`update_trigger`).
 3. Download `room.py` again at the new version.
-4. Tell Matthew the next mission's lead picks it up.
+4. Tell Matthew the next mission's lead picks it up. If a mission waits on this fix (a pipeline fault, 9.2), post its `DECISION-n` now instead: the running lead re-downloads.
 
 **Minor or major,** the single procedure:
 

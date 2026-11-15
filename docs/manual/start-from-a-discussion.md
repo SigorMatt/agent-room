@@ -43,4 +43,8 @@ You already discussed the project in an ordinary Claude chat, outside its Claude
 
 - The old chat doesn't start with "Operating as architect…": it didn't load the rules. Send the line in step 2.
 - The old chat keeps designing: that's for the Project chat. Tell it to commit the digest and stop.
-- The new chat doesn't find the digest: send `check the state branch for DIGEST.md`, and check the branch on GitHub ([Read the design and state on the state branch](read-the-state-branch.md)).
+- The new chat doesn't find the digest: send the line below, and check the branch on GitHub ([Read the design and state on the state branch](read-the-state-branch.md)).
+
+  ```text
+  check the state branch for DIGEST.md
+  ```

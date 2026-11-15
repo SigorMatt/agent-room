@@ -35,6 +35,11 @@ When a phase's playbook is approved and its environment needs are set. For the f
 
 ## If you don't
 
-- No `LEAD ONLINE` after about 10 minutes: check the session's repository and environment, then tell the architect `check the room`.
+- No `LEAD ONLINE` after about 10 minutes: check the session's repository and environment, then tell the architect
+
+  ```text
+  check the room
+  ```
+
 - The lead escalates a preflight `✗`: [Fix preflight](fix-preflight.md).
 - No first line in the lead session: the join line wasn't pasted whole, or agent-room is private.

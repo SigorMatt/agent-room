@@ -4,7 +4,7 @@
 
 ## When to use it
 
-Something in agent-room itself went wrong, or a manual page left you with a question. Every question you have to ask counts as a manual bug: the page gets fixed.
+Something in agent-room itself went wrong, or a manual page left you with a question. Every question you have to ask counts as a manual bug: the page gets fixed. Also when a lead escalates a pipeline fault: a gate line saying "the records can't fix this" ([Answer a buzz](answer-a-buzz.md), `ESCALATION-n`).
 
 ## What you need first
 

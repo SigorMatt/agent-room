@@ -28,5 +28,14 @@ At the end of each design session, and before you start a fresh architect chat. 
 
 ## If you don't
 
-- It reports an error committing: send `wrap up the session` again.
-- The new chat doesn't mention the note: ask it `What does HANDOFF.md say?`
+- It reports an error committing: send again
+
+  ```text
+  wrap up the session
+  ```
+
+- The new chat doesn't mention the note: ask it
+
+  ```text
+  What does HANDOFF.md say?
+  ```

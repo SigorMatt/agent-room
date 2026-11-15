@@ -31,4 +31,8 @@ After the `DONE` buzz, when you want the project to do more. The playbook gets a
 ## If you don't
 
 - Kickoff problems: [Kick off a phase and start its first lead](kick-off-a-phase.md), "If you don't".
-- The old room is still open: the last phase didn't finish. Ask the architect `check the room` for the old room's number.
+- The old room is still open: the last phase didn't finish. Send the architect, with the old room's number:
+
+  ```text
+  check the room N
+  ```
