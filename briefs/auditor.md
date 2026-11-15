@@ -31,7 +31,7 @@ You are the Auditor for the `<kind>` dispositions table `<table>` of mission `M<
 5. **Dismissals:** the reason is concrete and checkable (it cites code, a test or a behaviour), and checking it confirms it.
 6. **Deferrals:** `L-<n>` is in the ledger with this finding, a reason, and that target: a later mission of this phase, or a `phase <p> backlog`. An item deferred a second time must be an owner decision instead.
 7. **Owner decisions:** `DECISION-<n>` is in the room, from the architect or Matthew, and says what the row says. `pending (ESCALATION-<n>)` names an `ESCALATION-<n>` the lead posted.
-8. **Qodo only:** the machine lines above the table (`qodo:`, `fetches:`, `reviewed:`, and `no re-review:` when a round had none) match the archives. `Qodo now` is `open`, `resolved` or `absent`. `cold caught` is `yes`, `no` or `n/a`.
+8. **Qodo only:** the machine lines above the table (`qodo:`, `fetches:`, `reviewed:`, and `no re-review:` when a round had none) match the archives. `Qodo now` is `open`, `resolved` or `absent`. `cold caught` is `yes`, `yes (<ID>)` naming a cold finding that exists, `no` or `n/a`.
 
 Rows still pending an owner decision fail nothing here, but list them.
 
