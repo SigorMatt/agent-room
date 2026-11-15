@@ -822,6 +822,60 @@ def t_state_unreadable_alarms_are_capped():
     age_watchdog()
 
 
+def push_mission(hours, branch="mission/M1-greet"):
+    """Push BRANCH to a new commit on main, committed HOURS ago: progress outside the state branch."""
+    t, dated = ago(hours)
+    g("checkout", "-q", "-B", branch, "origin/main")
+    with open(os.path.join(CHECKOUT, "work.txt"), "w") as f:
+        f.write(f"{branch} {t} {time.time()}\n")
+    g("add", "-A")
+    g("commit", "-q", "-m", f"work on {branch}", **dated)
+    g("push", "-q", "-f", "origin", f"HEAD:refs/heads/{branch}")
+
+
+def drop_mission(branch="mission/M1-greet"):
+    g("push", "-q", "origin", "--delete", branch)
+    g("checkout", "-q", "-B", "main", "origin/main")
+
+
+def t_no_start_blocks_a_due_decision_start():
+    # cold M6b R1-8: --no-start turns off the decision start too, even when one is due
+    online()
+    age_watchdog()
+    room("say", "1", "lead", "ESCALATION-5: which colour?", "--no-buzz", check=True)
+    set_state("step=waiting for owner: spec 10")
+    room("lease", "release", check=True)  # parked
+    room("say", "1", "architect", "DECISION-5: blue", check=True, ROOM_SESSION="arch")
+    backdate(lambda c: "DECISION-5" in c["body"], 45)
+    nf, nc = len(fires()), len(comments())
+    r = watchdog("--no-start")
+    assert r.returncode == 0 and r.stdout.strip() == "quiet: step is waiting for owner: spec 10", out(r)
+    assert (len(fires()), len(comments())) == (nf, nc)
+    r = watchdog()  # it was due
+    assert "start: step is waiting for owner: spec 10" in r.stdout and len(fires()) == nf + 1, out(r)
+    online()
+    room("lease", "take", check=True)
+    set_state("step=build 10")
+
+
+def t_no_start_after_a_state_unreadable_alarm():
+    # cold M6b R1-8: no lead can write state either, so a start would only add a lead that can't work
+    push_mission(5)  # progress five hours ago, so the earlier state unreadable alarms belong to another stall
+    tip = without_state_branch()
+    try:
+        nf, nc = len(fires()), len(comments())
+        r = watchdog()
+        assert r.returncode == 0 and "alarm: state unreadable (agent-room/state doesn't exist in SigorMatt/pet)" in \
+            r.stdout and "start" not in r.stdout, out(r)
+        assert len(comments()) == nc + 1 and kind_of(comments()[-1]) == "LEAD-SILENT" and len(fires()) == nf
+        r = watchdog()
+        assert "already reports this stall" in r.stdout and len(fires()) == nf, out(r)
+    finally:
+        put_state_branch_back(tip)
+        drop_mission()
+    age_watchdog()
+
+
 setup()
 for name, fn in list(globals().items()):
     if name.startswith("t_"):
