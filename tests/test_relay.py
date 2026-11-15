@@ -747,6 +747,29 @@ def t_help_lists_the_variables():
         assert cmd in r.stdout, cmd
 
 
+# --- fixes after cold review round 1
+
+def t_done_with_the_lease_held_counts_as_running():
+    # cold M6b R1-5: the last lead wrote status=done and died before DONE and the close: a takeover finishes it
+    online()
+    age_watchdog()
+    set_state("status=done", "step=done", hours=5)  # L1 still holds the lease
+    nf = len(fires())
+    r = watchdog()
+    assert r.returncode == 0 and "note: status is done, but L1 still holds the lease" in r.stdout, out(r)
+    assert "alarm: no progress for 5h" in r.stdout and "started: https://claude.ai/code/" in r.stdout, out(r)
+    assert text_of(comments()[-1]).endswith("(takeover join line, started by watchdog)")
+    assert [request(x)["body"] for x in fires()[nf:]] == [{"text": JOIN.format(n=1, v="main") + TAKEOVER}]
+    online()
+    assert start("architect", "--takeover", ROOM_SESSION="arch").returncode == 0
+    room("lease", "release", check=True)  # done and released: the phase is over
+    online()
+    r = start("architect", ROOM_SESSION="arch")
+    assert r.returncode == 3 and "refused: status is done" in r.stderr, out(r)
+    room("lease", "take", check=True)
+    set_state("step=build 9")
+
+
 setup()
 for name, fn in list(globals().items()):
     if name.startswith("t_"):

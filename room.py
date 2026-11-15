@@ -3555,10 +3555,12 @@ def start_refusal(room, role, takeover, force, values, playbook):
         return f"room {room} is closed"
     status, holder = status_of(values).strip().lower(), lease_of(values)[0]
     own = (values.get("room") or "").strip()
-    if not (own.isdigit() and int(own) > 0 and int(own) != room):  # a status recorded for another room says nothing here
+    # a status recorded for another room says nothing here; a halted one with the lease still held counts as running,
+    # as in M4: the lead may have died between writing it and posting (cold M6b R1-5)
+    if not (own.isdigit() and int(own) > 0 and int(own) != room) and holder == "none":
         if status == "done":
-            return "status is done: the phase is over"
-        if status in ("paused", "stopped") and holder == "none" and role != "architect":
+            return "status is done and the lease is released: the phase is over"
+        if status in ("paused", "stopped") and role != "architect":
             return f"status is {status} and the lease is released: only the architect resumes, on Matthew's word"
     if holder != "none" and not takeover:
         return (f"the lease is held by {holder}: a lead is running, and a takeover (--takeover) is the watchdog's or "
