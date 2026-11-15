@@ -319,13 +319,15 @@ The lead sees them at its next check-in, within about 30 minutes. Neither gets a
   python3 room.py join-line N --repo OWNER/NAME
   ```
 
-- **`LEAD-SILENT`:** a lead died, got stuck, or never started. Read the room and `python3 room.py state get step --repo OWNER/NAME`, and tell Matthew where it stopped. Then give him the takeover line:
+- **`LEAD-SILENT`:** a lead died, got stuck, or never started, or a live lead made no progress. Read the room and `python3 room.py state get step --repo OWNER/NAME`.
+  - **A lead `STATUS` after the `LEAD-SILENT`:** the lead is alive and answered. Tell Matthew where it is; no new lead is needed.
+  - **Otherwise:** tell Matthew where it stopped, and give him the takeover line:
 
-  ```bash
-  python3 room.py join-line N --takeover --repo OWNER/NAME
-  ```
+    ```bash
+    python3 room.py join-line N --takeover --repo OWNER/NAME
+    ```
 
-  If the old lead's session is still open in the Code tab, he archives it first.
+    If the old lead's session is still open in the Code tab, he archives it first.
 
 Matthew starts the lead as in section 8, step 9. Never delete a lead's one-time scheduled task: deleting a task deletes the sessions it started. It disables itself after firing.
 

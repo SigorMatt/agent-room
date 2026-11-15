@@ -64,11 +64,12 @@ The lead merged the last mission and closed the room.
 
 ### `LEAD-SILENT`: no progress for three hours
 
-The watchdog saw nothing move. A lead died, got stuck or ran out of Claude usage, or the next one never started.
+The watchdog saw nothing move. A lead died, got stuck or ran out of Claude usage, or the next one never started. Or the lead is alive but made no progress: then it answers with a `STATUS`.
 
-1. The architect tells you where the build stopped, and gives you the **takeover line**. It ends with "Take over the lease … the previous lead stopped without handing over."
-2. If the old lead's session is still open in the Code tab, archive it.
-3. Start a lead with the takeover line: [Start the next lead by hand](start-the-next-lead-by-hand.md). Use a takeover line only after `LEAD-SILENT`.
+1. The architect reads the room. If a lead `STATUS` came after the `LEAD-SILENT`, the lead is alive: the architect tells you where it is, and you need no new lead. Stop here.
+2. Otherwise the architect tells you where the build stopped, and gives you the **takeover line**. It ends with "Take over the lease … the previous lead stopped without handing over."
+3. If the old lead's session is still open in the Code tab, archive it.
+4. Start a lead with the takeover line: [Start the next lead by hand](start-the-next-lead-by-hand.md). Use a takeover line only after `LEAD-SILENT`.
 
 ## What you should see
 
