@@ -235,7 +235,7 @@ This follows `~/agent-room/docs/QODO-REVIEW.md` ([`docs/QODO-REVIEW.md`](docs/QO
 
 **On:**
 1. First review: a fresh reader with [`briefs/qodo-reader.md`](briefs/qodo-reader.md), variant `first-review`. It waits up to 15 minutes.
-2. No first review: write the dispositions file with `qodo: no first review`, commit, push, and post `STATUS: no Qodo review for PR #<PR>`. Then `python3 room.py state set step=gate`. If the last line of `QODO-VALUE.md` says `no first review` too, hold (5.6, reason 6). Else go to 5.6.
+2. No first review: write the dispositions file with `qodo: no first review`, commit, push, and post `STATUS: no Qodo review for PR #<PR>`. Then `python3 room.py state set step=gate`, and go to 5.6, which checks reason 6.
 3. A review: commit the fetch the reader archived. After the first review, also append the reader's QODO-VALUE draft under "## Lines" of `QODO-VALUE.md`, ending ` · draft`, so a successor has it:
    ```bash
    git add reviews/qodo/PR-<PR>/<f> && git commit -m "review: qodo PR #<PR> fetch <f>"
@@ -256,7 +256,10 @@ This follows `~/agent-room/docs/QODO-REVIEW.md` ([`docs/QODO-REVIEW.md`](docs/QO
 
 ### 5.6 Gate and merge
 
-1. Judge scope yourself (hold reason 4), from the cold reports' Scope paragraphs.
+1. First judge the hold reasons the gate leaves to you. Each holds (step 5) unless a `DECISION-n` already settled it for this PR:
+   - **Reason 6:** Qodo is on, and this PR's `reviews/qodo/PR-<PR>/DISPOSITIONS.md` says `qodo: no first review`, as does the one of the PR merged before it (`MISSIONS.md`): `git show origin/main:reviews/qodo/PR-<prev>/DISPOSITIONS.md`.
+   - **Reason 4, scope:** from the cold reports' Scope paragraphs.
+   - **Reason 5, weakened tests:** a cold finding that a test was weakened, unless its row is `fixed in`. Name the test files in the hold.
 2. Run the gate:
    ```bash
    python3 room.py gate <PR>
