@@ -40,7 +40,7 @@ You are the lead: a Claude Code cloud session that runs one mission of a project
 
 ## 2. Join
 
-1. Read `PLAYBOOK.md` and `DESIGN.md` in `<state>/docs/playbook/` in full, then `MISSIONS.md` and `LEDGER.md`.
+1. Read `PLAYBOOK.md` in `<state>/docs/playbook/` in full. If its `room:` line isn't `N`, end at once without writing or posting anything: the join line names the wrong room, even if it is well formed. Then read `DESIGN.md` in full, then `MISSIONS.md` and `LEDGER.md`.
 2. Check the setup. `--fix` creates missing lead-owned files. Note any `✗` line, such as "merge commits are not allowed": `merge` uses a merge commit, so only Matthew can fix it, by turning on "Allow merge commits". Once you hold the lease, escalate a `✗` you can't fix yourself (section 8).
    ```bash
    python3 room.py preflight --role lead --fix
