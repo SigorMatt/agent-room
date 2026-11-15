@@ -36,7 +36,7 @@ Once, before your first project, in each Claude account that will run leads. Lea
 
 5. Save.
 
-Each project may add websites and secrets later ([Set up environment needs](set-up-environment-needs.md)). The environment is shared by all your projects.
+Each project may add websites and secrets later ([Set up environment needs](set-up-environment-needs.md)). Each project also adds one variable here at its first kickoff: its lead task's token, as `ROOM_FIRE_TOKEN_<NAME>` ([Set up the lead task](set-up-the-lead-task.md)). It's the one secret that goes in as a variable. The environment is shared by all your projects.
 
 ## What you should see
 
@@ -47,3 +47,4 @@ Each project may add websites and secrets later ([Set up environment needs](set-
 
 - No **New environment** in the app: use a browser.
 - A lead's checks later say `ROOM_NTFY_TOPIC is not set` or `QODO_REVIEW must be 'on' or 'off'`: fix the variable. Spell it exactly, with no spaces or quotes. A lead gets the variables when it starts, so the fix reaches the next lead.
+- A lead's checks say `lead task not configured`: the `ROOM_FIRE_TOKEN_<NAME>` line is missing or misspelt ([Set up the lead task](set-up-the-lead-task.md), step 9).

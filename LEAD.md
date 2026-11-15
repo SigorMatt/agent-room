@@ -103,7 +103,7 @@ Your session may have no background commands and no scheduling tools (a session 
    | 1 | Try once more; if it fails again, say so in your next `STATUS` |
 
 3. Subagents: start them in the background if the Agent tool offers that, then end your turn; you are woken as each one finishes. If it doesn't, run them one at a time in the foreground, and post a `STATUS` before each one: `python3 room.py say N lead "STATUS: builder for <task> running in the foreground"`.
-4. Never end a turn while you hold the lease, unless a subagent you started is still running. You end for good only by standing down, handing over, parking, `PAUSED`, `STOPPED` or `DONE`.
+4. Never end a turn while you hold the lease, unless a subagent you started is still running. You end for good only by standing down, handing over, parking, `PAUSED`, `STOPPED` or `DONE`, or as a drill says (section 10).
 5. **Park** when you wait only on Matthew. Record it so the watchdog stays quiet, and release the lease:
    ```bash
    python3 room.py state set waiting_for_owner=yes step="waiting for owner: <step>"

@@ -22,24 +22,25 @@ When a phase's playbook is approved and its environment needs are set. For the f
 2. The architect opens the room (a GitHub issue labelled `agent-room`), creates the watchdog (a scheduled task that buzzes you if no lead makes progress for three hours), and runs preflight.
    - Fix whatever it asks ([Fix preflight](fix-preflight.md)). If it asks you to turn on "Automatically delete head branches", see [Create the repo](create-the-repo.md), step 3.
    - If it says the watchdog's runs will ask for approval: open the scheduled task named `agent-room watchdog SigorMatt/<repo> room N` in the Claude app, and switch on **Automatically approve**.
-3. It asks whether the `agent-room` environment has `ROOM_NTFY_TOPIC`, `QODO_REVIEW`, and the playbook's websites and secrets. Say yes only when they're all there.
-4. It gives you the join line, starting `Join agent room N in SigorMatt/<repo> as lead`. Copy it whole.
-5. In the Claude app, open the **Code** tab and start a new session: repository `SigorMatt/<repo>`, environment `agent-room`. Paste the join line and send.
-6. Put the phone away. Only seven kinds of message buzz you ([Message kinds](message-kinds.md)).
+3. At a project's first kickoff only, it asks you to set up the lead task, and gives you the task's prompt. Do it on a computer: [Set up the lead task](set-up-the-lead-task.md). Later phases reuse the task.
+4. It asks whether the `agent-room` environment has `ROOM_NTFY_TOPIC`, `QODO_REVIEW`, the lead task's token, and the playbook's websites and secrets. Say yes only when they're all there.
+5. It starts the first lead itself, through the lead task. You may get an approval pop-up: approve it. If it can't start the lead, it gives you the join line, starting `Join agent room N in SigorMatt/<repo> as lead`: start the lead with that ([Start the next lead by hand](start-the-next-lead-by-hand.md)).
+6. Put the phone away. Only seven kinds of message buzz you ([Message kinds](message-kinds.md)). From now on, each lead starts the next.
 
 ## What you should see
 
-- The lead's first line: "Operating as lead under agent-room `<version>`."
-- In the room on GitHub, within about 10 minutes: `LEAD ONLINE`, then `PLAN` with the phase's missions. Neither buzzes.
+- In the room on GitHub: `LEAD-STARTED` with a link to the lead's session, then within about 10 minutes `LEAD ONLINE`, then `PLAN` with the phase's missions. None of them buzzes.
+- In the lead's session, its first line: "Operating as lead under agent-room `<version>`."
 - Later, `STATUS` lines as work finishes. Each mission ends as one merged pull request.
 
 ## If you don't
 
-- No `LEAD ONLINE` after about 10 minutes: check the session's repository and environment, then tell the architect
+- No `LEAD ONLINE` after about 15 minutes: tell the architect
 
   ```text
   check the room
   ```
 
+- The architect shows `! lead task not configured`: do step 3.
 - The lead escalates a preflight `✗`: [Fix preflight](fix-preflight.md).
-- No first line in the lead session: the join line wasn't pasted whole, or agent-room is private.
+- No first line in a lead session you started: the join line wasn't pasted whole, or agent-room is private.

@@ -32,6 +32,7 @@
    | `✗ ROOM_NTFY_TOPIC is not set` (lead) | Add it to the `agent-room` environment ([Create the `agent-room` cloud environment](create-the-cloud-environment.md)) |
    | `✗ QODO_REVIEW must be 'on' or 'off'` (lead) | Set `QODO_REVIEW=on` or `QODO_REVIEW=off` there |
    | `✗ lead-owned files` (lead) | The lead fixes this itself. If it escalates it: [Report a pipeline problem](report-a-pipeline-problem.md) |
+   | `! lead task not configured: a handover will post NEXT-LEAD-NEEDED` | At kickoff: the architect sets up the lead task with you ([Set up the lead task](set-up-the-lead-task.md)). From a lead: the task or its `ROOM_FIRE_TOKEN_<NAME>` variable is missing; check step 9 of that page |
 
    The `state init` line:
 

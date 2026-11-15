@@ -26,8 +26,9 @@ You want to change the design or the plan while a phase runs: a feature, a crite
 
 ## What you should see
 
-- `CHANGE-n`, then `ACK CHANGE-n` in the room. The lead checks the room about every 30 minutes, so the ACK can take that long. The architect tells you when to expect it.
+- `CHANGE-n`, then `ACK CHANGE-n` in the room. The lead reads the room when it finishes its current step, so the ACK can take a while: one helper can run long. The architect tells you when to expect it.
+- If the lead was waiting for your decision, no lead is running: the lead started after your decision reads the change and ACKs it.
 
 ## If you don't
 
-- No ACK after about 35 minutes: as for a decision ([Answer a buzz](answer-a-buzz.md), "If you don't").
+- No ACK when the architect said to expect it: as for a decision ([Answer a buzz](answer-a-buzz.md), "If you don't").

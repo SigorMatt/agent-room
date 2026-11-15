@@ -162,7 +162,7 @@ Fill the [template](templates/playbook/PLAYBOOK.md):
    - `watchdog: <task ID>`: set at kickoff.
    - `lead-task: <task ID>`: the scheduled task that starts leads. Set once per project, at the first kickoff (section 8, step 6).
    - `test: <command>`: one command that runs every test on a cloud machine.
-   - `drill: <value>`: only for a failure drill Matthew asks for, `stop-after-merge` or `no-handoff` (LEAD.md says what each does). The drill ends a lead early, so a `LEAD-SILENT` follows, and the watchdog's takeover lead. After the drill, remove the line and commit, before the next lead starts.
+   - `drill: <value>`: only for a failure drill Matthew asks for, `stop-after-merge` or `no-handoff` (LEAD.md says what each does). The drill ends a lead early, so a `LEAD-SILENT` follows, and the watchdog's takeover lead. After the drill, remove the line and commit, so it doesn't fire again at the next merge.
 2. **Phases:** a `### Phase <p>: <name>` heading, then `Goal: <one sentence>. Items: P<p>-1, P<p>-2. Mission budget: 8 hours.` The lead's `budget` command reads that phrase.
 3. **Items:** a `### P<p>-<i>: <title>` heading, then one checkbox per criterion, each naming the check that proves it. Mark the rest `(manual check for Matthew)`.
 4. **Merge-hold list:** one bullet per area, ``- <label>: `glob`, `glob` ``.
@@ -209,7 +209,7 @@ For the first phase and every later one. For a later phase, first add its `### P
 
    If the result says its runs will ask for approval, tell Matthew to switch the task to "Automatically approve" in its settings. The run inherits this chat's repos, so create it from this chat, after step 1 of Setup.
 5. Set `watchdog: <task ID>` in `PLAYBOOK.md`. Commit. At `DONE` you delete the task by this ID (9.7); a lead can't.
-6. **The lead task,** once per project. If `PLAYBOOK.md` has a `lead-task:` line, skip this step. Otherwise set it up with Matthew:
+6. **The lead task,** once per project. If `PLAYBOOK.md` has a `lead-task:` line, skip this step, unless that task is gone (deleted, or in Matthew's other account); then set it up again and replace the line. Otherwise set it up with Matthew:
    1. Print the task's prompt and give it to Matthew whole:
 
       ```bash
