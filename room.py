@@ -1456,7 +1456,8 @@ def cmd_preflight(a):
                     path, added = add_missing(LEAD_FILES, "agent-room: add lead files")
                     check("✓", f"lead-owned files exist (--fix created {', '.join(added) or 'none'})")
                 except (StateError, StateMoved) as e:
-                    check("✗", f"lead-owned files: --fix failed: {e or 'the state branch moved; run it again'}")
+                    why = str(e) or "the state branch moved; run it again"  # an exception is truthy even when empty
+                    check("✗", f"lead-owned files: --fix failed: {why}")
             elif missing:
                 check("✗", f"lead-owned files missing: {', '.join(missing)}: run '{ME} state init-lead', "
                            "or preflight --fix")

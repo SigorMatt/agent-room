@@ -1133,6 +1133,24 @@ def t_preflight_approving_reviews():
         assert "couldn't read ruleset 9" in line(r, "admin bypass"), r.stdout
 
 
+def t_preflight_fix_failure_says_why():
+    # qodo PR #6 "Preflight --fix failure prints no reason": a lost race says so
+    repo = bare("fixrace")
+    away = dict(cwd=tmp, ROOM_REPO="SigorMatt/fixrace", ROOM_STATE_REMOTE=repo)
+    room("state", "init", session="arch", state="fx-ARCH", **away)
+    room("state", "path", session="L1", state="fx-B", **away)
+    note = (f'cd "{tmp}" && export ROOM_SESSION=arch ROOM_STATE_DIR="{sdir("fx-ARCH")}" ROOM_REPO=SigorMatt/fixrace '
+            f'ROOM_STATE_REMOTE="{repo}"\n'
+            f'echo "- architect note" >> "{playbook_path("fx-ARCH", "HANDOFF.md")}"\n'
+            f'"{sys.executable}" "{ROOM}" state commit -m "handoff note" > "{{hooks}}/out" 2>&1\n')
+    with pre_push("fx-B", ONCE + note) as hooks:
+        r = room("preflight", "--role", "lead", "--fix", session="L1", state="fx-B", check=False, **away)
+        out = open(os.path.join(hooks, "out")).read()
+    assert "pushed" in out, out
+    assert r.returncode == 1, r.stdout
+    expect(r, "lead-owned files: --fix failed: the state branch moved; run it again", "✗")
+
+
 def t_preflight_lead():
     gh_cfg()
     r = room("preflight", "--role", "lead", ROOM_NTFY_TOPIC="t-secret", QODO_REVIEW="on")
