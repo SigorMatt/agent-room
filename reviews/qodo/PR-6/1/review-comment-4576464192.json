@@ -1,0 +1,71 @@
+{
+  "url": "https://api.github.com/repos/SigorMatt/agent-room/pulls/comments/4576464192",
+  "pull_request_review_id": 5908285741,
+  "id": 4576464192,
+  "node_id": "PRRC_kwDOVVYvuc8AAAABEMdNQA",
+  "diff_hunk": "@@ -132,21 +282,41 @@ def save_cursor(room, role, m):\n         json.dump({\"id\": m[\"id\"], \"at\": m[\"at\"]}, f)\n \n \n+def cursor_id(room, role):\n+    \"\"\"The ID of the last comment this role has read, or None.\"\"\"\n+    cur = load_cursor(room, role)\n+    return (cur or {}).get(\"id\") or None\n+\n+\n+def move_cursor(room, role, ref):\n+    \"\"\"Point ROLE's cursor at comment REF of this room, or at the room's start for 'none'.\"\"\"\n+    if ref == \"none\":\n+        save_cursor(room, role, {\"id\": 0, \"at\": None})\n+        return\n+    c = gh(f\"repos/{REPO}/issues/comments/{ref}\")\n+    if not (c.get(\"issue_url\") or \"\").endswith(f\"/issues/{room}\"):\n+        sys.exit(f\"comment {ref} is not in room {room}\")\n+    save_cursor(room, role, {\"id\": c[\"id\"], \"at\": c[\"created_at\"]})\n+\n+\n def unseen(room, role):\n     \"\"\"Messages from others this role hasn't seen; advances the cursor past them.\n \n-    With no cursor (new or wiped machine), everything after this role's own last\n-    message counts as unseen, so a restarted participant picks up where it left off.\n+    Others are everyone but this role in this session. With no cursor (new or wiped\n+    machine), everything after this participant's own last trusted message counts as\n+    unseen, so a restarted participant picks up where it left off, and a forged tag\n+    can't make it skip anything.\n     \"\"\"\n+    sid = session_id()\n     cur = load_cursor(room, role)\n-    msgs = [parse(c) for c in comments(room, cur[\"at\"] if cur else None)]\n+    msgs = [parse(c) for c in comments(room, (cur or {}).get(\"at\"))]\n     if cur:\n         after = cur[\"id\"]\n     else:\n-        mine = [m[\"id\"] for m in msgs if m[\"role\"] == role]\n+        mine = [m[\"id\"] for m in msgs if is_own(m, role, sid)]\n         after = max(mine) if mine else 0\n     fresh = [m for m in msgs if m[\"id\"] > after]\n-    others = [m for m in fresh if m[\"role\"] != role]\n+    others = [m for m in fresh if not is_own(m, role, sid)]",
+  "path": "room.py",
+  "commit_id": "870f10beea0d145859842b5a254b52c98d2cfb39",
+  "original_commit_id": "870f10beea0d145859842b5a254b52c98d2cfb39",
+  "user": {
+    "login": "qodo-code-review[bot]",
+    "id": 151058649,
+    "node_id": "BOT_kgDOCQD42Q",
+    "avatar_url": "https://avatars.githubusercontent.com/in/484649?v=4",
+    "gravatar_id": "",
+    "url": "https://api.github.com/users/qodo-code-review%5Bbot%5D",
+    "html_url": "https://github.com/apps/qodo-code-review",
+    "followers_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/followers",
+    "following_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/following{/other_user}",
+    "gists_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/gists{/gist_id}",
+    "starred_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/starred{/owner}{/repo}",
+    "subscriptions_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/subscriptions",
+    "organizations_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/orgs",
+    "repos_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/repos",
+    "events_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/events{/privacy}",
+    "received_events_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/received_events",
+    "type": "Bot",
+    "user_view_type": "public",
+    "site_admin": false
+  },
+  "body": "<img src=\"https://img.shields.io/badge/Medium-634FD1?style=flat-square\" height=\"20px\" alt=\"Remediation recommended\">\n\n4\\. One lead can hide messages from another <code>🐞 Bug</code> <code>≡ Correctness</code>\n\n<pre>\n<b><i>unseen</i></b> now distinguishes leads by session, but <b><i>cursor_file</i></b> still stores one cursor per room and\nrole. When two lead sessions share a machine, the first lead&#x27;s read advances the second lead&#x27;s\ncursor past architect messages that the second has not seen.\n</pre>\n\n\n<details>\n<summary><strong>Agent Prompt</strong></summary>\n\n```\n## Issue description\nTwo sessions of the same role share a cursor even though messages are now hidden per session.\n## Fix Focus Areas\n- room.py[266-288]\n- room.py[302-326]\n## Recommended Fix\nKey read and wait cursors by room, role, and validated session ID. Update cursor moves and reads consistently, with a deliberate migration path for existing role-only cursors.\n```\n\n<code>ⓘ Copy this prompt and use it to remediate the issue with your preferred AI generation tools</code>\n</details>\n\n[Dismiss ↗](https://app.qodo.ai/findings/4e50d753-0bf1-49c3-ba5e-45f3a02c30f0?action=dismiss&origin=git) | [View ↗](https://app.qodo.ai/findings/4e50d753-0bf1-49c3-ba5e-45f3a02c30f0)",
+  "created_at": "2026-11-15T00:53:35Z",
+  "updated_at": "2026-11-15T00:53:36Z",
+  "html_url": "https://github.com/SigorMatt/agent-room/pull/6#discussion_r4576464192",
+  "pull_request_url": "https://api.github.com/repos/SigorMatt/agent-room/pulls/6",
+  "_links": {
+    "self": {
+      "href": "https://api.github.com/repos/SigorMatt/agent-room/pulls/comments/4576464192"
+    },
+    "html": {
+      "href": "https://github.com/SigorMatt/agent-room/pull/6#discussion_r4576464192"
+    },
+    "pull_request": {
+      "href": "https://api.github.com/repos/SigorMatt/agent-room/pulls/6"
+    }
+  },
+  "reactions": {
+    "url": "https://api.github.com/repos/SigorMatt/agent-room/pulls/comments/4576464192/reactions",
+    "total_count": 0,
+    "+1": 0,
+    "-1": 0,
+    "laugh": 0,
+    "hooray": 0,
+    "confused": 0,
+    "heart": 0,
+    "rocket": 0,
+    "eyes": 0
+  },
+  "start_line": null,
+  "original_start_line": null,
+  "start_side": null,
+  "line": 319,
+  "original_line": 319,
+  "side": "RIGHT",
+  "author_association": "NONE",
+  "original_position": 300,
+  "position": 300,
+  "subject_type": "line",
+  "is_copilot_code_review": false,
+  "copilot_code_review_sources": []
+}

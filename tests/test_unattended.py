@@ -127,6 +127,26 @@ def edit_state(name, fn, hours=None, **env):
     return text
 
 
+def drop_closing_fence(text):
+    """MISSIONS.md TEXT without its machine block's closing fence, whatever the block's last key."""
+    end = text.index("\n```\n", text.index("```agent-room-state"))
+    return text[:end + 1] + text[end + 5:]
+
+
+def push_edit(name, fn, hours=None):
+    """Edit a playbook file on the state branch from another clone, as a hand edit on GitHub would (room.py's own
+    state commit refuses to break the machine block)."""
+    other = tempfile.mkdtemp(dir=tmp, prefix="edit-")
+    g("clone", "-q", "--branch", "agent-room/state", PET, other, cwd=tmp)
+    path = os.path.join(other, "docs", "playbook", name)
+    with open(path) as f:
+        text = fn(f.read())
+    with open(path, "w") as f:
+        f.write(text)
+    g("-C", other, "commit", "-qam", f"hand edit of {name}", **(ago(hours)[1] if hours is not None else {}))
+    g("-C", other, "push", "-q", "origin", "HEAD:agent-room/state")
+
+
 def gh_cfg(**cfg):
     with open(GH_CFG, "w") as f:
         json.dump(cfg, f)
@@ -219,6 +239,7 @@ def setup():
     room("state", "init-lead", check=True)
     room("lease", "take", check=True)
     assert "room 1 in SigorMatt/pet" in room("new", "Phase 1", check=True).stdout
+    room("say", "1", "lead", "LEAD ONLINE", check=True)  # a lead has joined room 1: the watchdog's usual rules apply
     set_state("mission=M1", "room=1")
     g("fetch", "-q", "origin")
     gh_cfg()
@@ -303,8 +324,8 @@ def t_watchdog_recent_step_change():
     set_state("step=cold round 1")
     n, before = len(alarms()), state_sha()
     r = watchdog()
-    assert r.returncode == 0 and re.search(r"^quiet: progress \d+s ago \(state change [0-9a-f]{12} at \S+\), under "
-                                           r"3h00m$", r.stdout, re.M), out(r)
+    assert r.returncode == 0 and re.search(r"^quiet: progress \d+s ago \(step or pr change [0-9a-f]{12} at \S+\), "
+                                           r"under 3h00m$", r.stdout, re.M), out(r)
     assert len(alarms()) == n and state_sha() == before
     t = set_state("step=cold round 2", hours=1)  # a step change written now, dated an hour ago
     r = watchdog()
@@ -338,7 +359,7 @@ def t_watchdog_recent_mission_push():
 def t_watchdog_progress_counts_the_merge_and_its_bookkeeping():
     # cold M4 R1-1: GitHub deletes a merged mission branch, and merge writes intent and pr but no step
     age_alarms()
-    set_state("step=gate", hours=5)
+    set_state("step=gate", "pr=12", hours=5)  # the lead records the PR it opened
     push_mission(0.1)
     assert "quiet: progress" in watchdog().stdout
     g("push", "-q", "origin", "--delete", MISSION_BRANCH)
@@ -354,13 +375,66 @@ def t_watchdog_progress_counts_the_merge_and_its_bookkeeping():
     assert "alarm: no progress for 5h" in r.stdout, out(r)
     age_alarms()
     gh_cfg()
-    set_state("intent=merge PR #12 at " + "b" * 40, "pr=12")  # merge's own state write, no step change
+    set_state("intent=merge PR #12 at " + "b" * 40, "pr=merged:12")  # merge's own state write, no step change
     r = watchdog()
-    assert "quiet: progress" in r.stdout and "(state change " in r.stdout, out(r)
+    assert "quiet: progress" in r.stdout and "(step or pr change " in r.stdout, out(r)
     set_state("intent=none", "pr=none", hours=5)
     set_state("cursor=77")  # reading the room is no progress
     r = watchdog()
     assert "alarm: no progress for 5h" in r.stdout, out(r)
+
+
+def t_watchdog_finds_a_merge_behind_many_prs():
+    # qodo PR #8 "Some recent merges trigger stall alarms": closed PRs are read per mission branch, page by page,
+    # so 150 PRs updated after the merge can't push it out of view
+    age_alarms()
+    set_state("step=gate 7", "mission=M7", hours=6)
+    edit_state("MISSIONS.md", lambda t: t.replace("| M1 | `mission/M1-<slug>` |", "| M7 | `mission/M7-big` |", 1),
+               hours=6)
+    merged = dict(state="closed", merged=True, merged_at=iso(time.time() - 600), merge_commit_sha="c" * 40)
+    others = {str(100 + i): pull(100 + i, f"feature/x{i}", state="closed") for i in range(150)}
+    gh_cfg(pulls=dict(others, **{"77": pull(77, "mission/M7-big", **merged)}))
+    r = watchdog()  # the branch is named in MISSIONS.md for the recorded mission
+    assert r.returncode == 0 and "quiet: progress" in r.stdout and "(PR #77 merged at" in r.stdout, out(r)
+    set_state("mission=M8", hours=6)  # no row for M8: the recorded PR leads to the branch
+    assert "(PR #77 merged at" not in watchdog().stdout
+    age_alarms()
+    set_state("pr=merged:77", hours=6)
+    assert "(PR #77 merged at" in watchdog().stdout
+    set_state("pr=none", hours=6)
+    push_mission(7, "mission/M9-left")  # a mission branch still on the remote (auto-delete off)
+    gh_cfg(pulls=dict(others, **{"78": pull(78, "mission/M9-left", **merged)}))
+    assert "(PR #78 merged at" in watchdog().stdout
+    g("push", "-q", "origin", "--delete", "mission/M9-left")
+    g("checkout", "-q", "-B", "main", "origin/main")
+    gh_cfg()
+    set_state("mission=M1", hours=6)
+
+
+def t_watchdog_alarms_on_a_lead_in_a_loop():
+    # cold M4 R2-3, the "a lead loops without progress" drill: only a step or pr change, a mission push or a mission
+    # PR's merge is progress; lease takes, same-step handoffs, intents, the counter and the cursor are chatter
+    age_alarms()
+    t = set_state("step=build 7", hours=5)
+    assert "alarm: no progress for 5h" in watchdog().stdout
+    age_alarms()
+    holder = "L1"
+    for successor in ("L2", "L3", "L1"):  # leads that join and hand over at the same step
+        room("handoff", "1", "--step", "build 7", "--cursor", "none", check=True, ROOM_SESSION=holder)
+        room("lease", "take", check=True, ROOM_SESSION=successor)
+        holder = successor
+    for i in range(2):  # a lead retrying the same task
+        room("intent", "1", "post STATUS", check=True)
+        room("say", "1", "lead", f"STATUS: retrying task 2 ({i})", check=True)
+        room("state", "next", "counter", check=True)
+        set_state(f"cursor={last_id()}", "intent=none")
+    r = watchdog()
+    assert r.returncode == 0 and "alarm: no progress for 5h" in r.stdout, out(r)
+    assert text_of(alarms()[-1]).startswith(f"LEAD-SILENT: no progress since {iso(t)} (step build 7, mission M1)")
+    # waiting for owner does not alarm
+    set_state("step=waiting for owner (ESCALATION-2)", hours=5)
+    assert watchdog().stdout.strip() == "quiet: step is waiting for owner (ESCALATION-2)"
+    set_state("step=build 8", "counter=0", hours=5)  # the counter back where the later tests expect it
 
 
 def t_watchdog_quiet_when_paused_stopped_or_done():
@@ -368,11 +442,17 @@ def t_watchdog_quiet_when_paused_stopped_or_done():
     set_state("step=build again", hours=5)
     for status in ("paused", "stopped", "done"):
         set_state(f"status={status}", hours=5)
+        # cold M4 R2-4: written but the lease still held: the lead died before its post and release, so alarm
+        r = watchdog()
+        assert r.returncode == 0 and "alarm: no progress for 5h" in r.stdout, out(r)
+        assert f"note: status is {status}, but L1 still holds the lease, so it counts as running" in r.stdout
+        age_alarms()
+        room("lease", "release", check=True)
         n, before = len(alarms()), state_sha()
         r = watchdog()
-        assert r.returncode == 0 and r.stdout.strip() == f"quiet: status is {status}", out(r)
+        assert r.returncode == 0 and r.stdout.strip() == f"quiet: status is {status} and the lease is released", out(r)
         assert len(alarms()) == n and state_sha() == before
-    set_state("status=running", hours=5)
+        room("lease", "take", check=True)  # which sets status back to running
     r = watchdog()
     assert r.returncode == 0 and "alarm" in r.stdout, out(r)
 
@@ -385,7 +465,7 @@ def t_pause_flow():
     assert "[buzz sent]" in r.stdout, out(r)
     assert "released by L1" in room("lease", "release", check=True).stdout
     assert block()["lease_session"] == "none" and block()["status"] == "paused"
-    assert watchdog().stdout.strip() == "quiet: status is paused"
+    assert watchdog().stdout.strip() == "quiet: status is paused and the lease is released"
     gen = int(block()["lease_generation"])
     # cold M4 R1-2: the next lead's plain take sets status back to running, in the same write
     before = state_sha()
@@ -415,11 +495,13 @@ def t_watchdog_status_values():
     for value in ("PAUSED", "Stopped", "done"):
         edit_state("MISSIONS.md", lambda t, v=value: re.sub(r"^status: .*$", f"status: {v}", t, count=1, flags=re.M),
                    hours=5)
+        room("lease", "release", check=True)
         n = len(alarms())
         r = watchdog()
-        assert r.returncode == 0 and r.stdout.strip() == f"quiet: status is {value}", (value, out(r))
+        assert r.returncode == 0 and r.stdout.strip() == f"quiet: status is {value} and the lease is released", \
+            (value, out(r))
         assert len(alarms()) == n
-    set_state("status=running", hours=5)
+        room("lease", "take", check=True)
 
 
 def t_watchdog_quiet_while_waiting_for_owner():
@@ -436,17 +518,79 @@ def t_watchdog_quiet_while_waiting_for_owner():
     for value in ("yes", "YES"):
         set_state("step=gate", f"waiting_for_owner={value}", hours=5)
         r = watchdog()
-        assert r.stdout.strip() == "quiet: waiting_for_owner is yes", out(r)
+        assert r.stdout.strip().startswith("quiet: waiting_for_owner is yes (set at "), out(r)
     assert len(alarms()) == n
     set_state("waiting_for_owner=no", hours=5)
     r = watchdog()
     assert "alarm" in r.stdout and len(alarms()) == n + 1, out(r)
 
 
+def t_waiting_for_owner_does_not_outlive_the_wait():
+    # cold M4 R2-1: a write that moves the step sets it back to no, unless that write sets it. (Lease take no longer
+    # does: qodo PR #8, below)
+    age_alarms()
+    set_state("step=gate", "waiting_for_owner=yes", hours=6)  # MERGE-HOLD posted
+    set_state("step=build", hours=5)  # DECISION sends the mission back to Build
+    assert block()["waiting_for_owner"] == "no"
+    assert "alarm" in watchdog().stdout
+    age_alarms()
+    set_state("step=gate 2", "waiting_for_owner=yes", hours=5)
+    assert block()["waiting_for_owner"] == "yes", "the write that moves the step also sets it"
+    set_state("step=gate 2", "intent=none", hours=5)
+    assert block()["waiting_for_owner"] == "yes", "the step didn't move"
+    room("handoff", "1", "--step", "gate 2", "--cursor", "none", check=True)
+    assert block()["waiting_for_owner"] == "yes", "a handoff at the same step keeps it"
+    # qodo PR #8 "A waiting successor gets a false silence alarm": the successor's take keeps the flag, so a wait
+    # still in progress past DURATION stays quiet
+    room("lease", "take", check=True, ROOM_SESSION="L2")
+    assert block()["waiting_for_owner"] == "yes" and block()["lease_session"] == "L2"
+    r = watchdog()
+    assert r.stdout.strip().startswith("quiet: waiting_for_owner is yes (set at "), out(r)
+    # the owner answers and the successor moves on: the step change ends the wait
+    room("state", "set", "step=build 2", check=True, ROOM_SESSION="L2", **ago(5)[1])
+    assert block()["waiting_for_owner"] == "no"
+    r = watchdog()
+    assert "alarm: no progress for 5h" in r.stdout, out(r)
+    room("lease", "release", check=True, ROOM_SESSION="L2")
+    room("lease", "take", check=True)
+    assert block()["waiting_for_owner"] == "no", "nor does a take set it"
+
+
+def t_waiting_for_owner_mutes_only_until_progress():
+    # cold M4 S1-1: merge's pr write ends the wait, and any progress after the flag was set makes it stale
+    age_alarms()
+    set_state("step=gate", hours=7)
+    set_state("waiting_for_owner=yes", hours=7)  # MERGE-HOLD posted; then DECISION approves it
+    set_state("intent=merge PR #12 at " + "b" * 40, hours=6)
+    set_state("intent=none", "pr=merged:12", hours=6)  # merge's writes; the lead ends right after
+    assert block()["waiting_for_owner"] == "no", "the pr write ends the wait"
+    r = watchdog()
+    assert "alarm: no progress for 6h" in r.stdout, out(r)
+    age_alarms()
+    set_state("step=build 3", "pr=none", hours=9)
+    set_state("waiting_for_owner=yes", hours=8.5)  # ESCALATION posted; DECISION answers in place
+    push_mission(7)
+    push_mission(5)  # the lead keeps building at the same step, pushes, and dies an hour later
+    assert block()["waiting_for_owner"] == "yes"
+    r = watchdog()
+    assert "note: waiting_for_owner is yes, but mission/M1-greet pushed at" in r.stdout and "so it is stale" in \
+        r.stdout and "alarm: no progress for 5h" in r.stdout, out(r)
+    age_alarms()
+    set_state("waiting_for_owner=no", hours=4.5)
+    set_state("waiting_for_owner=yes", hours=4)  # set after the last progress: it mutes
+    r = watchdog()
+    assert r.stdout.strip().startswith("quiet: waiting_for_owner is yes (set at ") and \
+        r.stdout.strip().endswith(", no progress since)"), out(r)
+    set_state("waiting_for_owner=no", hours=4)
+    g("push", "-q", "origin", "--delete", MISSION_BRANCH)
+    g("checkout", "-q", "-B", "main", "origin/main")
+
+
 def t_watchdog_quiet_for_another_room():
     # cold M4 R1-10: a watchdog left over from an earlier phase stays quiet, and says why
     age_alarms()
     assert "room 2 in SigorMatt/pet" in room("new", "Phase 2", check=True).stdout
+    room("say", "2", "lead", "LEAD ONLINE", "--no-buzz", check=True)
     set_state("room=2", "step=spec 2", hours=5)
     n = len(alarms())
     r = watchdog()
@@ -456,13 +600,18 @@ def t_watchdog_quiet_for_another_room():
     r = room("watchdog", "2", ROOM_SESSION="wd")
     assert r.returncode == 0 and "alarm" in r.stdout and "LEAD-SILENT" in text_of(comments("2")[-1]), out(r)
     assert len(alarms()) == n
-    # with no room in the block, PLAYBOOK.md's decides
-    set_state("room=0", hours=5)
+    # cold M4 R2-2: PLAYBOOK.md's room comes first, as in the gate: at a phase's kickoff the architect records the
+    # new room there while the block still names the old one, and the new phase's watchdog is the current one
+    set_state("room=1", hours=5)
     original = edit_state("PLAYBOOK.md", lambda t: re.sub(r"^room: .*$", "room: 2", t, count=1, flags=re.M), hours=5)
     r = watchdog()
-    assert "quiet: room 1 is not the current room (PLAYBOOK.md records room 2)" in r.stdout, out(r)
+    assert r.stdout.strip() == ("quiet: room 1 is not the current room (PLAYBOOK.md records room 2); this watchdog "
+                                "is left from an earlier phase: delete it"), out(r)
+    backdate(lambda c: "role=watchdog" in c["body"], 10, n="2")
+    r = room("watchdog", "2", ROOM_SESSION="wd")
+    assert r.returncode == 0 and "alarm" in r.stdout, out(r)
     edit_state("PLAYBOOK.md", lambda t: original, hours=5)
-    set_state("room=1", hours=5)
+    assert "room 1 is not the current room" not in watchdog().stdout, "PLAYBOOK.md's room: 0 names no room"
 
 
 def t_watchdog_missing_status_reads_running():
@@ -493,6 +642,110 @@ def t_watchdog_without_a_checkout():
     assert state_sha() == before
     r = watchdog(**kw)
     assert "already reports this stall" in r.stdout, out(r)
+
+
+def t_watchdog_reads_the_last_valid_block():
+    # cold M4 R2-5: with the pushed block damaged by a hand edit, the last valid one stands in, and breaking it is
+    # no progress
+    age_alarms()
+    t = set_state("step=build 9", hours=6)
+    # damage by B-3's strict rules: an info string that isn't exactly agent-room-state, and then no closing fence
+    # (a space after the backticks, by contrast, is still a valid fence)
+    for damage in (lambda s: s.replace("```agent-room-state\n", "```agent-room-state  # hand edit\n", 1),
+                   drop_closing_fence):
+        push_edit("MISSIONS.md", damage, hours=5)
+        r = watchdog()
+        assert r.returncode == 0 and "note: docs/playbook/MISSIONS.md has no valid agent-room-state block" in \
+            r.stdout and "its last valid block" in r.stdout, out(r)
+        assert "alarm: no progress for 6h" in r.stdout, out(r)
+        assert text_of(alarms()[-1]).startswith(f"LEAD-SILENT: no progress since {iso(t)} (step build 9, mission M1)")
+        set_state("step=build 10", hours=5)  # the holder's next write restores the block
+        assert block()["step"] == "build 10"
+        t = set_state("step=build 9", hours=6)
+        age_alarms()
+    set_state("step=build 10", hours=5)
+
+
+def t_watchdog_alarms_when_there_is_no_state():
+    # cold M4 R2-5: no state branch at all is a stuck pipeline too: an alarm that buzzes, deduped like the others
+    age_alarms()
+    tip = state_sha()
+    g("--git-dir", PET, "update-ref", "-d", "refs/heads/agent-room/state")
+    try:
+        n, nb = len(alarms()), len(buzzes())
+        r = watchdog(ROOM_NTFY_TOPIC=None)
+        assert r.returncode == 0 and "alarm: state unreadable (" in r.stdout, out(r)
+        text = text_of(alarms()[-1])
+        assert text == ("LEAD-SILENT: state unreadable (agent-room/state doesn't exist in SigorMatt/pet) (buzz "
+                        "failed: ROOM_NTFY_TOPIC is not set)"), text
+        # its buzz failed, so the next run, here another session with no state worktree yet, tries again
+        fresh = dict(cwd=tmp, ROOM_STATE_DIR=os.path.join(tmp, "state", "W2"), ROOM_STATE_REMOTE=PET)
+        r = watchdog(**fresh)
+        assert "alarm: state unreadable (agent-room/state doesn't exist in SigorMatt/pet)" in r.stdout, out(r)
+        assert text_of(alarms()[-1]).endswith(" (buzz sent)") and ROOM not in text_of(alarms()[-1]), "no local paths"
+        assert len(alarms()) == n + 2 and len(buzzes()) == nb + 1
+        for _ in range(2):  # one alarm per stall, however long it lasts
+            r = watchdog(**fresh)
+            assert r.returncode == 0 and "already reports this stall" in r.stdout, out(r)
+            age_alarms()
+        assert len(alarms()) == n + 2
+    finally:
+        g("--git-dir", PET, "update-ref", "refs/heads/agent-room/state", tip)
+    assert block()["step"] == "build 10"
+
+
+def t_lost_state_branch_alarms_after_a_stall_alarm():
+    # qodo PR #8 "A lost state branch gets no new alarm": an ordinary stall alarm doesn't report the state branch
+    # going missing afterwards; only an earlier "state unreadable" alarm does
+    age_alarms()
+    set_state("step=build 11", hours=6)
+    push_mission(5)  # outside progress, so the unreadable-state check has a time to measure from
+    r = watchdog()
+    assert "alarm: no progress for 5h" in r.stdout, out(r)
+    tip = state_sha()
+    g("--git-dir", PET, "update-ref", "-d", "refs/heads/agent-room/state")
+    try:
+        n = len(alarms())
+        r = watchdog()
+        assert "alarm: state unreadable (agent-room/state doesn't exist in SigorMatt/pet)" in r.stdout, out(r)
+        r = watchdog()
+        assert "already reports this stall" in r.stdout and len(alarms()) == n + 1, out(r)
+    finally:
+        g("--git-dir", PET, "update-ref", "refs/heads/agent-room/state", tip)
+    g("push", "-q", "origin", "--delete", MISSION_BRANCH)
+    g("checkout", "-q", "-B", "main", "origin/main")
+
+
+FLAKY_GIT =os.path.join(tmp, "flaky-bin")  # a git whose fetch fails, as a connection dropped through the proxy would
+os.makedirs(FLAKY_GIT)
+with open(os.path.join(FLAKY_GIT, "git"), "w") as f:
+    f.write(f'#!/bin/sh\nif [ "$1" = fetch ]; then\n'
+            '  echo "error: RPC failed; curl 56 Recv failure: Connection reset by peer" >&2; exit 128\nfi\n'
+            f'exec "{shutil.which("git")}" "$@"\n')
+os.chmod(os.path.join(FLAKY_GIT, "git"), 0o755)
+
+
+def t_watchdog_retries_a_transient_failure():
+    # cold M4 S1-2: a fetch that fails on the network is no missing state: exit 1, post nothing, retry next run
+    age_alarms()
+    flaky = dict(PATH=FLAKY_GIT + os.pathsep + ENV["PATH"])
+    push_mission(4)
+    set_state("step=cold round 3", hours=0.5)  # a healthy lead
+    n, nb = len(alarms()), len(buzzes())
+    r = watchdog(**flaky)
+    assert r.returncode == 1 and "no alarm: the next run tries again" in r.stderr and "RPC failed" in r.stderr, out(r)
+    set_state("status=paused", hours=5)
+    room("lease", "release", check=True)
+    assert watchdog(**flaky).returncode == 1, "nor on a paused phase"
+    room("lease", "take", check=True)
+    assert len(alarms()) == n and len(buzzes()) == nb
+    # so when the lead really stalls, the next run alarms: no false alarm took that place
+    t = set_state("step=cold round 4", hours=3.5)
+    r = watchdog()
+    assert "alarm: no progress for 3h" in r.stdout and len(alarms()) == n + 1, out(r)
+    assert text_of(alarms()[-1]).startswith(f"LEAD-SILENT: no progress since {iso(t)}")
+    g("push", "-q", "origin", "--delete", MISSION_BRANCH)
+    g("checkout", "-q", "-B", "main", "origin/main")
 
 
 # --- join-line
@@ -552,8 +805,8 @@ def t_handoff():
     assert w.returncode == 0 and "CHANGE-8" in w.stdout, out(w)
     assert room("cursor", "1", "lead", check=True).stdout.strip() != cursor
     gen = block()["lease_generation"]
-    snap = os.path.join(tmp, "room-at-push.json")
-    pre_push(f'cp "$FAKE_GH_DB" "{snap}"\nexit 0\n')
+    snaps = tempfile.mkdtemp(dir=tmp, prefix="room-at-push-")  # the room as each state push found it
+    pre_push(f'cp "$FAKE_GH_DB" "{snaps}/$(ls "{snaps}" | wc -l | tr -d " ").json"\nexit 0\n')
     try:
         r = room("handoff", "1", "--step", "spec", "--cursor", cursor)
     finally:
@@ -564,16 +817,18 @@ def t_handoff():
     assert "NEXT-LEAD-NEEDED" in r.stdout and "[buzz" not in r.stdout, "HANDOFF names the fallback and doesn't buzz"
     h = comments()[-1]
     assert tag(h) == ("lead", "L1") and text_of(h).splitlines()[0] == "HANDOFF: mission M2, next step spec", h
-    # posted while the lease was held: the room already had it when the state write was pushed
-    with open(snap) as f:
-        at_push = json.load(f)["repos"]["SigorMatt/pet"]["issues"]["1"]["comments"]
-    assert h["id"] in [c["id"] for c in at_push]
-    b, prev = block(), block("agent-room/state~1")
+    # qodo PR #8 "A failed handoff leaves a false notice": (a) the record write, (b) HANDOFF, (c) the release
+    at_push = []
+    for i in (0, 1):
+        with open(os.path.join(snaps, f"{i}.json")) as f:
+            at_push.append([c["id"] for c in json.load(f)["repos"]["SigorMatt/pet"]["issues"]["1"]["comments"]])
+    assert len(os.listdir(snaps)) == 2 and h["id"] not in at_push[0] and h["id"] in at_push[1], at_push
+    b, rec, prev = block(), block("agent-room/state~1"), block("agent-room/state~2")
     assert b["step"] == "spec" and b["cursor"] == cursor and b["intent"] == "none", b
     assert b["lease_session"] == "none" and b["lease_generation"] == gen, b
-    # one state write: the commit before it is the lease still held, and only these keys changed
-    assert prev["lease_session"] == "L1" and prev["step"] == "gate", prev
-    assert {k for k in b if b[k] != prev.get(k)} == {"step", "cursor", "intent", "lease_session"}
+    assert rec["lease_session"] == "L1" and prev["step"] == "gate", (rec, prev)
+    assert {k for k in rec if rec[k] != prev.get(k)} == {"step", "cursor", "intent"}, "recorded, the lease held"
+    assert {k for k in b if b[k] != rec.get(k)} == {"lease_session"}, "then released, after the post"
     assert "handoff" in g("--git-dir", PET, "log", "-1", "--format=%s", "agent-room/state").stdout
 
 
@@ -628,6 +883,32 @@ def t_handoff_retries_when_the_branch_moves():
     room("lease", "take", check=True)
 
 
+def t_handoff_failures_leave_no_false_notice():
+    # qodo PR #8 "A failed handoff leaves a false notice": a failed record write posts nothing; a failed release
+    # after the post says so and exits 1, and the release can be run again
+    set_state("step=build 12")
+    before, n = block(), len(comments())
+    pre_push("exit 1\n")  # every push refused, not a race
+    try:
+        r = room("handoff", "1", "--step", "spec 12", "--cursor", "none")
+    finally:
+        no_hooks()
+    assert r.returncode == 1 and len(comments()) == n and block() == before, out(r)
+    assert g("-C", STATE_DIR, "status", "--porcelain").stdout == "" and \
+        g("-C", STATE_DIR, "rev-parse", "HEAD").stdout.strip() == state_sha(), "no unpushed commit is left behind"
+    pre_push('n=$(cat "$0.count" 2>/dev/null || echo 0); echo $((n + 1)) > "$0.count"\n[ "$n" -ge 1 ] && exit 1\nexit 0\n')
+    try:  # the record write passes, the release is refused
+        r = room("handoff", "1", "--step", "spec 12", "--cursor", "none")
+    finally:
+        no_hooks()
+    assert r.returncode == 1 and "lease not released: git push" in r.stderr, out(r)
+    assert f"HANDOFF is posted; run 'python3 {ROOM} lease release' again" in r.stderr, out(r)
+    assert len(comments()) == n + 1 and text_of(comments()[-1]).startswith("HANDOFF: mission M2, next step spec 12")
+    assert block()["step"] == "spec 12" and block()["lease_session"] == "L1"
+    assert "released by L1" in room("lease", "release", check=True).stdout
+    room("lease", "take", check=True)
+
+
 def t_successor_take_survives_an_unrelated_write():
     # cold M4 R1-7, fixed by cold M2 R2-5: after a handoff, a successor whose plain take loses its push to the
     # architect's write retries and wins, instead of standing down with no lead running
@@ -661,7 +942,7 @@ def reconcile(n="1", **env):
 
 
 def hint(r):
-    lines = [ln for ln in r.stdout.splitlines() if re.match(r"intent (done|not done|unknown):", ln)]
+    lines = [ln for ln in r.stdout.splitlines() if re.match(r"intent (done|not done|unknown|from an earlier room):", ln)]
     assert len(lines) == 1, out(r)
     return lines[0]
 
@@ -764,9 +1045,9 @@ def intent(text, **env):
 
 def t_intent_command():
     # cold M4 R1-13, R1-14: a post intent records the room's last comment ID; other intents are recorded as given
-    assert intent("post ESCALATION-7: which greeting?") == f"post ESCALATION-7 after #{last_id()}"
+    assert intent("post ESCALATION-7: which greeting?") == f"post ESCALATION-7 in room 1 after #{last_id()}"
     assert intent("merge PR #12 at " + "a" * 40) == "merge PR #12 at " + "a" * 40
-    assert intent("close room") == "close room"
+    assert intent("close room") == f"close room 1 after #{last_id()}"
     assert intent("none") == "none"
     before = state_sha()
     for bad, code, why in (("post nothing here", 1, "names the message kind"), ("", 1, "say what is about to happen"),
@@ -783,12 +1064,12 @@ def t_reconcile_post_intent():
     intent(f"post ESCALATION-{n}")
     r = reconcile()
     assert f"\ncounter {n}: neither ESCALATION-{n} nor MERGE-HOLD-{n} is in the room\n" in r.stdout, out(r)
-    assert hint(r) == f"intent not done: redo it (no ESCALATION-{n} in the room after #{last_id()})", out(r)
+    assert hint(r) == f"intent not done: redo it (no ESCALATION-{n} in room 1 after #{last_id()})", out(r)
     room("say", "1", "lead", f"ESCALATION-{n}: which greeting?", check=True)
     esc = comments()[-1]["id"]
     r = reconcile()
     assert f"\ncounter {n}: ESCALATION-{n} is in the room (#{esc}), no DECISION-{n} yet\n" in r.stdout, out(r)
-    assert hint(r) == f"intent done: clear it (ESCALATION-{n} is in the room: #{esc})", out(r)
+    assert hint(r) == f"intent done: clear it (ESCALATION-{n} is in room 1: #{esc})", out(r)
     room("say", "1", "architect", f"DECISION-{n}: say hello", check=True, ROOM_SESSION="arch")
     dec = comments()[-1]["id"]
     assert f"(#{esc}), answered by DECISION-{n} (#{dec})" in reconcile().stdout
@@ -802,24 +1083,41 @@ def t_reconcile_post_intent():
     # a kind without a number: only a post after the recorded comment counts
     room("say", "1", "lead", "PLAN: M1 to M3", check=True)
     intent("post PLAN")
-    assert hint(reconcile()) == f"intent not done: redo it (no PLAN in the room after #{last_id()})"
+    assert hint(reconcile()) == f"intent not done: redo it (no PLAN in room 1 after #{last_id()})"
     room("say", "1", "lead", "PLAN: M1 to M4, re-planned", check=True)
-    assert hint(reconcile()) == f"intent done: clear it (PLAN is in the room: #{last_id()})"
+    assert hint(reconcile()) == f"intent done: clear it (PLAN is in room 1: #{last_id()})"
     # cold M4 R1-13: no clocks: an intent committed by a lead whose clock runs 3 minutes ahead
     t, ahead = ago(-0.05)
     intent("post PAUSED", **ahead)
     room("say", "1", "lead", "PAUSED: at a safe point", "--no-buzz", check=True)
-    assert hint(reconcile()) == f"intent done: clear it (PAUSED is in the room: #{last_id()})"
+    assert hint(reconcile()) == f"intent done: clear it (PAUSED is in room 1: #{last_id()})"
     # cold M4 R1-14: recording the same intent again after a post of its kind is a new intent, not done yet
     first = intent("post STATUS")
     room("say", "1", "lead", "STATUS: task 2 done", check=True)
-    assert hint(reconcile()).startswith("intent done: clear it (STATUS is in the room")
+    assert hint(reconcile()).startswith("intent done: clear it (STATUS is in room 1")
     again = intent("post STATUS")
-    assert again == f"post STATUS after #{last_id()}" and again != first
-    assert hint(reconcile()) == f"intent not done: redo it (no STATUS in the room after #{last_id()})"
+    assert again == f"post STATUS in room 1 after #{last_id()}" and again != first
+    assert hint(reconcile()) == f"intent not done: redo it (no STATUS in room 1 after #{last_id()})"
     # set by hand without an ID, a kind without a number can't be judged
     set_state("intent=post STATUS")
     assert hint(reconcile()).startswith("intent unknown: which STATUS? Record post intents with")
+    set_state("intent=none")
+
+
+def t_intent_names_its_room():
+    # cold M4 R2-7: intent refuses a room that isn't the current one, and a post intent names its room, which
+    # reconcile checks whichever room it runs for
+    before = state_sha()
+    r = room("intent", "2", "post STATUS")
+    assert r.returncode == 1 and "not recorded: room 2 is not the current room (MISSIONS.md records room 1)" in \
+        r.stderr, out(r)
+    assert state_sha() == before
+    room("say", "2", "lead", "PLAN: the old phase's last word", "--no-buzz", check=True)
+    set_state(f"intent=post STATUS in room 2 after #{last_id('2')}")  # as recorded while room 2 was current
+    room("say", "1", "lead", "STATUS: posted in room 1", check=True)  # a later comment ID, in another room
+    assert hint(reconcile()) == f"intent not done: redo it (no STATUS in room 2 after #{last_id('2')})"
+    room("say", "2", "lead", "STATUS: posted in room 2", "--no-buzz", check=True)
+    assert hint(reconcile()) == f"intent done: clear it (STATUS is in room 2: #{last_id('2')})"
     set_state("intent=none")
 
 
@@ -829,16 +1127,28 @@ def t_reconcile_close_room_intent():
     set_state("intent=close room")
     assert hint(reconcile("3")) == "intent not done: redo it (room 3 is open)"
     room("close", "3", "lead", "DONE: phase 3", check=True)
-    assert hint(reconcile("3")) == f"intent done: clear it (room 3 is closed, closing note #{comments('3')[-1]['id']})"
+    assert hint(reconcile("3")) == f"intent done: clear it (room 3 is closed, closing DONE #{comments('3')[-1]['id']})"
     # cold M4 R1-12: close closes the issue, then posts; a lead that dies in between leaves no DONE
     subprocess.run([os.path.join(BIN, "gh"), "api", "-X", "PATCH", "repos/SigorMatt/pet/issues/4", "--input", "-"],
                    input=json.dumps({"state": "closed"}), env=ENV, capture_output=True, text=True, check=True)
-    assert hint(reconcile("4")) == "intent not done: redo it (room 4 is closed, but no lead message came after it closed)"
+    missing = "intent not done: redo it (room 4 is closed, but no lead DONE or STOPPED came after it closed)"
+    assert hint(reconcile("4")) == missing
     room("say", "4", "architect", "DECISION-1: not the closing note", check=True, ROOM_SESSION="arch")
     room("say", "4", "lead", "DONE: phase 4", "--no-buzz", check=True, FAKE_GH_LOGIN="mallory")
-    assert hint(reconcile("4")).startswith("intent not done: redo it (room 4 is closed, but no lead message")
-    room("close", "4", "lead", "DONE: phase 4", check=True)  # the redo: closing again is harmless
-    assert hint(reconcile("4")) == f"intent done: clear it (room 4 is closed, closing note #{comments('4')[-1]['id']})"
+    assert hint(reconcile("4")) == missing
+    # cold M4 R2-6: a later lead's LEAD ONLINE or STATUS in the closed room isn't the closing note either
+    room("say", "4", "lead", "LEAD ONLINE", check=True)
+    room("say", "4", "lead", "STATUS: redoing the close", check=True)
+    assert hint(reconcile("4")) == missing
+    room("close", "4", "lead", "STOPPED: halted on STOP", check=True)  # the redo: closing again is harmless
+    assert hint(reconcile("4")) == f"intent done: clear it (room 4 is closed, closing STOPPED #{comments('4')[-1]['id']})"
+    # cold M4 S1-3: intent records which room it closes; left in the block, it is judged against that room only
+    assert intent("close the room") == f"close room 1 after #{last_id()}"
+    assert hint(reconcile("1")) == "intent not done: redo it (room 1 is open)"
+    assert hint(reconcile("4")) == "intent from an earlier room: clear it (close room 1; this is room 4)"
+    set_state("intent=close room 4")
+    assert hint(reconcile("4")).startswith("intent done: clear it (room 4 is closed, closing STOPPED")
+    set_state("intent=none")
 
 
 def t_reconcile_unknown_intent_status_and_drill():
@@ -899,6 +1209,86 @@ def t_budget_phrasings():
     finally:
         edit_state("PLAYBOOK.md", lambda t: original)
     set_state("mission_started=none")
+
+
+def opened(n, hours):
+    """Make room N's issue look opened HOURS ago."""
+    db = load_db()
+    db["repos"]["SigorMatt/pet"]["issues"][n]["created_at"] = iso(time.time() - hours * 3600)
+    with open(DB, "w") as f:
+        json.dump(db, f)
+
+
+def t_watchdog_before_any_lead_joins():
+    # cold M4 S1-4, S1-5: until a trusted lead posts LEAD ONLINE in room N, the watchdog is quiet with a note,
+    # whatever the state says or lacks; 12 hours after the room was opened it alarms, once
+    assert "room 5 in SigorMatt/pet" in room("new", "Phase 5", check=True).stdout
+    original = edit_state("PLAYBOOK.md", lambda t: re.sub(r"^room: .*$", "room: 5", t, count=1, flags=re.M), hours=6)
+    set_state("step=gate 5", "status=done", hours=6)  # the previous phase ended, as the spec says
+    room("lease", "release", check=True)
+    r = room("watchdog", "5", ROOM_SESSION="wd")
+    assert r.returncode == 0 and r.stdout.strip().startswith("quiet: no lead has joined room 5 yet (opened "), out(r)
+    tip = state_sha()  # at phase 1's kickoff there is no MISSIONS.md yet: no alarm for that either
+    g("--git-dir", PET, "update-ref", "-d", "refs/heads/agent-room/state")
+    try:
+        r = room("watchdog", "5", ROOM_SESSION="wd")
+        assert r.returncode == 0 and r.stdout.strip().startswith("quiet: no lead has joined room 5 yet"), out(r)
+    finally:
+        g("--git-dir", PET, "update-ref", "refs/heads/agent-room/state", tip)
+    room("say", "5", "lead", "LEAD ONLINE", "--no-buzz", check=True, FAKE_GH_LOGIN="mallory")  # doesn't count
+    opened("5", 13)
+    r = room("watchdog", "5", ROOM_SESSION="wd")
+    assert r.returncode == 0 and "alarm: no lead has joined room 5 in 12h" in r.stdout, out(r)
+    assert text_of(comments("5")[-1]) == "LEAD-SILENT: no lead has joined room 5 in 12h (buzz sent)"
+    n = len(comments("5"))
+    r = room("watchdog", "5", ROOM_SESSION="wd")
+    assert "quiet: no lead has joined room 5 yet; LEAD-SILENT #" in r.stdout and len(comments("5")) == n, out(r)
+    # once a lead has joined, the usual rules apply, and the block's status for room 1 says nothing of room 5
+    room("say", "5", "lead", "LEAD ONLINE", "--no-buzz", check=True)
+    backdate(lambda c: "role=watchdog" in c["body"], 10, n="5")
+    r = room("watchdog", "5", ROOM_SESSION="wd")
+    assert "note: status is done, but for room 1, not the current room 5, so it counts as running" in r.stdout and \
+        "alarm: no progress for 6h" in r.stdout, out(r)
+    edit_state("PLAYBOOK.md", lambda t: original, hours=6)
+    room("lease", "take", check=True)
+
+
+def t_close_room_intent_counts_a_done_before_the_close():
+    # qodo PR #8 "Completed phases appear to need closing": the documented sequence posts DONE, then closes with
+    # close's default note; a trusted lead DONE or STOPPED after the intent's comment ID counts, before or after
+    # closed_at, and one from before the intent doesn't
+    original = remote_file("docs/playbook/PLAYBOOK.md")
+    try:
+        for n in ("6", "7"):
+            assert f"room {n} in SigorMatt/pet" in room("new", f"Phase {n}", check=True).stdout
+            room("say", n, "lead", "LEAD ONLINE", "--no-buzz", check=True)
+            edit_state("PLAYBOOK.md", lambda t, n=n: re.sub(r"^room: .*$", f"room: {n}", original, count=1,
+                                                            flags=re.M), hours=6)
+            if n == "7":
+                room("say", n, "lead", "DONE: too early, before the intent", "--no-buzz", check=True)
+            recorded = intent_in(n, "close room")
+            assert recorded == f"close room {n} after #{last_id(n)}", recorded
+            if n == "6":  # the documented sequence
+                room("say", n, "lead", "DONE: phase 6 complete", "--no-buzz", check=True)
+                done = last_id(n)
+                room("close", n, "lead", check=True)  # "Closing the room.", posted after closed_at
+                assert text_of(comments(n)[-1]) == "Closing the room."
+                assert hint(reconcile(n)) == f"intent done: clear it (room {n} is closed, closing DONE #{done})"
+            else:
+                room("close", n, "lead", check=True)
+                assert hint(reconcile(n)) == (f"intent not done: redo it (room {n} is closed, but no lead DONE or "
+                                              f"STOPPED after #{recorded.rsplit('#', 1)[1]})")
+                room("close", n, "lead", "DONE: phase 7 complete", "--no-buzz", check=True)
+                assert hint(reconcile(n)) == f"intent done: clear it (room {n} is closed, closing DONE #{last_id(n)})"
+    finally:
+        edit_state("PLAYBOOK.md", lambda t: original, hours=6)
+        set_state("intent=none")
+
+
+def intent_in(n, text):
+    """room.py intent N TEXT; returns what it recorded."""
+    r = room("intent", n, text, check=True)
+    return r.stdout.strip()[len("intent: "):]
 
 
 setup()

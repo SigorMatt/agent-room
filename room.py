@@ -63,6 +63,7 @@ Environment:
 """
 import argparse
 import datetime
+import calendar
 import html
 import json
 import os
@@ -275,10 +276,11 @@ def post(room, role, text):
     return gh(f"repos/{REPO}/issues/{room}/comments", "POST", {"body": body})
 
 
-# --- read cursors: the last comment each role has seen, one small file per repo+room+role
+# --- read cursors: the last comment each participant has seen, one small file per repo+room+role+session, so
+# two sessions of one role on one machine (an old and a new lead) don't move each other's cursor
 
 def cursor_file(room, role):
-    return os.path.join(STATE, REPO.replace("/", "__"), f"{room}-{role}.json")
+    return os.path.join(STATE, REPO.replace("/", "__"), f"{room}-{role}-{session_id()}.json")
 
 
 def load_cursor(room, role):
@@ -297,13 +299,13 @@ def save_cursor(room, role, m):
 
 
 def cursor_id(room, role):
-    """The ID of the last comment this role has read, or None."""
+    """The ID of the last comment this role and session has read, or None."""
     cur = load_cursor(room, role)
     return (cur or {}).get("id") or None
 
 
 def move_cursor(room, role, ref):
-    """Point ROLE's cursor at comment REF of this room, or at the room's start for 'none'."""
+    """Point this ROLE and session's cursor at comment REF of this room, or at the room's start for 'none'."""
     if ref == "none":
         save_cursor(room, role, {"id": 0, "at": None})
         return
@@ -561,7 +563,12 @@ PLAYBOOK_DIR = "docs/playbook"
 ARCHITECT_FILES = ("PLAYBOOK.md", "DESIGN.md", "HANDOFF.md")
 LEAD_FILES = ("MISSIONS.md", "LEDGER.md", "QODO-VALUE.md")
 LEAD_PATHS = {f"{PLAYBOOK_DIR}/{n}" for n in LEAD_FILES}
-STATE_BLOCK = re.compile(r"^```agent-room-state[ \t]*\n(.*?)^```[ \t]*$", re.M | re.S)
+MISSIONS = f"{PLAYBOOK_DIR}/MISSIONS.md"
+LEASE_KEYS = ("lease_session", "lease_generation")
+LEASE_HISTORY = 200  # commits of MISSIONS.md walked back to find the last valid block
+FENCE = re.compile(r" {0,3}(`{3,}|~{3,})[ \t]*(.*?)[ \t]*")  # a fenced code block's fence line, and its info string
+BLOCK_INFO = "agent-room-state"
+BLOCK_LINE = re.compile(r"([a-z][a-z0-9_]*):[ \t]*(.*?)[ \t]*")
 STATE_KEY = re.compile(r"[a-z][a-z0-9_]*")
 TEMPLATE_URL = "https://raw.githubusercontent.com/{repo}/{version}/templates/playbook/{name}"
 FIRST_GITIGNORE = "__pycache__/\n*.pyc\n.venv/\nnode_modules/\n.env\n.DS_Store\n"
@@ -575,7 +582,8 @@ class StateMoved(Exception):
 
 
 class BlockUnreadable(StateError):
-    """MISSIONS.md, or the machine block in it, is missing or broken: no lease can be read."""
+    """MISSIONS.md, or the machine block in it, is missing or broken (the lease then comes from the
+    last valid block in the branch's history: see pushed_lease)."""
 
 
 class StateExit(Exception):
@@ -740,9 +748,15 @@ def move_aside(path, why, save=False):
     if os.path.lexists(aside):
         aside += f"-{os.getpid()}"
     saved = save_local_work(path, stamp, aside) if save else None
+    linked = os.path.isfile(os.path.join(path, ".git"))
     os.rename(path, aside)
-    print(f"[state worktree {path} {why}; " + (f"{saved}; " if saved else "") +
-          f"moved it to {aside} and made a new one]", file=sys.stderr)
+    if linked:
+        # its .git names an admin dir in the project's repo, which the rebuilt worktree at PATH gets after the
+        # prune: left in place, git in the moved copy would act on the new worktree. Its work is on the ref.
+        os.remove(os.path.join(aside, ".git"))
+    print(f"[state worktree {path} {why}; " + (f"{saved}; " if saved else "") + f"moved it to {aside}" +
+          (", without its .git link, so it holds plain files," if linked else "") + " and made a new one]",
+          file=sys.stderr)
 
 
 def ensure_worktree():
@@ -828,7 +842,10 @@ def commit_and_push(path, msg):
 
     Raises StateMoved, with the worktree reset to the remote, if the branch moved under the work."""
     git("add", "-A", cwd=path)
-    if git("diff", "--cached", "--quiet", cwd=path, check=False).returncode == 1:
+    staged = git("diff", "--cached", "--quiet", cwd=path, check=False)
+    if staged.returncode not in (0, 1):  # 0: nothing staged, 1: changes; anything else is git failing
+        raise StateError(f"git diff: {(staged.stderr or staged.stdout).strip() or f'exited {staged.returncode}'}")
+    if staged.returncode == 1:
         git(*identity(path), "commit", "-q", "-m", msg, cwd=path)
     if git_out("rev-list", "--count", f"{STATE_REF}..HEAD", cwd=path) == "0":
         return False  # no local commits; the remote may be ahead, which is not ours to push
@@ -904,6 +921,10 @@ def add_missing(names, msg):
     sync(path, discard=False)
     missing = [n for n in names if not os.path.exists(os.path.join(path, PLAYBOOK_DIR, n))]
     texts = {n: render(n) for n in missing}  # render all first, so a failed download writes nothing
+    if "MISSIONS.md" in texts:
+        values, _ = pushed_lease(path)
+        if values:  # deleted outside room.py: carry the last valid block, so no generation or counter repeats
+            texts["MISSIONS.md"] = with_block(texts["MISSIONS.md"], values)
     for n, text in texts.items():
         os.makedirs(os.path.join(path, PLAYBOOK_DIR), exist_ok=True)
         with open(os.path.join(path, PLAYBOOK_DIR, n), "w") as f:
@@ -913,34 +934,100 @@ def add_missing(names, msg):
     return path, missing
 
 
-# the machine block at the top of MISSIONS.md: `key: value` lines that only room.py edits
+# The machine block of MISSIONS.md, parsed strictly (B-3, cold M2 S3-1 to S3-3): it is the first fenced block
+# in the file and the only one whose info string is agent-room-state; its body is only `key: value` and blank
+# lines, each key once; a bare fence line closes it. Anything else makes it invalid, and the lease then comes
+# from the last commit whose block is valid (pushed_lease).
+
+def fenced_blocks(lines):
+    """[(open, close or None, info)] of the fenced code blocks in LINES, by line index, in order."""
+    out, cur = [], None
+    for i, line in enumerate(lines):
+        m = FENCE.fullmatch(line.rstrip("\r"))
+        if cur is None:
+            if m:
+                cur = (i, m.group(1), m.group(2))
+        elif m and m.group(1)[0] == cur[1][0] and len(m.group(1)) >= len(cur[1]) and not m.group(2):
+            out.append((cur[0], i, cur[2]))
+            cur = None
+    if cur:
+        out.append((cur[0], None, cur[2]))
+    return out
+
+
+def locate_block(text):
+    """(open, close, values) of the machine block in MISSIONS.md TEXT, by line index. Raises BlockUnreadable,
+    saying why, unless the block is valid."""
+    lines = text.split("\n")
+    blocks = fenced_blocks(lines)
+    ours = [b for b in blocks if b[2] == BLOCK_INFO]
+    if not ours:
+        raise BlockUnreadable(f"{MISSIONS} has no {BLOCK_INFO} block")
+    if len(ours) > 1:
+        raise BlockUnreadable(f"{MISSIONS} has {len(ours)} {BLOCK_INFO} blocks, and may have only one")
+    start, end, _ = ours[0]
+    if blocks[0] != ours[0]:
+        raise BlockUnreadable(f"{MISSIONS}'s {BLOCK_INFO} block isn't its first fenced block")
+    if end is None:
+        raise BlockUnreadable(f"{MISSIONS}'s {BLOCK_INFO} block has no closing fence")
+    values = {}
+    for line in lines[start + 1:end]:
+        if not line.strip():
+            continue
+        m = BLOCK_LINE.fullmatch(line.rstrip("\r"))
+        if not m:
+            raise BlockUnreadable(f"{MISSIONS}'s {BLOCK_INFO} block has a line that isn't `key: value`: {line[:60]!r}")
+        if m.group(1) in values:
+            raise BlockUnreadable(f"{MISSIONS}'s {BLOCK_INFO} block sets {m.group(1)} twice")
+        values[m.group(1)] = m.group(2)
+    return start, end, values
+
 
 def read_block(text):
-    m = STATE_BLOCK.search(text)
-    if not m:
-        raise BlockUnreadable(f"{PLAYBOOK_DIR}/MISSIONS.md has no agent-room-state block")
-    values = {}
-    for line in m.group(1).splitlines():
-        key, sep, value = line.partition(":")
-        if sep and STATE_KEY.fullmatch(key.strip()):
-            values[key.strip()] = value.strip()
-    return values
+    return locate_block(text)[2]
 
 
 def write_block(text, updates):
-    m = STATE_BLOCK.search(text)
-    if not m:
-        raise StateError(f"{PLAYBOOK_DIR}/MISSIONS.md has no agent-room-state block")
-    lines, done = [], set()
-    for line in m.group(1).splitlines():
-        key, sep, _ = line.partition(":")
-        if sep and key.strip() in updates:
-            lines.append(f"{key.strip()}: {updates[key.strip()]}")
-            done.add(key.strip())
+    """TEXT with the valid machine block's keys set from UPDATES (new keys appended), all else untouched."""
+    start, end, _ = locate_block(text)
+    lines = text.split("\n")
+    body, done = [], set()
+    for line in lines[start + 1:end]:
+        m = BLOCK_LINE.fullmatch(line.rstrip("\r"))
+        if m and m.group(1) in updates:
+            body.append(f"{m.group(1)}: {updates[m.group(1)]}")
+            done.add(m.group(1))
         else:
-            lines.append(line)
-    lines += [f"{k}: {v}" for k, v in updates.items() if k not in done]
-    return text[:m.start(1)] + "".join(line + "\n" for line in lines) + text[m.end(1):]
+            body.append(line)
+    body += [f"{k}: {v}" for k, v in updates.items() if k not in done]
+    return "\n".join(lines[:start + 1] + body + lines[end:])
+
+
+def render_block(values):
+    return f"```{BLOCK_INFO}\n" + "".join(f"{k}: {v}\n" for k, v in values.items()) + "```\n"
+
+
+def with_block(text, values):
+    """MISSIONS.md TEXT (None if missing: the template) with its machine block holding VALUES: updated in
+    place if valid. Otherwise nothing is deleted: every fence whose info string starts with agent-room-state
+    is renamed to agent-room-state-damaged, and a fresh block goes first, under the title."""
+    if text is None:
+        text = template("MISSIONS.md")
+    try:
+        return write_block(text, values)
+    except BlockUnreadable:
+        pass
+    lines = text.split("\n")
+    for i, line in enumerate(lines):
+        m = FENCE.fullmatch(line.rstrip("\r"))
+        if m and re.match(rf"{BLOCK_INFO}(?![\w-])", m.group(2)):
+            lines[i] = line.replace(BLOCK_INFO, f"{BLOCK_INFO}-damaged", 1)
+    text = "\n".join(lines)
+    block = render_block(values)
+    first, _, rest = text.partition("\n")
+    if first.startswith("# "):
+        return f"{first}\n\n{block}\n" + rest.lstrip("\n")
+    return f"{block}\n{text}"
 
 
 def missions_text(path):
@@ -966,57 +1053,107 @@ def require_lease(values, sid, doing="not written"):
 
 
 def change_state(a, msg, fn, need_lease=True):
-    """Sync, check that this session holds the lease (unless need_lease is False), apply
-    fn(values) -> {key: value} to the machine block, commit and push. Returns the updates."""
+    """Sync, read the lease (the last valid block, see pushed_lease), check that this session holds it
+    (unless need_lease is False), apply fn(values) -> {key: value}, and write the whole block back,
+    which restores it if the pushed one is damaged or gone. Commit and push. Returns the updates."""
     path = ensure_worktree()
     sync(path, discard=False)
-    text = missions_text(path)
-    values = read_block(text)
+    f = os.path.join(path, MISSIONS)
+    text = open(f).read() if os.path.isfile(f) else None
+    values, note = pushed_lease(path)
+    if text is None and not values:
+        raise StateError(f"{MISSIONS} is missing: the lead runs '{ME} state init-lead'")
     if need_lease:
         require_lease(values, session_id(a))
     updates = fn(values)
-    with open(os.path.join(path, PLAYBOOK_DIR, "MISSIONS.md"), "w") as f:
-        f.write(write_block(text, updates))
-    commit_and_push(path, msg)
+    moved = [k for k in ("step", "pr") if k in updates and updates[k] != values.get(k)]
+    if moved and "waiting_for_owner" not in updates and (values.get("waiting_for_owner") or "no").strip().lower() != "no":
+        # the wait is over once the step or the pr moves (merge records pr), unless this write says otherwise
+        updates = {**updates, "waiting_for_owner": "no"}
+        print(f"[waiting_for_owner set back to no: the {' and the '.join(moved)} moved]", file=sys.stderr)
+    if note:
+        print(f"[{note}; this write restores it]", file=sys.stderr)
+    with open(f, "w") as fh:
+        fh.write(with_block(text, {**values, **updates}))
+    commit_and_push(path, msg + (" (restores the machine block)" if note else ""))
     return updates
 
 
-def pushed_text(path, name):
-    """A playbook file as last fetched from the state branch, or None if it isn't there."""
-    r = git("show", f"{STATE_REF}:{PLAYBOOK_DIR}/{name}", cwd=path, check=False)
+def pushed_text(path, name, ref=STATE_REF):
+    """A playbook file as last fetched from the state branch (or at REF), or None if it isn't there."""
+    r = git("show", f"{ref}:{PLAYBOOK_DIR}/{name}", cwd=path, check=False)
     return r.stdout if r.returncode == 0 else None
 
 
-def pushed_state():
-    """(worktree path, machine block) of MISSIONS.md on the remote state branch, freshly fetched. Reads
-    git objects only, so local work in the worktree is neither used nor touched."""
-    path = ensure_worktree()  # fetched
+def pushed_lease(path):
+    """The lease: the machine block of the most recent state-branch commit whose MISSIONS.md block
+    parses, walking back at most LEASE_HISTORY commits of MISSIONS.md. Returns (values, note): values
+    is {} when no block parses, which means no session holds the lease; note is None when the pushed
+    tip's own block parses, else a line for a warning. A damaged block never frees the lease, and
+    nothing outside the block (a quoted line, say) can decide it."""
     text = pushed_text(path, "MISSIONS.md")
-    if text is None:
-        raise BlockUnreadable(f"{PLAYBOOK_DIR}/MISSIONS.md is missing on {STATE_BRANCH}: run '{ME} state init-lead'")
-    return path, read_block(text)
+    if text is not None:
+        try:
+            return read_block(text), None
+        except BlockUnreadable:
+            pass
+    what = f"{MISSIONS} is missing" if text is None else f"{MISSIONS} has no valid agent-room-state block"
+    if git_out("rev-parse", "--is-shallow-repository", cwd=path) == "true":  # a clone of depth 1
+        git("fetch", "-q", f"--depth={LEASE_HISTORY}", "origin", f"+refs/heads/{STATE_BRANCH}:{STATE_REF}",
+            cwd=path, check=False)
+    for sha in git_out("log", "--format=%H", "-n", str(LEASE_HISTORY), STATE_REF, "--", MISSIONS, cwd=path).split():
+        old = pushed_text(path, "MISSIONS.md", sha)
+        try:
+            values = read_block(old) if old is not None else None
+        except BlockUnreadable:
+            values = None
+        if values is not None:
+            return values, f"{what} on {STATE_BRANCH}; the lease is read from {sha[:7]}, its last valid block"
+    return {}, f"{what} on {STATE_BRANCH}, and no earlier commit has a valid one: no session holds the lease"
+
+
+def pushed_state():
+    """(worktree path, machine block, note) on the freshly fetched state branch: the pushed block, else the
+    last valid one (see pushed_lease), and a note saying so; the block is {} when none parses. Reads git
+    objects only, so local work in the worktree is neither used nor touched."""
+    path = ensure_worktree()  # fetched
+    values, note = pushed_lease(path)
+    return path, values, note
+
+
+def recorded_state():
+    """(path, block) from pushed_state for commands that only read it: a note goes to stderr, and no valid
+    block anywhere in the history is an error."""
+    path, values, note = pushed_state()
+    if not values:
+        raise BlockUnreadable(f"{note}: the lead runs '{ME} state init-lead'")
+    if note:
+        print(f"[{note}]", file=sys.stderr)
+    return path, values
 
 
 def lease_holder():
-    """(session, generation) of the lease on the remote state branch, freshly fetched."""
-    return lease_of(pushed_state()[1])
+    """(session, generation, note) of the lease on the freshly fetched state branch (see pushed_lease)."""
+    _, values, note = pushed_state()
+    holder, gen = lease_of(values)
+    return holder, gen, note
 
 
 def lease_guard(a, kind=None):
     """Lease check on send, for say and close: a lead with a state worktree may not post while
     another session holds the lease (exit 5). A released lease (none) doesn't block, so a
-    retiring lead can still post NEXT-LEAD-NEEDED, and neither does an unreadable one (a missing
-    MISSIONS.md or a broken block), with a warning. No kind is exempt; KIND is unused."""
+    retiring lead can still post NEXT-LEAD-NEEDED. While the pushed block is damaged, the last valid
+    one decides (with a warning), so its holder can still report the problem. No kind is exempt;
+    KIND is unused."""
     if a.role != "lead" or not state_worktree_exists():
         return
     sid = session_id(a)
     try:
-        holder, gen = lease_holder()
-    except BlockUnreadable as e:  # no session can be shown to hold it, and the lead must be able to say so
-        print(f"[lease unreadable, posting anyway: {e}]", file=sys.stderr)
-        return
+        holder, gen, note = lease_holder()
     except StateError as e:
         sys.exit(f"not sent: lease check failed: {e}")
+    if note:
+        print(f"[{note}]", file=sys.stderr)
     if holder not in (sid, "none"):
         print(f"not sent: the lease is held by {holder} (generation {gen}), not this session ({sid})",
               file=sys.stderr)
@@ -1074,18 +1211,36 @@ def changed_paths(path):
     return out
 
 
+def check_missions(path, current):
+    """Refuse (exit 1) a MISSIONS.md that loses its valid block or changes the lease by hand: only
+    lease take, lease release and room.py's own writes change lease_session and lease_generation."""
+    f = os.path.join(path, MISSIONS)
+    why = "it would change the lease"
+    try:
+        new = read_block(open(f).read()) if os.path.isfile(f) else None
+        if new is None:
+            why = "it would be gone"
+    except BlockUnreadable as e:
+        new, why = None, str(e)
+    if new is None or lease_of(new) != lease_of(current):
+        holder, gen = lease_of(current)
+        raise StateError(f"not committed: MISSIONS.md must keep a valid agent-room-state block with the current "
+                         f"lease (lease_session: {holder}, lease_generation: {gen}), and {why}; only 'lease take' "
+                         "and 'lease release' change the lease")
+
+
 def cmd_state_commit(a):
     path = ensure_worktree()
-    touched = sorted(changed_paths(path) & LEAD_PATHS)
+    changed = changed_paths(path)
+    touched = sorted(changed & LEAD_PATHS)
     if touched:  # lead-owned files need the lease, read from the freshly fetched branch
         fetch(path)
-        text = pushed_text(path, "MISSIONS.md")
-        try:
-            if text is None:
-                raise BlockUnreadable(f"{PLAYBOOK_DIR}/MISSIONS.md is missing on {STATE_BRANCH}")
-            require_lease(read_block(text), session_id(a), f"not committed ({', '.join(touched)} are lead-owned)")
-        except BlockUnreadable as e:  # no one holds a lease that can't be read; let the repair through
-            print(f"[lease unreadable, committing anyway: {e}]", file=sys.stderr)
+        values, note = pushed_lease(path)
+        require_lease(values, session_id(a), f"not committed ({', '.join(touched)} are lead-owned)")
+        if MISSIONS in changed:
+            check_missions(path, values)
+        elif note:
+            print(f"[{note}; the holder's next state write restores it]", file=sys.stderr)
     if commit_and_push(path, a.message):
         print(f"pushed {git_out('rev-parse', '--short', 'HEAD', cwd=path)} to {STATE_BRANCH}")
     else:
@@ -1095,7 +1250,11 @@ def cmd_state_commit(a):
 def cmd_state_get(a):
     path = ensure_worktree()
     refresh(path)
-    values = read_block(missions_text(path))
+    try:
+        values = read_block(missions_text(path))
+    except BlockUnreadable:
+        values, note = pushed_lease(path)  # the last valid block
+        print(f"[{note}]", file=sys.stderr)
     if a.key not in values:
         raise StateError(f"no key '{a.key}' in the state block")
     print(values[a.key])
@@ -1115,6 +1274,8 @@ def cmd_state_set(a):
         if not sep or not STATE_KEY.fullmatch(key):
             raise StateError(f"expected KEY=VALUE with a lowercase key, got {pair!r}")
         value = single_line(key, value)
+        if key in LEASE_KEYS:
+            raise StateError(f"{key} changes only through 'lease take' and 'lease release'")
         if key == "status" and value not in STATUSES:
             raise StateError(f"status must be one of {', '.join(STATUSES)}, not {value!r}")
         if key == "mission_started" and value != "none" and parse_time(value) is None:
@@ -1134,6 +1295,8 @@ def next_int(values, key):
 def cmd_state_next(a):
     if not STATE_KEY.fullmatch(a.key):
         raise StateError(f"bad key {a.key!r}")
+    if a.key in LEASE_KEYS:
+        raise StateError(f"{a.key} changes only through 'lease take' and 'lease release'")
     print(change_state(a, f"state: next {a.key}", lambda v: {a.key: next_int(v, a.key)})[a.key])
 
 
@@ -1147,7 +1310,9 @@ def cmd_lease_take(a):
         if holder not in ("none", sid) and not a.takeover:
             raise StateExit(EXIT_MOVED, f"lease held by {holder}: stand down (generation {gen}; "
                                         "--takeover only for a lead Matthew starts after LEAD-SILENT)")
-        # a lead that takes the lease is running: a status left at paused, stopped or done mustn't mute the watchdog
+        # a lead that takes the lease is running: a status left at paused, stopped or done mustn't mute the watchdog.
+        # waiting_for_owner stays: a successor may join while the owner still hasn't answered, and a stale flag is
+        # ended by a step or pr change, and doesn't mute the watchdog once anything has progressed since it was set
         return {"lease_session": sid, "lease_generation": next_int(values, "lease_generation"), "status": "running"}
 
     for _ in range(2):
@@ -1157,7 +1322,7 @@ def cmd_lease_take(a):
             return 0
         except StateMoved:
             # the push lost to some other write; only a lease that another session took means stand down
-            holder, gen = lease_holder()
+            holder, gen, _ = lease_holder()
             if holder not in ("none", sid) and (holder, gen) != seen[-1]:
                 print(f"lease not taken: {holder} took it first (generation {gen}); stand down", file=sys.stderr)
                 return EXIT_MOVED
@@ -1178,7 +1343,9 @@ def cmd_lease_release(a):
 
 def cmd_lease_check(a):
     sid = session_id(a)
-    holder, gen = lease_holder()
+    holder, gen, note = lease_holder()
+    if note:
+        print(f"[{note}]", file=sys.stderr)
     if holder == sid:
         print(f"lease held by this session ({sid}, generation {gen})")
         return 0
@@ -1250,12 +1417,14 @@ def cmd_preflight(a):
         if status != 200 and not unprotected(status, rules):
             errors.append(f"rules: {rules}")
         rules = []
-    rulesets = {}
+    rulesets, unread = {}, []  # unread: rulesets whose details couldn't be read, so their bypass is unknown
     for rule in rules:
         rid = rule.get("ruleset_id")
         if rid is not None and rid not in rulesets:
             s, rs = gh_try(f"repos/{REPO}/rulesets/{rid}")
             rulesets[rid] = rs if s == 200 and isinstance(rs, dict) else {}
+            if not (s == 200 and isinstance(rs, dict)):
+                unread.append(rid)
 
     def ruleset_name(rid, rule=None):
         name = rulesets.get(rid, {}).get("name")
@@ -1288,6 +1457,7 @@ def cmd_preflight(a):
         if actors:
             who = ", ".join(f"{x.get('actor_type', '?')} {x.get('actor_id', '')}".strip() for x in actors)
             bypass.append(f"{ruleset_name(rid)} has bypass actors: {who}")
+    bypass += [f"couldn't read ruleset {rid}, so its bypass actors are unknown" for rid in unread]
     if bypass:
         check("!", "admin bypass: " + "; ".join(bypass) + " (report only: the lead never pushes to main)")
     elif errors:
@@ -1348,7 +1518,8 @@ def cmd_preflight(a):
                     path, added = add_missing(LEAD_FILES, "agent-room: add lead files")
                     check("✓", f"lead-owned files exist (--fix created {', '.join(added) or 'none'})")
                 except (StateError, StateMoved) as e:
-                    check("✗", f"lead-owned files: --fix failed: {e or 'the state branch moved; run it again'}")
+                    why = str(e) or "the state branch moved; run it again"  # an exception is truthy even when empty
+                    check("✗", f"lead-owned files: --fix failed: {why}")
             elif missing:
                 check("✗", f"lead-owned files missing: {', '.join(missing)}: run '{ME} state init-lead', "
                            "or preflight --fix")
@@ -1357,7 +1528,8 @@ def cmd_preflight(a):
                     read_block(pushed_text(path, "MISSIONS.md"))
                     check("✓", "lead-owned files exist")
                 except StateError as e:
-                    check("✗", f"lead-owned files: {e}")
+                    check("✗", f"lead-owned files: {e}; the lease holder's next state write restores it "
+                               "('lease take --takeover' if the holder is gone)")
         # environment
         if os.environ.get("ROOM_NTFY_TOPIC", "").strip():
             check("✓", "ROOM_NTFY_TOPIC is set")
@@ -1476,6 +1648,9 @@ _FINDING = re.compile(r"<summary>[ \t]*(\d+)\.[ \t]+([^\n]*?)[ \t]*</summary>")
 _SEVERITY = re.compile(r'<img src="https://img\.shields\.io/badge/[^"]*"[^>]*alt="([^"]+)"')
 _REVIEWED = re.compile(r"<!--\s*https://[^\s]+/commit/([0-9a-f]{40})\s*-->")
 _RESOLVED_MARK = re.compile(r"✓\s*Resolved")
+_CATEGORY = re.compile(r"<code>\s*([^<]*?\(\d+\))\s*</code>")
+_COUNT = re.compile(r"\((\d+)\)\s*$")
+_STRUCK = re.compile(r"<s>|<del>|<strike>|~~|✓\s*Resolved")
 
 
 def plain(title):
@@ -1488,8 +1663,42 @@ def plain(title):
 
 
 def title_key(title):
-    """How finding titles are compared: plain text, case-folded (backticks of a table cell dropped)."""
-    return plain(title.replace("`", "")).casefold()
+    """How finding titles are compared, the same way on both sides: entities unescaped, backticks dropped,
+    whitespace and case folded. A table cell is compared as written: no <…> is stripped from it, since
+    the tool prints titles such as "Use <path> placeholders" as plain text."""
+    return " ".join(html.unescape(title).replace("`", "").split()).casefold()
+
+
+SEVERITY_RANK = {"action required": 3, "remediation recommended": 2, "informational": 1}
+
+
+def stricter(a, b):
+    """The stricter of two Qodo severities (labels it doesn't know rank lowest)."""
+    return a if SEVERITY_RANK.get((a or "").lower(), 0) >= SEVERITY_RANK.get((b or "").lower(), 0) else b
+
+
+def mask_code(text):
+    """TEXT with every character inside code blanked, keeping positions: <pre>…</pre>, <code>…</code> and
+    fenced blocks, also when quoted with '>'. A severity badge quoted from the PR's code in a finding's
+    excerpt is not Qodo's. qodo_review.py has the same weakness (it reads every badge), so the severity
+    the tool prints after such a quote can be wrong; the gate reads the severity itself."""
+    def blank(s):
+        return re.sub(r"[^\n]", " ", s)
+
+    out, fenced = [], False
+    for line in text.splitlines(keepends=True):
+        fence = re.match(r"[> \t]*(```|~~~)", line)
+        out.append(blank(line) if fenced or fence else line)
+        if fence:
+            fenced = not fenced
+    return re.sub(r"<pre>.*?</pre>|<code>.*?</code>", lambda m: blank(m.group(0)), "".join(out), flags=re.S)
+
+
+def header_total(text):
+    """qodo_review.py's header_total(): the open findings the header counts, or None without counts."""
+    counts = [int(m.group(1)) for label in _CATEGORY.findall(text.split("<details", 1)[0])
+              for m in [_COUNT.search(label.strip())] if m]
+    return sum(counts) if counts else None
 
 
 def is_code_review(text):
@@ -1499,8 +1708,9 @@ def is_code_review(text):
 
 
 def qodo_findings(text):
-    """[{number, title, key, severity}] of a Code Review comment, severity from the badge above each."""
-    badges = [(m.start(), m.group(1)) for m in _SEVERITY.finditer(text)]
+    """[{number, title, key, severity}] of a Code Review comment, severity from the last badge above
+    each finding, not counting badges inside code."""
+    badges = [(m.start(), m.group(1)) for m in _SEVERITY.finditer(mask_code(text))]
     out = []
     for m in _FINDING.finditer(text):
         severity = None
@@ -1508,7 +1718,22 @@ def qodo_findings(text):
             if position < m.start():
                 severity = label
         title = plain(m.group(2).strip())
-        out.append({"number": m.group(1), "title": title, "key": title.casefold(), "severity": severity})
+        out.append({"number": m.group(1), "title": title, "key": title_key(title), "severity": severity,
+                    "resolved": bool(_STRUCK.search(m.group(2)))})
+    return out
+
+
+def qodo_titles(fetches):
+    """{title key: {title, severity, first}} over every archived fetch: the strictest severity any finding
+    of that title had, and the reviewed commit of the first fetch that shows it open (None when no fetch
+    does: then a fix has no lower bound but the PR's own commits)."""
+    out = {}
+    for f in fetches:
+        for x in f["findings"]:
+            t = out.setdefault(x["key"], {"title": x["title"], "severity": x["severity"], "first": None})
+            t["severity"] = stricter(x["severity"], t["severity"])
+            if not x["resolved"] and t["first"] is None:
+                t["first"] = f["reviewed"]
     return out
 
 
@@ -1539,20 +1764,31 @@ def md_cells(line):
 
 
 def md_tables(text):
-    """[(lowercased header cells, [row cells])] of every markdown table in text."""
-    out, rows, sep = [], None, False
-    for line in text.splitlines():
+    """[(lowercased header cells, [row cells])] of every markdown table in text. Blank lines inside a
+    table don't end it (so no row after one is lost); after blank lines, a table line starts a new
+    table only when a separator row follows it."""
+    def separator(cells):
+        return cells is not None and all(re.fullmatch(r":?-+:?", c) for c in cells)
+
+    lines = text.splitlines()
+    out, rows, sep, gap = [], None, False, False
+    for i, line in enumerate(lines):
+        if not line.strip():
+            gap = rows is not None
+            continue
         cells = md_cells(line)
         if cells is None:
-            rows = None
+            rows, gap = None, False
             continue
-        if rows is None:
+        header_next = not separator(cells) and separator(md_cells(lines[i + 1]) if i + 1 < len(lines) else None)
+        if rows is None or (gap and header_next):
             rows, sep = [], False
             out.append(([c.lower() for c in cells], rows))
-        elif not sep and not rows and all(re.fullmatch(r":?-+:?", c) for c in cells):
+        elif not sep and not rows and separator(cells):
             sep = True
         else:
             rows.append(cells)
+        gap = False
     return out
 
 
@@ -1583,13 +1819,46 @@ def machine_lines(text):
     return values
 
 
-def ledger_ids(text):
-    return {r[0].strip("` ") for _, rows in md_tables(text or "") for r in rows
-            if r and re.fullmatch(r"L-\d+", r[0].strip("` "))}
+def ledger_entries(text):
+    """{L-n: {id, source, finding, target, status}} from LEDGER.md's table, the first row of each ID."""
+    out = {}
+    for row in find_table(text or "", ("id", "source", "target", "status"), ("finding",)) or []:
+        lid = row["id"].strip("` ")
+        if re.fullmatch(r"L-\d+", lid):
+            out.setdefault(lid, row)
+    return out
+
+
+def folded(text):
+    return " ".join(text.replace("`", "").split()).lower()
+
+
+def ledger_problems(entry, finding, target):
+    """Why ledger ENTRY doesn't record this deferral: [] when its status is open, its target is TARGET
+    and its source names FINDING: ("cold", M<k>, ID) or ("qodo", PR number, title)."""
+    out = []
+    if folded(entry["status"]) != "open":
+        out.append(f"its status is '{entry['status']}', not open")
+    if folded(entry["target"]) != folded(target):
+        out.append(f"its target is '{entry['target']}', not {target}")
+    kind, where, what = finding
+    source = entry["source"]
+    if kind == "cold":
+        named = all(re.search(rf"(?<![\w-]){re.escape(x)}(?![\w-])", source) for x in (where, what))
+        expected = f"cold {where} {what}"
+    else:
+        named = bool(re.search(rf"PR #{where}(?!\d)", source)) and \
+            any(title_key(what) in title_key(cell) for cell in (source, entry.get("finding", "")))
+        expected = f"qodo PR #{where} and the title"
+    if not named:
+        out.append(f"its source '{source}' doesn't name {expected}")
+    return out
 
 
 def glob_regex(glob):
-    """A merge-hold glob as a regex on the whole path: '*' within a segment, '**' across segments."""
+    """A merge-hold glob as a regex on the whole path, ignoring case: '*' within a segment, '**' across
+    segments, and '**/' any number of whole directories, none included (`**/go.mod` matches go.mod and
+    lib/go.mod). Case is ignored so that AuthContext.tsx is held like auth.py."""
     out, i = [], 0
     while i < len(glob):
         if glob.startswith("**/", i):
@@ -1607,23 +1876,29 @@ def glob_regex(glob):
         else:
             out.append(re.escape(glob[i]))
             i += 1
-    return re.compile("".join(out))
+    return re.compile("".join(out), re.IGNORECASE)
 
 
 def merge_hold_rules(playbook):
     """[(label, glob, deleted_only, regex)] from the "## Merge-hold list" section of PLAYBOOK.md, one
-    bullet per area (- <label>: `glob`, `glob`). None when the section is missing. A label containing
-    "deleted" matches only deleted paths."""
+    bullet per area (- <label>: `glob`, `glob`), whose globs may go on over indented continuation lines.
+    None when the section is missing. A label containing "deleted" matches only deleted paths."""
     m = re.search(r"^##[ \t]+Merge-hold list[^\n]*\n(.*?)(?=^##[ \t]|\Z)", playbook or "", re.M | re.S | re.I)
     if not m:
         return None
-    rules = []
+    rules, label = [], None
     for line in m.group(1).splitlines():
         b = re.match(r"\s*[-*+][ \t]+(.*)", line)
-        if not b:
+        if b:
+            label = b.group(1).split("`", 1)[0].strip().rstrip(":").strip()
+            text = b.group(1)
+        elif label is not None and re.match(r"[ \t]+\S", line):
+            text = line  # an indented continuation line of the same bullet
+        else:
+            if line.strip():
+                label = None  # unindented text ends the bullet; a blank line doesn't
             continue
-        label = b.group(1).split("`", 1)[0].strip().rstrip(":").strip()
-        for glob in re.findall(r"`([^`]+)`", b.group(1)):
+        for glob in re.findall(r"`([^`]+)`", text):
             rules.append((label, glob.strip(), "deleted" in label.lower(), glob_regex(glob.strip())))
     return rules
 
@@ -1648,18 +1923,18 @@ def zsplit(out):
     return [p for p in out.split("\0") if p]
 
 
-def is_ancestor(root, commit, head):
-    return git("merge-base", "--is-ancestor", commit, head, cwd=root, check=False).returncode == 0
-
-
 def resolve_commit(root, rev):
     r = git("rev-parse", "--verify", "-q", f"{rev}^{{commit}}", cwd=root, check=False)
     return r.stdout.strip() if r.returncode == 0 else None
 
 
 def commit_files(root, sha):
-    return set(zsplit(git("diff-tree", "--no-commit-id", "--name-only", "-r", "-m", "--root", "-z", sha,
-                          cwd=root).stdout))
+    """The paths a commit changed against its first parent (every path, for a root commit), so that a
+    lead's merge of a builder branch touches what the merge brought in, not what the other side did."""
+    parents = git_out("rev-list", "--parents", "-n", "1", sha, cwd=root).split()[1:]
+    if parents:
+        return set(zsplit(git("diff", "--name-only", "--no-renames", "-z", parents[0], sha, cwd=root).stdout))
+    return set(zsplit(git("diff-tree", "--no-commit-id", "--name-only", "-r", "--root", "-z", sha, cwd=root).stdout))
 
 
 def parse_cold_report(path, kind, number, text):
@@ -1689,28 +1964,34 @@ def parse_cold_report(path, kind, number, text):
 def review_records(root, sha, mission, pr):
     """The mission's cold records and the PR's Qodo records, as committed at sha."""
     paths = zsplit(git("ls-tree", "-r", "--name-only", "-z", sha, "--", "reviews", cwd=root).stdout)
-    cold, fetches = [], {}
+    cold, fetches, dirs = [], {}, set()
     for p in sorted(paths):
         m = re.fullmatch(rf"reviews/cold/{re.escape(mission)}/(round|scoped)-(\d+)\.md", p)
         if m:
             cold.append(parse_cold_report(p, m.group(1), int(m.group(2)), blob(root, sha, p) or ""))
+        m = re.fullmatch(rf"reviews/qodo/PR-{pr}/(\d+)/.+", p)
+        if m:
+            dirs.add(int(m.group(1)))  # every archived fetch directory, with a Code Review comment or not
         m = re.fullmatch(rf"reviews/qodo/PR-{pr}/(\d+)/issue-comment-(\d+)\.md", p)
         if m:
             fetches.setdefault(int(m.group(1)), []).append((int(m.group(2)), p))
-    qodo = None  # the latest archive holding a Code Review comment (the newest comment if several)
-    for k in sorted(fetches, reverse=True):
+    archived = []  # every fetch holding a Code Review comment (its newest, if several), oldest first
+    for k in sorted(fetches):
         reviews = [(cid, p, text) for cid, p in fetches[k]
                    for text in [blob(root, sha, p) or ""] if is_code_review(text)]
         if reviews:
             _, p, text = max(reviews)
             hits = _REVIEWED.findall(text)
-            qodo = {"fetch": k, "path": p, "reviewed": hits[-1] if hits else None, "findings": qodo_findings(text)}
-            break
-    return {"cold": cold, "qodo": qodo,
+            archived.append({"fetch": k, "path": p, "reviewed": hits[-1] if hits else None,
+                             "findings": qodo_findings(text), "header": header_total(text)})
+    qodo_text = blob(root, sha, f"reviews/qodo/PR-{pr}/DISPOSITIONS.md")
+    return {"mission": mission, "pr": pr, "cold": cold, "qodo": archived[-1] if archived else None,
+            "qodo_fetches": archived, "qodo_dirs": sorted(dirs),
             "cold_path": f"reviews/cold/{mission}/DISPOSITIONS.md",
             "cold_dispositions": blob(root, sha, f"reviews/cold/{mission}/DISPOSITIONS.md"),
             "qodo_path": f"reviews/qodo/PR-{pr}/DISPOSITIONS.md",
-            "qodo_dispositions": blob(root, sha, f"reviews/qodo/PR-{pr}/DISPOSITIONS.md")}
+            "qodo_dispositions": qodo_text,
+            "qodo_mode": machine_lines(qodo_text).get("qodo") if qodo_text is not None else None}
 
 
 class Gate:
@@ -1754,10 +2035,10 @@ def check_coverage(g, root, head, rec):
             covered.append((r["covers"], r["path"]))
         else:
             errors.append(f"{r['path']}: 'covers:' must name the reviewed commit's 40-hex sha")
-    q = rec["qodo"]
-    if q and q["reviewed"]:
+    q = rec["qodo"]  # Qodo's review covers code only when its findings are decided: qodo: on
+    if q and rec["qodo_mode"] == "on" and q["reviewed"]:
         covered.append((q["reviewed"], f"Qodo fetch {q['fetch']}"))
-    elif q:
+    elif q and rec["qodo_mode"] == "on":
         errors.append(f"{q['path']}: no reviewed-commit marker in the Code Review comment")
     best = None  # (commit, source, uncovered paths, commits since) of the review closest to covering HEAD
     for commit, source in covered:
@@ -1792,8 +2073,31 @@ def row_files(cell):
     return out
 
 
-def judge(root, head, label, cell, top, file_cell, ledger):
-    """What is wrong with one dispositions row: [(text, hold reason or None)]."""
+def same_commit(line, sha):
+    """Whether a record's commit LINE names SHA: backticks stripped, a hex prefix of 7 or more characters,
+    any text after it ignored (`95eebe4…` (fetch 3))."""
+    m = re.match(r"([0-9a-f]{7,40})(?![0-9a-z])", line.replace("`", "").strip().lower())
+    return bool(m and sha and sha.startswith(m.group(1)))
+
+
+def target_problem(target, mission, phase):
+    """Why a deferral TARGET isn't later than MISSION (M<k>) or the current PHASE, or None."""
+    m = re.fullmatch(r"M(\d+)", target)
+    if m:
+        return None if int(m.group(1)) > int(mission[1:]) else f"which is not a mission after {mission}"
+    p = int(re.fullmatch(r"phase (\d+) backlog", target).group(1))
+    if phase is None:
+        return "but MISSIONS.md records no current phase to compare with"
+    return None if p > phase else f"which is not a phase after the current phase {phase}"
+
+
+def judge(root, head, label, cell, top, file_cell, ledger, reported=None, room=None, finding=None, mission=None,
+          phase=None):
+    """What is wrong with one dispositions row: [(text, hold reason or None)]. REPORTED is the commit the
+    finding was reported against: a cold report's covers:, or the first Qodo fetch showing the title open.
+    ROOM (a RoomLog) answers whether an owner decision on a top-severity row is really Matthew's. LEDGER is
+    ledger_entries(); FINDING names the finding for a deferral's ledger row (see ledger_problems). A deferral
+    targets a mission after MISSION or a phase after PHASE."""
     form, m = parse_disposition(cell)
     if form is None:
         return [(f"{label} is undecided" + (f" ('{cell}')" if cell.strip() else ""), 2)]
@@ -1801,8 +2105,25 @@ def judge(root, head, label, cell, top, file_cell, ledger):
         return [(f"{label} waits on an open owner decision ({m.group(1)})", 1)]
     if top and form in ("dismissed", "deferred"):
         return [(f"{label} is top severity, so only a fix or an owner decision closes it, not '{form}'", 1)]
+    owner_check = top and form == "owner" and room is not None and finding
+    answer, edited = room.answers(m.group(2), finding) if owner_check else (None, False)
+    if owner_check and not answer:
+        n, what = m.group(2).rsplit("-", 1)[1], finding[2]
+        if edited:
+            return [(f"{label} cites {m.group(2)}, but the lead's ESCALATION-{n} or MERGE-HOLD-{n} about {what} was "
+                     f"edited after {m.group(2)}: post a new escalation or hold", 1)]
+        return [(f"{label} cites {m.group(2)}, but {room.where()} has no trusted {m.group(2)} answering the lead's "
+                 f"earlier ESCALATION-{n} or MERGE-HOLD-{n} about {what}", 1)]
+    if form == "deferred" and mission:
+        late = target_problem(m.group(2), mission, phase)
+        if late:
+            return [(f"{label}: deferred to {m.group(2)}, {late}", None)]
     if form == "deferred" and m.group(1) not in ledger:
         return [(f"{label}: {m.group(1)} is not in {PLAYBOOK_DIR}/LEDGER.md on {STATE_BRANCH}", None)]
+    if form == "deferred" and finding:
+        lacking = ledger_problems(ledger[m.group(1)], finding, m.group(2))
+        if lacking:
+            return [(f"{label}: ledger {m.group(1)} doesn't record this deferral: {', '.join(lacking)}", None)]
     if form == "fixed":
         short = m.group(1).lower()
         full = resolve_commit(root, short)
@@ -1810,6 +2131,11 @@ def judge(root, head, label, cell, top, file_cell, ledger):
             return [(f"{label}: fixed in {short}: no such commit", None)]
         if not is_ancestor(root, full, head):
             return [(f"{label}: fixed in {short}, which is not an ancestor of HEAD", None)]
+        if is_ancestor(root, full, "refs/remotes/origin/main"):
+            return [(f"{label}: fixed in {short}, which is already on main", None)]
+        if reported and is_ancestor(root, full, reported):
+            return [(f"{label}: fixed in {short}, which the review that found it had already seen "
+                     f"({reported[:12]})", None)]
         files = row_files(file_cell)
         touched = commit_files(root, full) if files else set()
         if files and not any(f in touched or (f.endswith("/") and any(t.startswith(f) for t in touched))
@@ -1818,13 +2144,14 @@ def judge(root, head, label, cell, top, file_cell, ledger):
     return []
 
 
-def check_dispositions(g, root, head, rec, ledger_text):
-    reasons, ledger = [], ledger_ids(ledger_text)
+def check_dispositions(g, root, head, rec, ledger_text, room, phase=None):
+    reasons, ledger = [], ledger_entries(ledger_text)
     # cold: a row for every finding ID of every report
-    want = {}
+    want, reported = {}, {}
     for r in rec["cold"]:
         reasons += [(e, None) for e in r["errors"]]
         want.update(r["findings"])
+        reported.update({fid: r["covers"] for fid in r["findings"]})
     n_cold = n_qodo = 0
     if rec["cold_dispositions"] is None:
         reasons.append((f"{rec['cold_path']} is missing", None))
@@ -1842,7 +2169,8 @@ def check_dispositions(g, root, head, rec, ledger_text):
             seen.add(fid)
             n_cold += 1
             top = TOP_COLD in (want.get(fid), row.get("severity", "").strip("` ").lower())
-            reasons += judge(root, head, f"cold {fid}", row["disposition"], top, row.get("file", ""), ledger)
+            reasons += judge(root, head, f"cold {fid}", row["disposition"], top, row.get("file", ""), ledger,
+                             reported.get(fid), room, ("cold", rec["mission"], fid), rec["mission"], phase)
         missing = [fid for fid in want if fid not in seen]
         if rows is not None and missing:
             reasons.append((f"{rec['cold_path']} has no row for {', '.join(missing)}", None))
@@ -1851,33 +2179,70 @@ def check_dispositions(g, root, head, rec, ledger_text):
     if switch not in ("on", "off"):
         reasons.append((f"QODO_REVIEW must be on or off, not {switch!r}", None))
     text, path, q = rec["qodo_dispositions"], rec["qodo_path"], rec["qodo"]
-    if text is None and switch == "on":
+    if rec["qodo_fetches"] and rec["qodo_mode"] != "on":  # an archived review is never ignored
+        fetched = ", ".join(str(f["fetch"]) for f in rec["qodo_fetches"])
+        reasons.append((f"Qodo's review of this PR is archived (fetches {fetched}), so {path} must exist and "
+                        f"say qodo: on" + (f", not {rec['qodo_mode']}" if rec["qodo_mode"] else ""), None))
+    elif text is None and switch == "on":
         reasons.append((f"{path} is missing (QODO_REVIEW=on)", None))
     if text is not None:
-        mode = machine_lines(text).get("qodo")
+        lines = machine_lines(text)
+        mode = lines.get("qodo")
         if mode not in ("on", "off", "no first review"):
             reasons.append((f"{path}: its 'qodo:' line must be on, off or no first review", None))
         rows = find_table(text, ("#", "finding", "disposition"), ("severity", "file"))
         if rows is None and mode == "on":
             reasons.append((f"{path} has no | # | … | finding | … | disposition | table", None))
-        comment = {f["key"]: f for f in (q["findings"] if q else [])}
+        titles = qodo_titles(rec["qodo_fetches"])  # every finding of every fetch, absent now or not
         seen = set()
         for row in rows or []:
             key = title_key(row["finding"])
             if not key and not row["disposition"].strip():
                 continue
+            if key in seen:  # exactly one disposition per finding
+                reasons.append((f"{path}: two rows for: {' '.join(row['finding'].split())}", None))
             seen.add(key)
             n_qodo += 1
-            f = comment.get(key) or {}
-            top = TOP_QODO in ((f.get("severity") or "").lower(), row.get("severity", "").strip("` ").lower())
-            label = f"Qodo #{row['#'].strip() or '?'} \"{plain(row['finding'].replace('`', ''))}\""
-            reasons += judge(root, head, label, row["disposition"], top, row.get("file", ""), ledger)
+            t = titles.get(key) or {}
+            top = TOP_QODO in ((t.get("severity") or "").lower(), row.get("severity", "").strip("` ").lower())
+            label = f"Qodo #{row['#'].strip() or '?'} \"{' '.join(row['finding'].split())}\""
+            reasons += judge(root, head, label, row["disposition"], top, row.get("file", ""), ledger, t.get("first"),
+                             room, ("qodo", rec["pr"], t.get("title") or " ".join(row["finding"].split())),
+                             rec["mission"], phase)
         if mode == "on" and q is None:
             reasons.append((f"{path} says qodo: on, but no Code Review comment is archived for this PR", None))
         elif mode == "on":
-            missing = [f["title"] for f in q["findings"] if f["key"] not in seen]
+            missing = [t["title"] for key, t in titles.items() if key not in seen]
             if missing:
-                reasons.append((f"{path} has no row for: {'; '.join(missing)} (archive fetch {q['fetch']})", None))
+                fetched = ", ".join(str(f["fetch"]) for f in rec["qodo_fetches"])
+                reasons.append((f"{path} has no row for: {'; '.join(missing)} (archived fetches {fetched})", None))
+            # the archive is whole: fetches 1..k as the tool numbers them, as the table says it was built from
+            dirs = rec["qodo_dirs"]
+            if dirs != list(range(1, len(dirs) + 1)):
+                reasons.append((f"reviews/qodo/PR-{rec['pr']}/ holds fetches {', '.join(map(str, dirs))}, not 1 to "
+                                f"{len(dirs)}: restore the missing fetch", None))
+            listed = [int(x) for x in re.findall(r"\d+", lines.get("fetches", ""))]
+            if listed != dirs:
+                reasons.append((f"{path} says fetches: {lines.get('fetches') or '(none)'}, but the archived fetches "
+                                f"are {', '.join(map(str, dirs))}", None))
+            if not same_commit(lines.get("reviewed", ""), q["reviewed"]):
+                reasons.append((f"{path} says reviewed: {lines.get('reviewed') or '(none)'}, but the last fetch "
+                                f"reviewed {q['reviewed'] or '(no marker)'}", None))
+    # QODO-REVIEW rule 5: the header's open count must agree with the open findings that parse; and every
+    # finding has a severity. Either failure means Qodo's format moved: the fix is a patch to room.py's
+    # parser, not a change to the records
+    patch = "the records can't fix this: room.py's Qodo parser needs a patch"
+    for f in rec["qodo_fetches"]:
+        open_ = sum(1 for x in f["findings"] if not x["resolved"])
+        if f["header"] is None or f["header"] != open_:
+            counted = "no header counts" if f["header"] is None else f"the header counts {f['header']} open"
+            reasons.append((f"Qodo comment did not parse: read it ({f['path']}: {counted}, {open_} parsed open; "
+                            f"{patch})", None))
+        unrated = [f"#{x['number']} \"{x['title']}\"" for x in f["findings"]
+                   if (x["severity"] or "").lower() not in SEVERITY_RANK]
+        if unrated:
+            reasons.append((f"severity did not parse: read the comment ({f['path']}: {', '.join(unrated)}; {patch})",
+                            None))
     if reasons:
         g.fail("dispositions", reasons)
     else:
@@ -1885,24 +2250,35 @@ def check_dispositions(g, root, head, rec, ledger_text):
 
 
 def required_contexts():
-    """(set of required status contexts on main, or None, error text)."""
+    """({(context, app id or None)} required on main, or None, error text). A check that names its app
+    (app_id in classic protection, integration_id in rulesets; -1 or none: any app) is satisfied only by
+    a check run from that app; a name required without one by any run or status of that name."""
     req = set()
+
+    def add(context, app):
+        if context:
+            req.add((context, app if isinstance(app, int) and app >= 0 else None))
+
     status, prot = gh_try(f"repos/{REPO}/branches/main/protection")
     if status == 200 and isinstance(prot, dict):
         rsc = prot.get("required_status_checks") or {}
-        req |= set(rsc.get("contexts") or [])
-        req |= {c["context"] for c in rsc.get("checks") or [] if c.get("context")}
+        for context in rsc.get("contexts") or []:
+            add(context, None)
+        for c in rsc.get("checks") or []:
+            add(c.get("context"), c.get("app_id"))
     elif not unprotected(status, prot):
         return None, f"can't read main's protection: {prot}"
     status, rules = gh_try(f"repos/{REPO}/rules/branches/main")
     if status == 200 and isinstance(rules, list):
         for rule in rules:
             if rule.get("type") == "required_status_checks":
-                params = rule.get("parameters") or {}
-                req |= {c["context"] for c in params.get("required_status_checks") or [] if c.get("context")}
+                for c in (rule.get("parameters") or {}).get("required_status_checks") or []:
+                    add(c.get("context"), c.get("integration_id"))
     elif status != 200 and not unprotected(status, rules):
         return None, f"can't read main's rules: {rules}"
-    return req, None
+    # classic protection lists every check under contexts too: a name bound to an app keeps only that binding
+    bound = {c for c, app in req if app is not None}
+    return {(c, app) for c, app in req if app is not None or c not in bound}, None
 
 
 def gh_pages(path, key):
@@ -1915,87 +2291,231 @@ def gh_pages(path, key):
         page += 1
 
 
-def check_checks(g, head):
+CHECKS_GRACE = 600  # seconds a new HEAD with workflows may have no runs before "no checks ran" passes
+LATE_LIMIT = 3600  # seconds a required context may stay unreported while other checks are pending
+WORKFLOW = glob_regex(".github/workflows/*.y*ml")
+
+
+def check_checks(g, root, head, pr_updated=None):
     required, err = required_contexts()
     if err:
         g.fail("checks", [(err, None)])
         return
     rank = {"ok": 0, "pending": 1, "failed": 2}
-    runs = {}  # name -> the newest run of that name: a re-run replaces an older one
+    # filter=latest already drops superseded re-runs; two workflows may each have a job of the same
+    # name, so runs are told apart by check suite as well as by name
+    runs = {}
     for run in gh_pages(f"repos/{REPO}/commits/{head}/check-runs?filter=latest", "check_runs"):
-        if run.get("name") and run.get("id", 0) >= runs.get(run["name"], {}).get("id", 0):
-            runs[run["name"]] = run
-    state = {name: "pending" if run.get("status") != "completed" else
-             "ok" if run.get("conclusion") in ("success", "neutral", "skipped") else "failed"
-             for name, run in runs.items()}
+        key = ((run.get("check_suite") or {}).get("id"), run.get("name"))
+        if run.get("name") and run.get("id", 0) >= runs.get(key, {}).get("id", 0):
+            runs[key] = run
+    results = [(name, "pending" if run.get("status") != "completed" else
+                "ok" if run.get("conclusion") in ("success", "neutral", "skipped") else "failed",
+                (run.get("app") or {}).get("id"))
+               for (_, name), run in runs.items()]
+    statuses = {}
     for s in gh_pages(f"repos/{REPO}/commits/{head}/status", "statuses"):
-        if s.get("context"):  # a context reported both ways counts at its worst
+        if s.get("context"):  # a context reported twice counts at its worst
             v = {"success": "ok", "pending": "pending"}.get(s.get("state"), "failed")
-            state[s["context"]] = max(state.get(s["context"], v), v, key=rank.get)
-    failed = sorted(c for c, v in state.items() if v == "failed")
-    missing = sorted(required - set(state))
-    pending = sorted(c for c, v in state.items() if v == "pending")
-    if failed or missing:
-        g.fail("checks", [(t, 3) for t in (f"failed: {', '.join(failed)}" if failed else None,
+            statuses[s["context"]] = max(statuses.get(s["context"], v), v, key=rank.get)
+    results += [(context, v, None) for context, v in statuses.items()]  # a status names no app
+    failed = sorted({c for c, v, _ in results if v == "failed"})
+    missing = sorted(context + (f" (from app {app})" if app is not None else "") for context, app in required
+                     if not any(c == context and (app is None or a == app) for c, _, a in results))
+    pending = sorted({c for c, v, _ in results if v == "pending"})
+    if failed:
+        g.fail("checks", [(t, 3) for t in (f"failed: {', '.join(failed)}",
                                             f"required but missing: {', '.join(missing)}" if missing else None) if t])
-    elif pending:
-        g.wait("checks", f"pending: {', '.join(pending)}")
-    elif not state:
-        g.ok("checks", "no checks configured")
-    else:
-        g.ok("checks", f"{len(state)} passed" + (f" (required: {', '.join(sorted(required))})" if required else ""))
-
-
-def room_number(playbook, missions):
-    m = re.search(r"^room:[ \t]*(\d+)", playbook or "", re.M)
-    if m and int(m.group(1)) > 0:
-        return int(m.group(1))
+        return
+    # with workflows in HEAD, Actions may not have created its runs yet; other apps' results don't tell.
+    # Wait from the later of HEAD's commit and the PR's last update (a push of an older commit moves the PR)
+    workflows = [p for p in zsplit(git("ls-tree", "-r", "--name-only", "-z", head, "--", ".github/workflows",
+                                       cwd=root).stdout) if WORKFLOW.fullmatch(p)]
+    no_actions = bool(workflows) and not any((r.get("app") or {}).get("slug") == "github-actions"
+                                             for r in runs.values())
+    changed = int(git_out("log", "-1", "--format=%ct", head, cwd=root))
     try:
-        n = int(read_block(missions or "").get("room", "0"))
-    except (StateError, ValueError):
-        return None
-    return n if n > 0 else None
+        changed = max(changed, calendar.timegm(time.strptime(pr_updated or "", "%Y-%m-%dT%H:%M:%SZ")))
+    except ValueError:
+        pass
+    age = int(time.time()) - changed  # since the later of HEAD's commit and the PR's last update
+    if no_actions:
+        if age < CHECKS_GRACE:
+            g.wait("checks", f"no GitHub Actions runs for HEAD yet, though it has {len(workflows)} workflow(s); "
+                             f"last change {max(age, 0)}s ago (waiting up to {CHECKS_GRACE // 60} minutes)")
+            return
+    if pending and missing and age >= LATE_LIMIT:  # late for an hour: it isn't coming
+        g.fail("checks", [(f"required but missing: {', '.join(missing)}, still not reported {LATE_LIMIT // 60} minutes "
+                           f"after the last change (pending: {', '.join(pending)})", 3)])
+    elif pending:  # a required context that hasn't reported may be late while others still run
+        g.wait("checks", f"pending: {', '.join(pending)}" + (f"; not reported yet: {', '.join(missing)}" if missing else ""))
+    elif missing:
+        g.fail("checks", [(f"required but missing: {', '.join(missing)}", 3)])
+    elif not results:
+        g.ok("checks", "no checks ran for HEAD" if workflows else "no checks configured")
+    else:
+        g.ok("checks", f"{len(results)} passed" + (f" (required: {', '.join(sorted({c for c, _ in required}))})" if required else "")
+             + ("; no GitHub Actions runs for HEAD" if no_actions else ""))
 
 
-def find_decision(room, decision):
-    """The room's trusted comment from the architect, or untagged from Matthew, whose kind is DECISION."""
-    for c in comments(room):
-        m = parse(c)
-        if m["role"] in ("architect", "human") and trusted(m) and message_kind(m["text"]) == decision:
-            return m
+def current_room(playbook, values):
+    """(number, where) of the current room: PLAYBOOK.md's `room:` line, where the architect records it at each
+    phase's kickoff, else the machine block VALUES' room; None if neither names one. The gate and the watchdog
+    both use it."""
+    m = re.search(r"^room:[ \t]*(\d+)", playbook or "", re.M)
+    for n, where in ((m.group(1) if m else None, "PLAYBOOK.md"), ((values or {}).get("room"), "MISSIONS.md")):
+        if (n or "").strip().isdigit() and int(n) > 0:
+            return int(n), where
     return None
 
 
-def check_sensitive(g, root, head, playbook, missions, a):
+def room_number(playbook, missions):
+    """The current room's number (see current_room), with MISSIONS.md as text; None if no room is recorded."""
+    try:
+        values = read_block(missions or "")
+    except StateError:
+        values = {}
+    found = current_room(playbook, values)
+    return found[0] if found else None
+
+
+class RoomLog:
+    """The room's trusted messages, read once, and only when a check needs them."""
+
+    def __init__(self, playbook, missions):
+        self.number = room_number(playbook, missions)
+        self._messages = None
+
+    def where(self):
+        return f"room {self.number}" if self.number else "the room (none is recorded in PLAYBOOK.md or MISSIONS.md)"
+
+    def messages(self):
+        """Trusted messages, each with "edited": its updated_at (an edit keeps the comment's id)."""
+        if self._messages is None:
+            self._messages = [dict(m, edited=c.get("updated_at") or m["at"])
+                              for c in (comments(self.number) if self.number else [])
+                              for m in [parse(c)] if trusted(m)]
+        return self._messages
+
+    def decisions(self, kind):
+        """The trusted messages of KIND (DECISION-n) from the architect, or untagged from Matthew, oldest first."""
+        return [m for m in self.messages() if m["role"] in ("architect", "human") and message_kind(m["text"]) == kind]
+
+    @staticmethod
+    def before(ask, decision):
+        """Whether ASK (a hold or escalation) stood as it is now when DECISION was posted: posted before it
+        and not edited since."""
+        return ask["id"] < decision["id"] and ask["edited"] <= decision["at"]
+
+    def answers(self, decision, finding):
+        """(the trusted DECISION-n that answers the lead's earlier ESCALATION-n or MERGE-HOLD-n naming FINDING,
+        or None; whether such a message exists but was edited after the decision). FINDING is ("cold", M<k>,
+        ID) or ("qodo", PR, title). A message names it by its cold ID, by the full Qodo title, or by the
+        dispositions file the finding sits in, as v1's "point to files instead of pasting" asks."""
+        n = decision.rsplit("-", 1)[1]
+        kind, where, what = finding
+        record = f"reviews/cold/{where}/DISPOSITIONS.md" if kind == "cold" else f"reviews/qodo/PR-{where}/DISPOSITIONS.md"
+
+        def names(text):
+            if record in message_tokens(text):
+                return True
+            if kind == "cold":
+                return re.search(rf"(?<![\w-]){re.escape(what)}(?![\w-])", text)
+            return re.search(rf"(?<!\w){re.escape(title_key(what))}(?!\w)", title_key(text))
+
+        asks = [m for m in self.messages() if m["role"] == "lead" and names(m["text"])
+                and message_kind(m["text"]) in (f"ESCALATION-{n}", f"MERGE-HOLD-{n}")]
+        decisions = self.decisions(decision)
+        answer = next((d for d in decisions if any(self.before(e, d) for e in asks)), None)
+        edited = answer is None and any(e["id"] < d["id"] for e in asks for d in decisions)
+        return answer, edited
+
+    def holds(self, kind):
+        """The lead's trusted messages of KIND (MERGE-HOLD-n)."""
+        return [m for m in self.messages() if m["role"] == "lead" and message_kind(m["text"]) == kind]
+
+
+def message_tokens(text):
+    """The whole tokens of a room message, for naming paths: backticked text, and the words split on
+    whitespace and commas with quotes, trailing '.', ',', ';', ':' and unbalanced parentheses dropped, so
+    that src/app/(auth)/page.tsx and "(see app/auth.py)." both name their path."""
+    out = set(re.findall(r"`([^`]+)`", text))
+    for tok in re.split(r"[\s,]+", text):
+        while True:
+            before = tok
+            tok = tok.strip("\"'`").rstrip(".,;:")
+            if tok.endswith(")") and tok.count(")") > tok.count("("):
+                tok = tok[:-1]
+            if tok.startswith("(") and tok.count("(") > tok.count(")"):
+                tok = tok[1:]
+            if tok == before:
+                break
+        out.add(tok)
+        if tok.startswith("(") and tok.endswith(")"):
+            out.add(tok[1:-1])
+    return out
+
+
+def hold_problems(text, pr, paths):
+    """What a MERGE-HOLD message lacks for a reason-5 hold of PR's PATHS: [] when it names them all, each
+    as a whole token (message_tokens)."""
+    out = [] if re.search(rf"PR #{pr}(?!\d)", text) else [f"PR #{pr}"]
+    out += [] if re.search(r"\breason 5\b", text, re.I) else ["reason 5"]
+    tokens = message_tokens(text)
+    return out + [p for p in paths if p not in tokens]
+
+
+def check_sensitive(g, root, head, playbook, a, room):
     rules = merge_hold_rules(playbook)
     if not rules:
         g.fail("sensitive paths", [(f"{PLAYBOOK_DIR}/PLAYBOOK.md on {STATE_BRANCH} has no merge-hold " +
                                     ("list" if rules is None else "globs") + "; the gate never runs without it",
                                     None)])
         return
+    never = [glob for _, glob, _, _ in rules if glob.startswith("/") or glob.endswith("/")]
+    if never:  # gitignore or CODEOWNERS style: a changed path never starts or ends with '/'
+        g.fail("sensitive paths", [(f"glob can never match: {glob}", None) for glob in never])
+        return
     out = zsplit(git("diff", "--name-status", "--no-renames", "-z", f"refs/remotes/origin/main...{head}",
                      cwd=root).stdout)
     changes = list(zip(out[0::2], out[1::2]))
-    hits = []
+    hits = []  # (path, why)
     for status, path in changes:
         for label, glob, deleted_only, rx in rules:
             if (status == "D" or not deleted_only) and rx.fullmatch(path):
-                hits.append(f"{path} ({'deleted; ' if status == 'D' else ''}`{glob}`, {label})")
+                hits.append((path, f"{path} ({'deleted; ' if status == 'D' else ''}`{glob}`, {label})"))
                 break
     if not hits:
         g.ok("sensitive paths", f"{len(changes)} changed path(s), none on the merge-hold list")
         return
-    if a.allow_hold == "5":
-        room = room_number(playbook, missions)
-        found = find_decision(room, a.decision) if room else None
-        if found:
-            g.ok("sensitive paths", f"{'; '.join(hits)}: allowed by {a.decision} (comment #{found['id']})")
-            return
-        where = f"room {room} has no trusted architect comment {a.decision}" if room else \
-            "no room is recorded in PLAYBOOK.md or MISSIONS.md"
-        g.fail("sensitive paths", [(f"{'; '.join(hits)}; --allow-hold 5 names {a.decision}, but {where}", 5)])
+    held, paths = "; ".join(why for _, why in hits), [p for p, _ in hits]
+    if a.allow_hold != "5":
+        g.fail("sensitive paths", [(f"on the merge-hold list: {held}", 5)])
         return
-    g.fail("sensitive paths", [(f"on the merge-hold list: {'; '.join(hits)}", 5)])
+    # the decision must answer this PR's hold: the lead's MERGE-HOLD-n (same n) for reason 5 and these
+    # paths, posted before it and not edited since (an edit keeps the comment's id)
+    n = a.decision.rsplit("-", 1)[1]
+    holds = room.holds(f"MERGE-HOLD-{n}")
+    lacking = [hold_problems(m["text"], a.pr, paths) for m in holds]
+    whole = [h for h, problems in zip(holds, lacking) if not problems]
+    decisions = room.decisions(a.decision)
+    pair = next(((h, d) for h in whole for d in decisions if room.before(h, d)), None)
+    if pair:
+        g.ok("sensitive paths", f"{held}: allowed by {a.decision} (comment #{pair[1]['id']}), answering "
+                                f"MERGE-HOLD-{n} (comment #{pair[0]['id']})")
+        return
+    edited = next((h for h in whole for d in decisions if h["id"] < d["id"]), None)
+    hold = whole[0] if whole else None
+    if edited:
+        missing = f"MERGE-HOLD-{n} (comment #{edited['id']}) edited after {a.decision}: post a new hold"
+    elif hold:
+        missing = f"no trusted {a.decision} from the architect or Matthew after MERGE-HOLD-{n} (comment #{hold['id']})"
+    elif holds:  # safe to show the form: a decision must still come after a new hold
+        missing = (f"no MERGE-HOLD-{n} for this hold: the lead's doesn't name {', '.join(min(lacking, key=len))} "
+                   f"(the form: MERGE-HOLD-<n>: PR #{a.pr}, reason 5 (sensitive paths): {', '.join(paths)})")
+    else:
+        missing = f"no trusted MERGE-HOLD-{n} from the lead"
+    g.fail("sensitive paths", [(f"{held}; --allow-hold 5 --decision {a.decision}: {room.where()} has {missing}", 5)])
 
 
 # --- gate and merge commands
@@ -2023,15 +2543,17 @@ def run_gate(a, expect_sha=None):
     head_repo = (head.get("repo") or {}).get("full_name") or ""
     if head_repo.lower() != REPO.lower():
         problems.append(f"has its head in {head_repo or 'an unknown repo'}, not {REPO}")
-    m = re.fullmatch(r"mission/(M\d+)(?:-.+)?", ref)
-    if not ref.startswith("mission/") or not (m or a.mission):
+    m = re.fullmatch(r"mission/(M\d+)(?:-.+)?", ref)  # the mission is the token right after mission/
+    if not m:
         problems.append(f"has head {ref or '?'}, not a mission/M<k>-… branch")
+    elif a.mission and a.mission != m.group(1):
+        problems.append(f"has head {ref}, whose mission is {m.group(1)}, not --mission {a.mission}")
     if not SHA40.fullmatch(sha):
         problems.append("has no head sha")
     if problems:
         g.fail("PR", [(f"PR #{a.pr} " + ", ".join(problems), None)])
         return g.verdict(None), None
-    mission = a.mission or m.group(1)
+    mission = m.group(1)
     if expect_sha and sha != expect_sha:
         print(f"✗ PR: PR #{a.pr} head is {sha}, not {expect_sha}")
         print("head moved: re-run gate")
@@ -2047,7 +2569,9 @@ def run_gate(a, expect_sha=None):
 
     # 2. the lease
     sid = session_id(a)
-    holder, gen = lease_holder()
+    holder, gen, note = lease_holder()
+    if note:
+        print(f"[{note}]", file=sys.stderr)
     if holder != sid:
         print(f"✗ lease: held by {holder} (generation {gen}), not this session ({sid})")
         print("gate: lease lost")
@@ -2057,20 +2581,21 @@ def run_gate(a, expect_sha=None):
     playbook, ledger, missions = (blob(state, STATE_REF, f"{PLAYBOOK_DIR}/{n}")
                                   for n in ("PLAYBOOK.md", "LEDGER.md", "MISSIONS.md"))
 
+    room = RoomLog(playbook, missions)
     rec = review_records(root, sha, mission, a.pr)
     check_coverage(g, root, sha, rec)                         # 3
-    check_dispositions(g, root, sha, rec, ledger)             # 4
-    check_checks(g, sha)                                      # 5
-    check_sensitive(g, root, sha, playbook, missions, a)      # 6
+    try:
+        phase = int(read_block(missions or "").get("phase", ""))
+    except (StateError, ValueError):
+        phase = None
+    check_dispositions(g, root, sha, rec, ledger, room, phase)  # 4
+    check_checks(g, root, sha, pr.get("updated_at"))          # 5
+    check_sensitive(g, root, sha, playbook, a, room)          # 6
     return g.verdict(sha), sha
 
 
 def cmd_gate(a):
     return run_gate(a)[0]
-
-
-class LeaseLost(Exception):
-    pass
 
 
 def http_status(err):
@@ -2082,23 +2607,13 @@ def cmd_merge(a):
     code, _ = run_gate(a, expect_sha=a.sha)
     if code:
         return code
-    sid = session_id(a)
-
-    def record(values):  # re-read the lease right before the merge, in the same write as the intent
-        if values.get("lease_session") != sid:
-            raise LeaseLost(values.get("lease_session"))
-        return {"intent": f"merge PR #{a.pr} at {a.sha}"}
-
-    try:
-        change_state(a, f"merge: intent PR #{a.pr} at {a.sha[:12]}", record)
-    except LeaseLost as e:
-        print(f"not merged: the lease is held by {e}, not this session ({sid})", file=sys.stderr)
-        return EXIT_LEASE
+    # change_state re-reads the lease right before the merge, in the same write as the intent (exit 5 if lost)
+    change_state(a, f"merge: intent PR #{a.pr} at {a.sha[:12]}", lambda v: {"intent": f"merge PR #{a.pr} at {a.sha}"})
 
     def clear(why):
         try:
             change_state(a, f"merge: PR #{a.pr} not merged ({why})", lambda v: {"intent": "none"})
-        except (StateError, StateMoved) as e:
+        except (StateError, StateMoved, StateExit) as e:
             print(f"[intent not cleared: {e or 'the state branch moved'}]", file=sys.stderr)
 
     try:
@@ -2116,13 +2631,12 @@ def cmd_merge(a):
         print(f"merge failed: {e}; intent left recorded for reconciliation", file=sys.stderr)
         return 1
     merged = res.get("sha") or "?"
-    print(f"merged PR #{a.pr}: {merged}")
     try:
         change_state(a, f"merge: PR #{a.pr} merged as {merged[:12]}", lambda v: {"intent": "none", "pr": f"merged:{a.pr}"})
-    except (StateError, StateMoved) as e:
-        print(f"state not updated: {e or 'the state branch moved'}; intent left recorded for reconciliation",
-              file=sys.stderr)
+    except (StateError, StateMoved, StateExit) as e:  # merged all the same: the intent stays for reconciliation
+        print(f"merged PR #{a.pr}: {merged}; state not updated ({e or 'the state branch moved'}): reconcile")
         return 1
+    print(f"merged PR #{a.pr}: {merged}")
     return 0
 
 
@@ -2156,9 +2670,10 @@ def add_gate_commands(sub, common):
         s.add_argument("pr", type=int)
         if name == "merge":
             s.add_argument("--sha", type=sha_arg, required=True, help="the head commit the gate checked")
-        s.add_argument("--mission", type=mission_arg, help="M<k> (default: from the head branch mission/M<k>-…)")
+        s.add_argument("--mission", type=mission_arg, help="M<k>: must be the mission of the head branch mission/M<k>-…")
         s.add_argument("--allow-hold", choices=("5",), help="let a sensitive-path match pass, with --decision")
-        s.add_argument("--decision", type=decision_arg, help="the architect's DECISION-<n> in the room allowing it")
+        s.add_argument("--decision", type=decision_arg,
+                       help="the DECISION-<n> in the room that answers the lead's MERGE-HOLD-<n> for this PR")
 
 
 # --- end of review records, merge gate and merge
@@ -2174,11 +2689,13 @@ def add_gate_commands(sub, common):
 #   budget
 #
 # watchdog, reconcile and budget read the pushed state branch and never write it; the watchdog schedules nothing.
-# Intents reconcile recognizes: "merge PR #<n> at <sha>", "open PR <branch or M<k>>", "post <KIND> after #<id>" (as
-# 'intent' records it), "close room".
+# Intents reconcile recognizes: "merge PR #<n> at <sha>", "open PR <branch or M<k>>", "post <KIND> in room <n> after
+# #<id>" and "close room <n> after #<id>" (as 'intent' records them).
 
 WAITING_FOR_OWNER = "waiting for owner"
 QUIET_STATUSES = ("paused", "stopped", "done")
+PROGRESS_KEYS = ("step", "pr")  # the machine-block keys whose change is progress; merge records pr
+PRESTART_HOURS = 12  # a room no lead has joined gets one alarm this long after its issue was opened
 DEFAULT_BUDGET_HOURS = 8
 
 
@@ -2221,25 +2738,23 @@ def halted(values):
     return status_of(values).strip().lower() in QUIET_STATUSES
 
 
-def current_room(values, playbook):
-    """(number, where) of the room the state records: the block's room, else PLAYBOOK.md's; None if neither."""
-    for n, where in ((values.get("room"), "MISSIONS.md"),
-                     ((re.search(r"^room:[ \t]*(\d+)", playbook or "", re.M) or [None, None])[1], "PLAYBOOK.md")):
-        if (n or "").strip().isdigit() and int(n) > 0:
-            return int(n), where
-    return None
-
-
 def quiet_reason(a, values, playbook):
     """Why the watchdog stays quiet whatever the progress, or None."""
+    room = current_room(playbook, values)
     if halted(values):
-        return f"status is {status_of(values)}"
-    if (values.get("waiting_for_owner") or "").strip().lower() == "yes":
-        return "waiting_for_owner is yes"
+        holder, _ = lease_of(values)
+        own = (values.get("room") or "").strip()
+        if own.isdigit() and int(own) > 0 and room and int(own) != room[0]:
+            # e.g. phase 1's DONE, while the architect has opened the next phase's room: it says nothing of this one
+            print(f"note: status is {status_of(values)}, but for room {own}, not the current room {room[0]}, so it "
+                  "counts as running")
+        elif holder == "none":  # the lead posted PAUSED, STOPPED or DONE and released the lease
+            return f"status is {status_of(values)} and the lease is released"
+        else:  # written, but the lease is still held: the lead may have died before its post and release
+            print(f"note: status is {status_of(values)}, but {holder} still holds the lease, so it counts as running")
     step = values.get("step") or "none"
     if step.strip().lower().startswith(WAITING_FOR_OWNER):
         return f"step is {step}"
-    room = current_room(values, playbook)
     if room and room[0] != a.room:
         return (f"room {a.room} is not the current room ({room[1]} records room {room[0]}); this watchdog is left "
                 "from an earlier phase: delete it")
@@ -2262,10 +2777,11 @@ def shallow_cut(path, sha):
         return False
 
 
-def last_change(path, counts=lambda key: key != "cursor"):
+def last_change(path, counts=lambda key: key in PROGRESS_KEYS):
     """(sha, committer time) of the newest commit on the fetched state branch whose MISSIONS.md changes a key
     of the machine block for which counts(key) holds (the commit that adds the block counts), or None. By
-    default every key but cursor counts. Deepens a shallow clone as far as needed."""
+    default only step and pr count. A commit whose block doesn't parse changes nothing: it is skipped, so
+    breaking the block is no progress. Deepens a shallow clone as far as needed."""
     rel = f"{PLAYBOOK_DIR}/MISSIONS.md"
 
     def value(sha):
@@ -2275,26 +2791,29 @@ def last_change(path, counts=lambda key: key != "cursor"):
             return None
     newer = None
     for _ in range(50):
-        newer = None  # (sha, time, value) of the commit after the one being read
+        newer, oldest = None, None  # newer: (sha, time, value) of the valid commit after the one being read
         for entry in git_out("log", "--topo-order", "--format=%H %ct", STATE_REF, "--", rel, cwd=path).splitlines():
             sha, ct = entry.split()
+            oldest = sha
             v = value(sha)
+            if v is None:
+                continue
             if newer and v != newer[2]:
                 return newer[0], int(newer[1])
             newer = (sha, ct, v)
-        if newer is None or not shallow_cut(path, newer[0]):
+        if oldest is None or not shallow_cut(path, oldest):
             break
         before = git_out("rev-list", "--count", STATE_REF, cwd=path)
         git("fetch", "-q", "--deepen=200", "origin", f"+refs/heads/{STATE_BRANCH}:{STATE_REF}", cwd=path)
         if git_out("rev-list", "--count", STATE_REF, cwd=path) == before:
             break
-    return (newer[0], int(newer[1])) if newer and newer[2] is not None else None
+    return (newer[0], int(newer[1])) if newer else None
 
 
-def mission_push():
-    """(branch, committer time) of the newest mission/* branch tip on the remote, or None."""
+def mission_push(heads):
+    """(branch, committer time) of the newest mission/* branch tip among HEADS ({branch: sha}), or None."""
     best = None
-    for branch, sha in sorted(remote_heads().items()):
+    for branch, sha in sorted(heads.items()):
         if not branch.startswith("mission/"):
             continue
         try:
@@ -2309,59 +2828,174 @@ def mission_push():
     return best
 
 
-def mission_merge():
-    """(number, merge time) of the newest merged PR from a mission/* head in this repo, or None. GitHub
-    deletes the merged branch, so its last push is gone; the merge itself is progress."""
-    best = None
-    for p in gh(f"repos/{REPO}/pulls?state=closed&sort=updated&direction=desc&per_page=100") or []:
-        head = p.get("head") or {}
-        if not (head.get("ref") or "").startswith("mission/") or \
-                ((head.get("repo") or {}).get("full_name") or "").lower() != REPO.lower():
-            continue
-        t = parse_time(p.get("merged_at"))
-        if t is not None and (best is None or t > best[1]):
-            best = (p.get("number"), t)
+def mission_branches(heads, values, missions):
+    """The mission branches whose merges count: the mission/* branches on the remote, those MISSIONS.md names for
+    the recorded mission (GitHub deletes a branch on merge), and the head of the recorded PR."""
+    out = {b for b in heads if b.startswith("mission/")}
+    mission = (values or {}).get("mission") or ""
+    if re.fullmatch(r"M\d+", mission):
+        out |= set(re.findall(rf"\bmission/{mission}(?:-[\w.-]+)?(?![\w.-])", missions or ""))
+    n = re.search(r"\d+", (values or {}).get("pr") or "")
+    if n:
+        status, p = gh_try(f"repos/{REPO}/pulls/{n.group()}")
+        if status == 200 and isinstance(p, dict):
+            ref = (p.get("head") or {}).get("ref") or ""
+            if ref.startswith("mission/"):
+                out.add(ref)
+        elif status not in (404, 422):
+            raise GhError(f"can't read PR #{n.group()}: {p}")
+    return out
+
+
+def mission_merge(branches):
+    """(number, merge time) of the newest merged PR from one of BRANCHES in this repo, or None. Closed PRs are
+    read per branch (head=OWNER:branch), page by page, so no number of other PRs can hide a merge."""
+    owner, best = REPO.split("/")[0], None
+    for branch in sorted(branches):
+        page = 1
+        while True:
+            batch = gh(f"repos/{REPO}/pulls?state=closed&head={owner}:{branch}&per_page=100&page={page}") or []
+            for p in batch:
+                head = p.get("head") or {}
+                if head.get("ref") != branch or ((head.get("repo") or {}).get("full_name") or "").lower() != REPO.lower():
+                    continue
+                t = parse_time(p.get("merged_at"))
+                if t is not None and (best is None or t > best[1]):
+                    best = (p.get("number"), t)
+            if len(batch) < 100:
+                break
+            page += 1
     return best
 
 
+def outside_progress(values=None, missions=None):
+    """[(time, what)] of the progress outside the state branch: the newest mission push and mission PR merge."""
+    found, heads = [], remote_heads()
+    push = mission_push(heads)
+    if push:
+        found.append((push[1], f"{push[0]} pushed"))
+    merge = mission_merge(mission_branches(heads, values, missions))
+    if merge:
+        found.append((merge[1], f"PR #{merge[0]} merged"))
+    return found
+
+
+def alarms_since(a, progress):
+    """The room's trusted watchdog LEAD-SILENTs newer than PROGRESS (all, if None) whose buzz didn't fail, oldest
+    first. An alarm whose buzz failed doesn't count, so it is tried again."""
+    out = []
+    for m in map(parse, comments(a.room, iso(progress) if progress is not None else None)):
+        t = parse_time(m["at"])
+        if m["role"] == "watchdog" and trusted(m) and message_kind(m["text"]) == "LEAD-SILENT" and t and \
+                (progress is None or t > progress) and not re.search(r"\(buzz failed\b", m["text"]):
+            out.append(m)
+    return out
+
+
+def alarm(a, text):
+    """Buzz first (click: the room), then post TEXT saying how the buzz went, with no buzz of its own."""
+    err = buzz_message(a.room, "watchdog", "LEAD-SILENT", {})
+    print("[buzz sent]" if err is None else f"[buzz failed: {err}]")
+    say(a.room, "watchdog", f"{text} " + ("(buzz sent)" if err is None else f"(buzz failed: {err})"), a, buzz=False)
+
+
+def unreadable_state_alarm(a, path, reason):
+    """No machine block anywhere, or no state branch: no lead can write state either, so the pipeline is stuck.
+    The same DURATION and one alarm per stall apply, measured from the last state-branch commit, if any."""
+    reason = re.sub(r"[:;] (?:the architect runs|the lead runs|run) '.*$", "", reason.replace(ME, "room.py"))[:300]
+    found = outside_progress()
+    if path:
+        t = git("log", "-1", "--format=%ct", STATE_REF, cwd=path, check=False).stdout.strip()
+        if t.isdigit():
+            found.append((int(t), f"{STATE_BRANCH} commit"))
+    progress, what = max(found) if found else (None, None)
+    now = time.time()
+    if progress is not None and now - progress < a.silent_after:
+        print(f"quiet: state unreadable ({reason}), but progress {span(now - progress)} ago ({what} at "
+              f"{iso(progress)}), under {span(a.silent_after)}")
+        return 0
+    # only an earlier "state unreadable" alarm reports this, and only as the newest alarm: an ordinary stall alarm,
+    # or one after which the state came back, says nothing of the state being gone now
+    seen = alarms_since(a, progress)
+    seen = seen[-1:] if seen and "LEAD-SILENT: state unreadable" in seen[-1]["text"] else []
+    if seen:
+        print(f"quiet: LEAD-SILENT #{seen[-1]['id']} at {seen[-1]['at']} already reports this stall")
+        return 0
+    print(f"alarm: state unreadable ({reason})")
+    alarm(a, f"LEAD-SILENT: state unreadable ({reason})")
+    return 0
+
+
+def prestart_alarm(a):
+    """Before any lead has joined room N (no trusted lead LEAD ONLINE there), the state may be missing or still
+    the previous phase's: quiet, with a note, until PRESTART_HOURS after the room's issue was opened, then one
+    alarm. Returns the exit code, or None once a lead has joined, when the usual rules apply."""
+    if any(m["role"] == "lead" and trusted(m) and message_kind(m["text"]) == "LEAD ONLINE"
+           for m in map(parse, comments(a.room))):
+        return None
+    opened = parse_time((gh(f"repos/{REPO}/issues/{a.room}") or {}).get("created_at"))
+    if opened is None or time.time() - opened < PRESTART_HOURS * 3600:
+        print(f"quiet: no lead has joined room {a.room} yet" +
+              (f" (opened {span(time.time() - opened)} ago)" if opened is not None else ""))
+        return 0
+    seen = alarms_since(a, None)  # only one alarm for it
+    if seen:
+        print(f"quiet: no lead has joined room {a.room} yet; LEAD-SILENT #{seen[-1]['id']} already reports it")
+        return 0
+    print(f"alarm: no lead has joined room {a.room} in {PRESTART_HOURS}h (opened {iso(opened)})")
+    alarm(a, f"LEAD-SILENT: no lead has joined room {a.room} in {PRESTART_HOURS}h")
+    return 0
+
+
 def cmd_watchdog(a):
-    path, values = pushed_state()  # fetched and read from git objects: the watchdog never writes state
+    code = prestart_alarm(a)  # first: before any lead joins, missing state, flags and status say nothing
+    if code is not None:
+        return code
+    try:
+        path, values, note = pushed_state()  # fetched and read from git objects: the watchdog never writes state
+    except StateError as e:
+        # only a state branch that ls-remote doesn't list is no state; any other failure (a fetch that broke on
+        # the network) exits 1 without posting, and the next run tries again
+        if STATE_BRANCH in remote_heads():
+            raise StateError(f"can't read {STATE_BRANCH} ({e}); no alarm: the next run tries again")
+        return unreadable_state_alarm(a, None, f"{STATE_BRANCH} doesn't exist in {REPO}")
+    if not values:
+        return unreadable_state_alarm(a, path, note)
+    if note:  # the pushed block is damaged: the last valid one stands in
+        print(f"note: {note}")
     step, mission = values.get("step") or "none", values.get("mission") or "none"
     why = quiet_reason(a, values, pushed_text(path, "PLAYBOOK.md"))
     if why:
         print(f"quiet: {why}")
         return 0
-    found = []  # progress: a state write other than the cursor, a mission branch push, a mission PR's merge
+    # progress, not chatter (v1): a step or pr change, a mission branch push, a mission PR's merge. Lease takes,
+    # handoffs at the same step, intents, the counter and the cursor don't count, so a lead in a loop alarms
+    found = outside_progress(values, pushed_text(path, "MISSIONS.md"))
     change = last_change(path)
     if change:
-        found.append((change[1], f"state change {change[0][:12]}"))
-    push = mission_push()
-    if push:
-        found.append((push[1], f"{push[0]} pushed"))
-    merge = mission_merge()
-    if merge:
-        found.append((merge[1], f"PR #{merge[0]} merged"))
+        found.append((change[1], f"step or pr change {change[0][:12]}"))
     if not found:
-        raise StateError(f"no progress to measure: {PLAYBOOK_DIR}/MISSIONS.md has no machine block in its history")
+        return unreadable_state_alarm(a, path, f"{PLAYBOOK_DIR}/MISSIONS.md has no step in its history")
     progress, what = max(found)
+    if (values.get("waiting_for_owner") or "").strip().lower() == "yes":
+        # it mutes only while nothing has progressed since the commit that set it; after that it is stale
+        flag = last_change(path, lambda k: k == "waiting_for_owner")
+        if flag is None or progress <= flag[1]:
+            print("quiet: waiting_for_owner is yes" + (f" (set at {iso(flag[1])}, no progress since)" if flag else ""))
+            return 0
+        print(f"note: waiting_for_owner is yes, but {what} at {iso(progress)} came after it was set at "
+              f"{iso(flag[1])}, so it is stale")
     now = time.time()
     if now - progress < a.silent_after:
         print(f"quiet: progress {span(now - progress)} ago ({what} at {iso(progress)}), "
               f"under {span(a.silent_after)}")
         return 0
-    for m in map(parse, comments(a.room, iso(progress))):  # one alarm per stall, unless its buzz failed
-        t = parse_time(m["at"])
-        if m["role"] == "watchdog" and trusted(m) and message_kind(m["text"]) == "LEAD-SILENT" and t and \
-                t > progress and not re.search(r"\(buzz failed\b", m["text"]):
-            print(f"quiet: LEAD-SILENT #{m['id']} at {m['at']} already reports this stall")
-            return 0
+    seen = alarms_since(a, progress)  # one alarm per stall
+    if seen:
+        print(f"quiet: LEAD-SILENT #{seen[0]['id']} at {seen[0]['at']} already reports this stall")
+        return 0
     print(f"alarm: no progress for {span(now - progress)} ({what} at {iso(progress)})")
-    # buzz first (click: the room), then post saying how it went: an alarm whose buzz failed doesn't count above,
-    # so the next run tries again
-    err = buzz_message(a.room, "watchdog", "LEAD-SILENT", {})
-    print("[buzz sent]" if err is None else f"[buzz failed: {err}]")
-    say(a.room, "watchdog", f"LEAD-SILENT: no progress since {iso(progress)} (step {step}, mission {mission}) " +
-        ("(buzz sent)" if err is None else f"(buzz failed: {err})"), a, buzz=False)
+    alarm(a, f"LEAD-SILENT: no progress since {iso(progress)} (step {step}, mission {mission})")
     return 0
 
 
@@ -2403,10 +3037,9 @@ def cmd_handoff(a):
     if p:  # change_state would refuse after HANDOFF is posted; refuse before it instead
         raise StateError(f"not handed off: the state worktree {path} has {p}: push them with '{ME} state commit "
                          f"-m MSG', or drop them with '{ME} state sync'")
-    text = pushed_text(path, "MISSIONS.md")
-    if text is None:
-        raise StateError(f"{PLAYBOOK_DIR}/MISSIONS.md is missing on {STATE_BRANCH}: run '{ME} state init-lead'")
-    values = read_block(text)
+    values, note = pushed_lease(path)  # the last valid block when the pushed one is damaged
+    if note:
+        print(f"[{note}]", file=sys.stderr)
     require_lease(values, sid, "not handed off")
     # the last comment the lead acted on, which it names: the cursor file also moves when the waiter merely reads
     cursor = a.cursor
@@ -2417,19 +3050,32 @@ def cmd_handoff(a):
             raise StateError(f"not handed off: --cursor {cursor}: {e}")
         if not (c.get("issue_url") or "").endswith(f"/issues/{a.room}"):
             raise StateError(f"not handed off: --cursor {cursor} is not a comment of room {a.room}")
-    # posted while this session still holds the lease; then step, cursor, intent and the release in one write
+    # (a) record step, cursor and intent=none, holding the lease; (b) post HANDOFF, still holding it; (c) release it.
+    # If (a) fails, nothing is posted; if (c) fails, the room has the HANDOFF and the lead must release by hand.
+    def write(msg, updates):
+        for attempt in (1, 2, 3):
+            try:
+                return change_state(a, msg, lambda v: updates)
+            except StateMoved:  # someone else wrote the state branch meanwhile: re-read, re-check the lease, re-apply
+                if attempt == 3:
+                    raise
+            except StateError:
+                reset_to_remote(path)  # drop the unpushed commit, so the next try starts clean
+                raise
+    try:
+        write(f"handoff: {sid} records step {step} for its successor",
+              {"step": step, "cursor": cursor, "intent": "none"})
+    except StateMoved:
+        raise StateExit(EXIT_MOVED, f"not handed off: {STATE_BRANCH} kept moving, so nothing was posted; run "
+                                    "handoff again")
     say(a.room, "lead", f"HANDOFF: mission {values.get('mission') or 'none'}, next step {step}\n\n"
                         "Successor: being scheduled now; a NEXT-LEAD-NEEDED follows if that fails.", a)
-    updates = {"step": step, "cursor": cursor, "intent": "none", "lease_session": "none"}
-    for attempt in (1, 2, 3):
-        try:
-            change_state(a, f"handoff: {sid} hands over at step {step} and releases the lease", lambda v: updates)
-            break
-        except StateMoved:  # someone else wrote the state branch meanwhile: re-read, re-check the lease, re-apply
-            if attempt == 3:
-                raise StateExit(EXIT_MOVED, "HANDOFF is posted, but the state branch kept moving, so the state "
-                                            f"is not recorded: run '{ME} state set step={step} cursor={cursor} "
-                                            f"intent=none', then '{ME} lease release'")
+    try:
+        write(f"handoff: {sid} releases the lead lease", {"lease_session": "none"})
+    except (StateError, StateMoved, StateExit) as e:
+        print(f"lease not released: {str(e) or f'{STATE_BRANCH} kept moving'}", file=sys.stderr)
+        print(f"HANDOFF is posted; run '{ME} lease release' again", file=sys.stderr)
+        return 1
     print(f"recorded step {step}, cursor {cursor}, intent none; lease released by {sid}")
     print("Schedule a one-time task about a minute from now whose prompt is the join line below. If that fails: "
           f"{ME} say {a.room} lead 'NEXT-LEAD-NEEDED: ...' --repo {REPO}")
@@ -2504,52 +3150,77 @@ def intent_hint(a, intent, path, msgs, pr):
             return (f"intent not done: redo it (PR #{p.get('number')} from {p['head']['ref']} was closed without "
                     f"merging; open a new one{ignored})")
         return f"intent not done: redo it (no PR from {ref}{ignored})"
-    m = re.fullmatch(r"post (.+?)(?: after #(\d+))?", intent)
+    m = re.fullmatch(r"post (.+?)(?: in room (\d+))?(?: after #(\d+))?", intent)
     kind = message_kind(m.group(1)) if m else None
     if kind:
-        # 'intent' records the room's last comment ID with it: a later trusted lead message of the kind did it.
-        # Without one, only a numbered kind, unique in the room, can be judged. No clocks involved.
-        after = int(m.group(2)) if m.group(2) else None
+        # 'intent' records the room and its last comment ID: a later trusted lead message of the kind in that room
+        # did it. Without an ID, only a numbered kind, unique in the room, can be judged. No clocks involved.
+        where = int(m.group(2)) if m.group(2) else a.room
+        after = int(m.group(3)) if m.group(3) else None
         if after is None and not re.search(r"-\d+$", kind):
             return (f"intent unknown: which {kind}? Record post intents with '{ME} intent N \"post {kind}\"', "
                     "which notes the room's last comment")
+        if where != a.room:
+            leads = [x for x in map(parse, comments(where)) if trusted(x) and x["role"] == "lead"]
+        place = f"room {where}" if m.group(2) else "the room"
         hits = [x for x in leads if message_kind(x["text"]) == kind and (after is None or x["id"] > after)]
         if hits:
-            return f"intent done: clear it ({kind} is in the room: #{hits[-1]['id']})"
-        return f"intent not done: redo it (no {kind} in the room" + (f" after #{after})" if after is not None else ")")
-    if re.fullmatch(r"close (?:the )?room", intent):
+            return f"intent done: clear it ({kind} is in {place}: #{hits[-1]['id']})"
+        return f"intent not done: redo it (no {kind} in {place}" + (f" after #{after})" if after is not None else ")")
+    m = re.fullmatch(r"close (?:the )?room(?: (\d+))?(?: after #(\d+))?", intent)
+    if m:
+        if m.group(1) and int(m.group(1)) != a.room:  # e.g. phase 1's DONE, still in the block in phase 2
+            return f"intent from an earlier room: clear it (close room {m.group(1)}; this is room {a.room})"
         issue = gh(f"repos/{REPO}/issues/{a.room}") or {}
         if issue.get("state") != "closed":
             return f"intent not done: redo it (room {a.room} is open)"
-        # close closes the issue first, then posts its note: both must have happened (GitHub's clock on both)
-        closed = parse_time(issue.get("closed_at"))
-        notes = [x for x in leads if closed is not None and (parse_time(x["at"]) or 0) >= closed]
+        closes = [x for x in leads if message_kind(x["text"]) in ("DONE", "STOPPED")]
+        if m.group(2):
+            # 'intent' recorded the room's last comment: a later trusted lead DONE or STOPPED is the closing note,
+            # posted before the close (as the protocol does) or after it (as close does with a text)
+            after = int(m.group(2))
+            notes, since = [x for x in closes if x["id"] > after], f"after #{after}"
+        else:  # recorded without an ID: the note close posts after closing
+            closed = parse_time(issue.get("closed_at"))
+            notes = [x for x in closes if closed is not None and (parse_time(x["at"]) or 0) >= closed]
+            since = "came after it closed"
         if notes:
-            return f"intent done: clear it (room {a.room} is closed, closing note #{notes[-1]['id']})"
-        return f"intent not done: redo it (room {a.room} is closed, but no lead message came after it closed)"
+            kind = message_kind(notes[-1]["text"])
+            return f"intent done: clear it (room {a.room} is closed, closing {kind} #{notes[-1]['id']})"
+        return f"intent not done: redo it (room {a.room} is closed, but no lead DONE or STOPPED {since})"
     return ("intent unknown: check it by hand (reconcile knows: merge PR #<n> at <sha>, open PR <branch or M<k>>, "
             "post <KIND>, close room)")
 
 
 def cmd_intent(a):
-    """Record before acting: the intent, in its own state write. A post intent also records the room's last
-    comment ID (post KIND after #ID), so reconcile can tell a later post of that kind from an earlier one."""
+    """Record before acting: the intent, in its own state write, for room N, which must be the current room. A
+    post intent also records the room and its last comment ID (post KIND in room N after #ID), so reconcile can
+    tell a later post of that kind from an earlier one, in the right room."""
     text = single_line("intent", a.intent)
     if not text:
         raise StateError("say what is about to happen (merge PR #<n> at <sha>, open PR <branch>, post <KIND>, "
                          "close room), or none")
+    path, values, _ = pushed_state()
+    found = current_room(pushed_text(path, "PLAYBOOK.md"), values)
+    if found and found[0] != a.room:
+        raise StateError(f"not recorded: room {a.room} is not the current room ({found[1]} records room "
+                         f"{found[0]})")
     m = re.fullmatch(r"post\s+(.+)", text)
     if m:
         kind = message_kind(m.group(1))
         if not kind:
             raise StateError(f"a post intent names the message kind: post ESCALATION-3, post PAUSED…, not {text!r}")
-        text = f"post {kind} after #{max((c['id'] for c in comments(a.room)), default=0)}"
+        text = f"post {kind} in room {a.room} after #{max((c['id'] for c in comments(a.room)), default=0)}"
+    elif re.fullmatch(r"close (?:the )?room(?: \d+)?(?: after #\d+)?", text):
+        # with its room, so that left in the block after DONE it can't send the next phase to close its own room,
+        # and with the room's last comment, so that a DONE posted before the close counts
+        text = f"close room {a.room} after #{max((c['id'] for c in comments(a.room)), default=0)}"
     change_state(a, f"intent: {text}", lambda v: {"intent": text})
     print(f"intent: {text}")
 
 
 def cmd_reconcile(a):
-    path, values = pushed_state()  # it changes nothing: no state write, no cursor move
+    path, values = recorded_state()  # it changes nothing: no state write, no cursor move
     print(f"recorded state ({PLAYBOOK_DIR}/MISSIONS.md on {STATE_BRANCH} at "
           f"{git_out('rev-parse', '--short', STATE_REF, cwd=path)}):")
     for k, v in values.items():
@@ -2635,7 +3306,7 @@ def phase_budget(playbook, phase):
 
 
 def cmd_budget(a):
-    path, values = pushed_state()
+    path, values = recorded_state()
     mission, phase = values.get("mission") or "none", values.get("phase") or "1"
     started = values.get("mission_started") or "none"
     if started == "none":
@@ -2663,8 +3334,8 @@ def add_unattended_commands(sub, common):
         return s
 
     s = leaf("watchdog", cmd_watchdog, "the watchdog task, as role watchdog: buzz and post LEAD-SILENT when no "
-                                       "state write (but the cursor's), mission branch push or mission PR merge "
-                                       "happened for DURATION; never writes state or schedules anything")
+                                       "step or pr change, mission branch push or mission PR merge happened for "
+                                       "DURATION; never writes state or schedules anything")
     s.add_argument("room", type=int)
     s.add_argument("--silent-after", type=duration_arg, default=3 * 3600, metavar="DURATION",
                    help="like 3h or 45m (default 3h; drills use a short one)")
@@ -2672,8 +3343,8 @@ def add_unattended_commands(sub, common):
     s.add_argument("room", type=int)
     s.add_argument("--takeover", action="store_true",
                    help="for the lead Matthew starts after LEAD-SILENT: take the lease with lease take --takeover")
-    s = leaf("handoff", cmd_handoff, "post HANDOFF while holding the lease, then record step, cursor and intent=none "
-                                     "and release the lease in one state write; prints the join line to schedule")
+    s = leaf("handoff", cmd_handoff, "record step, cursor and intent=none holding the lease, post HANDOFF, then "
+                                     "release the lease; prints the join line to schedule")
     s.add_argument("room", type=int)
     s.add_argument("--step", required=True, help="the step the successor starts at")
     s.add_argument("--cursor", required=True, type=from_arg, metavar="ID",
