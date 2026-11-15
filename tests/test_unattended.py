@@ -1038,7 +1038,7 @@ def t_intent_command():
     # cold M4 R1-13, R1-14: a post intent records the room's last comment ID; other intents are recorded as given
     assert intent("post ESCALATION-7: which greeting?") == f"post ESCALATION-7 in room 1 after #{last_id()}"
     assert intent("merge PR #12 at " + "a" * 40) == "merge PR #12 at " + "a" * 40
-    assert intent("close room") == "close room 1"
+    assert intent("close room") == f"close room 1 after #{last_id()}"
     assert intent("none") == "none"
     before = state_sha()
     for bad, code, why in (("post nothing here", 1, "names the message kind"), ("", 1, "say what is about to happen"),
@@ -1134,7 +1134,7 @@ def t_reconcile_close_room_intent():
     room("close", "4", "lead", "STOPPED: halted on STOP", check=True)  # the redo: closing again is harmless
     assert hint(reconcile("4")) == f"intent done: clear it (room 4 is closed, closing STOPPED #{comments('4')[-1]['id']})"
     # cold M4 S1-3: intent records which room it closes; left in the block, it is judged against that room only
-    assert intent("close the room") == "close room 1"
+    assert intent("close the room") == f"close room 1 after #{last_id()}"
     assert hint(reconcile("1")) == "intent not done: redo it (room 1 is open)"
     assert hint(reconcile("4")) == "intent from an earlier room: clear it (close room 1; this is room 4)"
     set_state("intent=close room 4")
@@ -1242,6 +1242,44 @@ def t_watchdog_before_any_lead_joins():
         "alarm: no progress for 6h" in r.stdout, out(r)
     edit_state("PLAYBOOK.md", lambda t: original, hours=6)
     room("lease", "take", check=True)
+
+
+def t_close_room_intent_counts_a_done_before_the_close():
+    # qodo PR #8 "Completed phases appear to need closing": the documented sequence posts DONE, then closes with
+    # close's default note; a trusted lead DONE or STOPPED after the intent's comment ID counts, before or after
+    # closed_at, and one from before the intent doesn't
+    original = remote_file("docs/playbook/PLAYBOOK.md")
+    try:
+        for n in ("6", "7"):
+            assert f"room {n} in SigorMatt/pet" in room("new", f"Phase {n}", check=True).stdout
+            room("say", n, "lead", "LEAD ONLINE", "--no-buzz", check=True)
+            edit_state("PLAYBOOK.md", lambda t, n=n: re.sub(r"^room: .*$", f"room: {n}", original, count=1,
+                                                            flags=re.M), hours=6)
+            if n == "7":
+                room("say", n, "lead", "DONE: too early, before the intent", "--no-buzz", check=True)
+            recorded = intent_in(n, "close room")
+            assert recorded == f"close room {n} after #{last_id(n)}", recorded
+            if n == "6":  # the documented sequence
+                room("say", n, "lead", "DONE: phase 6 complete", "--no-buzz", check=True)
+                done = last_id(n)
+                room("close", n, "lead", check=True)  # "Closing the room.", posted after closed_at
+                assert text_of(comments(n)[-1]) == "Closing the room."
+                assert hint(reconcile(n)) == f"intent done: clear it (room {n} is closed, closing DONE #{done})"
+            else:
+                room("close", n, "lead", check=True)
+                assert hint(reconcile(n)) == (f"intent not done: redo it (room {n} is closed, but no lead DONE or "
+                                              f"STOPPED after #{recorded.rsplit('#', 1)[1]})")
+                room("close", n, "lead", "DONE: phase 7 complete", "--no-buzz", check=True)
+                assert hint(reconcile(n)) == f"intent done: clear it (room {n} is closed, closing DONE #{last_id(n)})"
+    finally:
+        edit_state("PLAYBOOK.md", lambda t: original, hours=6)
+        set_state("intent=none")
+
+
+def intent_in(n, text):
+    """room.py intent N TEXT; returns what it recorded."""
+    r = room("intent", n, text, check=True)
+    return r.stdout.strip()[len("intent: "):]
 
 
 setup()

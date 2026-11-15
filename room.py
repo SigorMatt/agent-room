@@ -2689,7 +2689,7 @@ def add_gate_commands(sub, common):
 #
 # watchdog, reconcile and budget read the pushed state branch and never write it; the watchdog schedules nothing.
 # Intents reconcile recognizes: "merge PR #<n> at <sha>", "open PR <branch or M<k>>", "post <KIND> in room <n> after
-# #<id>" (as 'intent' records it), "close room".
+# #<id>" and "close room <n> after #<id>" (as 'intent' records them).
 
 WAITING_FOR_OWNER = "waiting for owner"
 QUIET_STATUSES = ("paused", "stopped", "done")
@@ -3166,23 +3166,27 @@ def intent_hint(a, intent, path, msgs, pr):
         if hits:
             return f"intent done: clear it ({kind} is in {place}: #{hits[-1]['id']})"
         return f"intent not done: redo it (no {kind} in {place}" + (f" after #{after})" if after is not None else ")")
-    m = re.fullmatch(r"close (?:the )?room(?: (\d+))?", intent)
+    m = re.fullmatch(r"close (?:the )?room(?: (\d+))?(?: after #(\d+))?", intent)
     if m:
         if m.group(1) and int(m.group(1)) != a.room:  # e.g. phase 1's DONE, still in the block in phase 2
             return f"intent from an earlier room: clear it (close room {m.group(1)}; this is room {a.room})"
         issue = gh(f"repos/{REPO}/issues/{a.room}") or {}
         if issue.get("state") != "closed":
             return f"intent not done: redo it (room {a.room} is open)"
-        # close closes the issue first, then posts its note: both must have happened (GitHub's clock on both), and
-        # the note is the lead's DONE or STOPPED, not any later message such as a new lead's LEAD ONLINE
-        closed = parse_time(issue.get("closed_at"))
-        notes = [x for x in leads if closed is not None and (parse_time(x["at"]) or 0) >= closed and
-                 message_kind(x["text"]) in ("DONE", "STOPPED")]
+        closes = [x for x in leads if message_kind(x["text"]) in ("DONE", "STOPPED")]
+        if m.group(2):
+            # 'intent' recorded the room's last comment: a later trusted lead DONE or STOPPED is the closing note,
+            # posted before the close (as the protocol does) or after it (as close does with a text)
+            after = int(m.group(2))
+            notes, since = [x for x in closes if x["id"] > after], f"after #{after}"
+        else:  # recorded without an ID: the note close posts after closing
+            closed = parse_time(issue.get("closed_at"))
+            notes = [x for x in closes if closed is not None and (parse_time(x["at"]) or 0) >= closed]
+            since = "came after it closed"
         if notes:
             kind = message_kind(notes[-1]["text"])
             return f"intent done: clear it (room {a.room} is closed, closing {kind} #{notes[-1]['id']})"
-        return (f"intent not done: redo it (room {a.room} is closed, but no lead DONE or STOPPED came after it "
-                "closed)")
+        return f"intent not done: redo it (room {a.room} is closed, but no lead DONE or STOPPED {since})"
     return ("intent unknown: check it by hand (reconcile knows: merge PR #<n> at <sha>, open PR <branch or M<k>>, "
             "post <KIND>, close room)")
 
@@ -3206,8 +3210,10 @@ def cmd_intent(a):
         if not kind:
             raise StateError(f"a post intent names the message kind: post ESCALATION-3, post PAUSED…, not {text!r}")
         text = f"post {kind} in room {a.room} after #{max((c['id'] for c in comments(a.room)), default=0)}"
-    elif re.fullmatch(r"close (?:the )?room(?: \d+)?", text):
-        text = f"close room {a.room}"  # left in the block after DONE, it mustn't send the next phase to close its room
+    elif re.fullmatch(r"close (?:the )?room(?: \d+)?(?: after #\d+)?", text):
+        # with its room, so that left in the block after DONE it can't send the next phase to close its own room,
+        # and with the room's last comment, so that a DONE posted before the close counts
+        text = f"close room {a.room} after #{max((c['id'] for c in comments(a.room)), default=0)}"
     change_state(a, f"intent: {text}", lambda v: {"intent": text})
     print(f"intent: {text}")
 
