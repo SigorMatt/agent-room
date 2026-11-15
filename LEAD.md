@@ -267,7 +267,7 @@ This follows `~/agent-room/docs/QODO-REVIEW.md` ([`docs/QODO-REVIEW.md`](docs/QO
    ```bash
    python3 room.py merge <PR> --sha <sha>
    ```
-   Exit 0 (`merged PR #<PR>: <merge sha>`): 5.7. Exit 3 (head moved): run the gate again. Exit 6: the gate failed (as in step 2), or GitHub finds the PR not mergeable (hold, reason 3). Exit 5: stand down. Exit 1: run `reconcile` and follow its hint.
+   Exit 0 (`merged PR #<PR>: <merge sha>`): with drill `stop-after-merge`, end now, before any bookkeeping, still holding the lease and with no check-in; otherwise 5.7. Exit 3 (head moved): run the gate again. Exit 6: the gate failed (as in step 2), or GitHub finds the PR not mergeable (hold, reason 3). Exit 5: stand down. Exit 1: run `reconcile` and follow its hint.
 4. Hold reasons: 1 an owner decision is open; 2 a review hit its round cap with a finding undecided; 3 checks fail on the merge result and one builder attempt can't fix them; 4 the diff reaches well outside the spec; 5 a sensitive path, named by the gate; 6 Qodo is on, and this PR and the previous one got no first review.
 5. Hold, with that first line exactly, then wait (section 3):
    ```bash
@@ -283,7 +283,7 @@ This follows `~/agent-room/docs/QODO-REVIEW.md` ([`docs/QODO-REVIEW.md`](docs/QO
 
 ### 5.7 Close
 
-1. Drill `stop-after-merge`: end now, before any bookkeeping. Otherwise: `python3 room.py state set step=close`.
+1. Record the step: `python3 room.py state set step=close`.
 2. Record the merge in `<state>/docs/playbook/`, then commit:
    - `MISSIONS.md`: the mission's row `merged`, with its PR and merge sha; clear "Current mission".
    - `LEDGER.md`: items this mission fixed get `fixed in <sha>`.
@@ -298,7 +298,7 @@ This follows `~/agent-room/docs/QODO-REVIEW.md` ([`docs/QODO-REVIEW.md`](docs/QO
 
 At the end of a mission, or early at a step boundary when your context gets heavy:
 
-1. Drill `no-handoff` at a mission boundary: end now, without handover or scheduling.
+1. Drill `no-handoff`, at the end of a mission this session merged itself: end now, without handover, scheduling or check-in.
 2. Let running builders finish; merge and push their work. Commit your state edits.
 3. Find the last comment you acted on. If you acted on everything you read:
    ```bash
@@ -404,10 +404,10 @@ End, with no check-in.
 
   | `drill:` | You |
   | --- | --- |
-  | `stop-after-merge` | End right after `merge` succeeds, before any bookkeeping |
-  | `no-handoff` | End at the mission boundary without `handoff` or scheduling |
+  | `stop-after-merge` | End right after your own `merge` succeeds, before any bookkeeping (5.6) |
+  | `no-handoff` | End at the boundary of a mission you merged, without `handoff` or scheduling (6) |
 
-  Any other value: ignore it, and mention it in a `STATUS`.
+  A drill fires only in the session whose own `merge` just succeeded. A lead that joins later, even at step `gate` or `close`, ignores it and carries on: that is the drill's test. The architect removes the `drill:` line once the drill is over. Any other value: ignore it, and mention it in a `STATUS`.
 
 ## 11. Rules
 
