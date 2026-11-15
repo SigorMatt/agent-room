@@ -1010,6 +1010,11 @@ def change_state(a, msg, fn, need_lease=True):
     if need_lease:
         require_lease(values, session_id(a))
     updates = fn(values)
+    if "step" in updates and updates["step"] != values.get("step") and "waiting_for_owner" not in updates and \
+            (values.get("waiting_for_owner") or "no").strip().lower() != "no":
+        # the wait is over once the step moves, unless this write says otherwise: a stale flag mutes the watchdog
+        updates = {**updates, "waiting_for_owner": "no"}
+        print("[waiting_for_owner set back to no: the step moved]", file=sys.stderr)
     if note:
         print(f"[{note}; this write restores it]", file=sys.stderr)
     with open(f, "w") as fh:
@@ -1247,7 +1252,8 @@ def cmd_lease_take(a):
             raise StateExit(EXIT_MOVED, f"lease held by {holder}: stand down (generation {gen}; "
                                         "--takeover only for a lead Matthew starts after LEAD-SILENT)")
         # a lead that takes the lease is running: a status left at paused, stopped or done mustn't mute the watchdog
-        return {"lease_session": sid, "lease_generation": next_int(values, "lease_generation"), "status": "running"}
+        return {"lease_session": sid, "lease_generation": next_int(values, "lease_generation"), "status": "running",
+                "waiting_for_owner": "no"}
 
     for _ in range(2):
         try:

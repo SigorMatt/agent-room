@@ -469,6 +469,28 @@ def t_watchdog_quiet_while_waiting_for_owner():
     assert "alarm" in r.stdout and len(alarms()) == n + 1, out(r)
 
 
+def t_waiting_for_owner_does_not_outlive_the_wait():
+    # cold M4 R2-1: a write that moves the step sets it back to no, unless that write sets it; so does lease take
+    age_alarms()
+    set_state("step=gate", "waiting_for_owner=yes", hours=6)  # MERGE-HOLD posted
+    set_state("step=build", hours=5)  # DECISION sends the mission back to Build
+    assert block()["waiting_for_owner"] == "no"
+    assert "alarm" in watchdog().stdout
+    age_alarms()
+    set_state("step=gate 2", "waiting_for_owner=yes", hours=5)
+    assert block()["waiting_for_owner"] == "yes", "the write that moves the step also sets it"
+    set_state("step=gate 2", "intent=none", hours=5)
+    assert block()["waiting_for_owner"] == "yes", "the step didn't move"
+    room("handoff", "1", "--step", "gate 2", "--cursor", "none", check=True)
+    assert block()["waiting_for_owner"] == "yes", "a handoff at the same step keeps it"
+    room("lease", "take", check=True, ROOM_SESSION="L2")
+    assert block()["waiting_for_owner"] == "no" and block()["lease_session"] == "L2"
+    r = watchdog()
+    assert "alarm: no progress for 5h" in r.stdout, out(r)
+    room("lease", "release", check=True, ROOM_SESSION="L2")
+    room("lease", "take", check=True)
+
+
 def t_watchdog_quiet_for_another_room():
     # cold M4 R1-10: a watchdog left over from an earlier phase stays quiet, and says why
     age_alarms()
