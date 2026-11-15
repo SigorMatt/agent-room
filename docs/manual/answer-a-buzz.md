@@ -77,7 +77,7 @@ The watchdog saw nothing move. A lead died, got stuck or ran out of Claude usage
 
 1. If the buzz's message reads `LEAD-SILENT: state unreadable (…)`, the pipeline's records are broken, not the lead. The architect checks them first. If the `agent-room/state` branch was deleted, restore it before any lead starts: push it again from a clone that still has it, or let the architect recreate it (`Run state init.`). Then go on.
 2. The architect tells you where the build stopped. Then it waits for the lead's next check-in, until about 35 minutes after the alarm. It checks back itself, or asks you to send it `check the room` then.
-3. If any lead message came after the alarm, the lead is alive: the architect tells you where it is, and you need no new lead. Stop here.
+3. If any lead message came after the alarm, the lead is alive: the architect tells you where it is, and you need no new lead. Stop here. If the lead posted or pushed work within the last hour, it may be busy with a helper and unable to check in yet: the architect waits one more check-in, about 35 minutes.
 4. Otherwise it gives you the **takeover line**. It ends with "Take over the lease … the previous lead stopped without handing over."
 5. If the old lead's session is still open in the Code tab, archive it.
 6. Start a lead with the takeover line: [Start the next lead by hand](start-the-next-lead-by-hand.md). Use a takeover line only when the architect gives you one.

@@ -335,7 +335,13 @@ The lead sees them at its next check-in, within about 30 minutes. Neither gets a
   3. Wait for the lead's next check-in, until about 35 minutes after the alarm. Schedule `send_later` for then: "Check room N for a lead message after LEAD-SILENT." Without `send_later`, ask Matthew to come back then and say "check the room". If that time has passed, go on.
   4. Read the room again.
      - **Any lead message after the alarm** (a `STATUS`, a `LEAD ONLINE` or anything else): a lead is alive. Tell Matthew where it is; no new lead is needed.
-     - **None:** give him the takeover line:
+     - **None, but a lead `STATUS` or a push to the mission branch less than an hour old:** a lead running builders in the foreground can't check in until the builder returns. Wait one more check-in, about 35 minutes, then read again; still no lead message means the takeover line, below. The branch is under "Current mission" in `MISSIONS.md`; its newest commit time:
+
+       ```bash
+       gh api "repos/OWNER/NAME/commits?sha=<branch>&per_page=1" --jq '.[0].commit.committer.date'
+       ```
+
+     - **None, and nothing that recent:** give him the takeover line:
 
        ```bash
        python3 room.py join-line N --takeover --repo OWNER/NAME
