@@ -261,10 +261,11 @@ def post(room, role, text):
     return gh(f"repos/{REPO}/issues/{room}/comments", "POST", {"body": body})
 
 
-# --- read cursors: the last comment each role has seen, one small file per repo+room+role
+# --- read cursors: the last comment each participant has seen, one small file per repo+room+role+session, so
+# two sessions of one role on one machine (an old and a new lead) don't move each other's cursor
 
 def cursor_file(room, role):
-    return os.path.join(STATE, REPO.replace("/", "__"), f"{room}-{role}.json")
+    return os.path.join(STATE, REPO.replace("/", "__"), f"{room}-{role}-{session_id()}.json")
 
 
 def load_cursor(room, role):
@@ -283,13 +284,13 @@ def save_cursor(room, role, m):
 
 
 def cursor_id(room, role):
-    """The ID of the last comment this role has read, or None."""
+    """The ID of the last comment this role and session has read, or None."""
     cur = load_cursor(room, role)
     return (cur or {}).get("id") or None
 
 
 def move_cursor(room, role, ref):
-    """Point ROLE's cursor at comment REF of this room, or at the room's start for 'none'."""
+    """Point this ROLE and session's cursor at comment REF of this room, or at the room's start for 'none'."""
     if ref == "none":
         save_cursor(room, role, {"id": 0, "at": None})
         return
