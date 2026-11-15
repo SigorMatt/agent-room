@@ -2809,10 +2809,10 @@ def last_change(path, counts=lambda key: key in PROGRESS_KEYS):
     return (newer[0], int(newer[1])) if newer else None
 
 
-def mission_push():
-    """(branch, committer time) of the newest mission/* branch tip on the remote, or None."""
+def mission_push(heads):
+    """(branch, committer time) of the newest mission/* branch tip among HEADS ({branch: sha}), or None."""
     best = None
-    for branch, sha in sorted(remote_heads().items()):
+    for branch, sha in sorted(heads.items()):
         if not branch.startswith("mission/"):
             continue
         try:
@@ -2827,28 +2827,53 @@ def mission_push():
     return best
 
 
-def mission_merge():
-    """(number, merge time) of the newest merged PR from a mission/* head in this repo, or None. GitHub
-    deletes the merged branch, so its last push is gone; the merge itself is progress."""
-    best = None
-    for p in gh(f"repos/{REPO}/pulls?state=closed&sort=updated&direction=desc&per_page=100") or []:
-        head = p.get("head") or {}
-        if not (head.get("ref") or "").startswith("mission/") or \
-                ((head.get("repo") or {}).get("full_name") or "").lower() != REPO.lower():
-            continue
-        t = parse_time(p.get("merged_at"))
-        if t is not None and (best is None or t > best[1]):
-            best = (p.get("number"), t)
+def mission_branches(heads, values, missions):
+    """The mission branches whose merges count: the mission/* branches on the remote, those MISSIONS.md names for
+    the recorded mission (GitHub deletes a branch on merge), and the head of the recorded PR."""
+    out = {b for b in heads if b.startswith("mission/")}
+    mission = (values or {}).get("mission") or ""
+    if re.fullmatch(r"M\d+", mission):
+        out |= set(re.findall(rf"\bmission/{mission}(?:-[\w.-]+)?(?![\w.-])", missions or ""))
+    n = re.search(r"\d+", (values or {}).get("pr") or "")
+    if n:
+        status, p = gh_try(f"repos/{REPO}/pulls/{n.group()}")
+        if status == 200 and isinstance(p, dict):
+            ref = (p.get("head") or {}).get("ref") or ""
+            if ref.startswith("mission/"):
+                out.add(ref)
+        elif status not in (404, 422):
+            raise GhError(f"can't read PR #{n.group()}: {p}")
+    return out
+
+
+def mission_merge(branches):
+    """(number, merge time) of the newest merged PR from one of BRANCHES in this repo, or None. Closed PRs are
+    read per branch (head=OWNER:branch), page by page, so no number of other PRs can hide a merge."""
+    owner, best = REPO.split("/")[0], None
+    for branch in sorted(branches):
+        page = 1
+        while True:
+            batch = gh(f"repos/{REPO}/pulls?state=closed&head={owner}:{branch}&per_page=100&page={page}") or []
+            for p in batch:
+                head = p.get("head") or {}
+                if head.get("ref") != branch or ((head.get("repo") or {}).get("full_name") or "").lower() != REPO.lower():
+                    continue
+                t = parse_time(p.get("merged_at"))
+                if t is not None and (best is None or t > best[1]):
+                    best = (p.get("number"), t)
+            if len(batch) < 100:
+                break
+            page += 1
     return best
 
 
-def outside_progress():
+def outside_progress(values=None, missions=None):
     """[(time, what)] of the progress outside the state branch: the newest mission push and mission PR merge."""
-    found = []
-    push = mission_push()
+    found, heads = [], remote_heads()
+    push = mission_push(heads)
     if push:
         found.append((push[1], f"{push[0]} pushed"))
-    merge = mission_merge()
+    merge = mission_merge(mission_branches(heads, values, missions))
     if merge:
         found.append((merge[1], f"PR #{merge[0]} merged"))
     return found
@@ -2944,7 +2969,7 @@ def cmd_watchdog(a):
         return 0
     # progress, not chatter (v1): a step or pr change, a mission branch push, a mission PR's merge. Lease takes,
     # handoffs at the same step, intents, the counter and the cursor don't count, so a lead in a loop alarms
-    found = outside_progress()
+    found = outside_progress(values, pushed_text(path, "MISSIONS.md"))
     change = last_change(path)
     if change:
         found.append((change[1], f"step or pr change {change[0][:12]}"))

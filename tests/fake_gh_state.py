@@ -8,7 +8,7 @@ FAKE_GH_STATE names a JSON file with the answers. Each value is a response body,
   rules       GET repos/O/N/rules/branches/main      (default: [])
   rulesets    {"<id>": body} for GET repos/O/N/rulesets/<id>
   pulls       {"<n>": PR object} for GET repos/O/N/pulls/<n> (default: 404), and the list
-              GET repos/O/N/pulls?state=open|closed|all
+              GET repos/O/N/pulls?state=open|closed|all[&head=OWNER:ref]
   commits     {"<sha>": commit object} for GET repos/O/N/commits/<sha>. Default: with FAKE_GH_GIT_ROOT set,
               the committer date of <sha> in the bare repo $FAKE_GH_GIT_ROOT/O/N.git, else 404
   check_runs  {"<sha>": [check run]} for GET repos/O/N/commits/<sha>/check-runs (default: none)
@@ -67,8 +67,13 @@ if method == "GET" and parts[0] == "repos" and len(parts) >= 3:
     if len(rest) == 2 and rest[0] == "pulls":
         respond(cfg.get("pulls", {}).get(rest[1], {"_status": 404, "message": "Not Found"}))
     if rest == ["pulls"]:
-        want = query.get("state", "open")
-        respond(page([p for p in cfg.get("pulls", {}).values() if want == "all" or p.get("state") == want]))
+        want, head = query.get("state", "open"), query.get("head")
+
+        def head_of(p):  # OWNER:ref, as GitHub's head filter reads it
+            h = p.get("head") or {}
+            return f"{((h.get('repo') or {}).get('full_name') or '').split('/')[0]}:{h.get('ref')}"
+        respond(page([p for p in cfg.get("pulls", {}).values()
+                      if (want == "all" or p.get("state") == want) and (head is None or head_of(p) == head)]))
     if len(rest) == 2 and rest[0] == "commits":
         if rest[1] in cfg.get("commits", {}):
             respond(cfg["commits"][rest[1]])

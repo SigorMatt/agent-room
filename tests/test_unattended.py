@@ -359,7 +359,7 @@ def t_watchdog_recent_mission_push():
 def t_watchdog_progress_counts_the_merge_and_its_bookkeeping():
     # cold M4 R1-1: GitHub deletes a merged mission branch, and merge writes intent and pr but no step
     age_alarms()
-    set_state("step=gate", hours=5)
+    set_state("step=gate", "pr=12", hours=5)  # the lead records the PR it opened
     push_mission(0.1)
     assert "quiet: progress" in watchdog().stdout
     g("push", "-q", "origin", "--delete", MISSION_BRANCH)
@@ -375,13 +375,40 @@ def t_watchdog_progress_counts_the_merge_and_its_bookkeeping():
     assert "alarm: no progress for 5h" in r.stdout, out(r)
     age_alarms()
     gh_cfg()
-    set_state("intent=merge PR #12 at " + "b" * 40, "pr=12")  # merge's own state write, no step change
+    set_state("intent=merge PR #12 at " + "b" * 40, "pr=merged:12")  # merge's own state write, no step change
     r = watchdog()
     assert "quiet: progress" in r.stdout and "(step or pr change " in r.stdout, out(r)
     set_state("intent=none", "pr=none", hours=5)
     set_state("cursor=77")  # reading the room is no progress
     r = watchdog()
     assert "alarm: no progress for 5h" in r.stdout, out(r)
+
+
+def t_watchdog_finds_a_merge_behind_many_prs():
+    # qodo PR #8 "Some recent merges trigger stall alarms": closed PRs are read per mission branch, page by page,
+    # so 150 PRs updated after the merge can't push it out of view
+    age_alarms()
+    set_state("step=gate 7", "mission=M7", hours=6)
+    edit_state("MISSIONS.md", lambda t: t.replace("| M1 | `mission/M1-<slug>` |", "| M7 | `mission/M7-big` |", 1),
+               hours=6)
+    merged = dict(state="closed", merged=True, merged_at=iso(time.time() - 600), merge_commit_sha="c" * 40)
+    others = {str(100 + i): pull(100 + i, f"feature/x{i}", state="closed") for i in range(150)}
+    gh_cfg(pulls=dict(others, **{"77": pull(77, "mission/M7-big", **merged)}))
+    r = watchdog()  # the branch is named in MISSIONS.md for the recorded mission
+    assert r.returncode == 0 and "quiet: progress" in r.stdout and "(PR #77 merged at" in r.stdout, out(r)
+    set_state("mission=M8", hours=6)  # no row for M8: the recorded PR leads to the branch
+    assert "(PR #77 merged at" not in watchdog().stdout
+    age_alarms()
+    set_state("pr=merged:77", hours=6)
+    assert "(PR #77 merged at" in watchdog().stdout
+    set_state("pr=none", hours=6)
+    push_mission(7, "mission/M9-left")  # a mission branch still on the remote (auto-delete off)
+    gh_cfg(pulls=dict(others, **{"78": pull(78, "mission/M9-left", **merged)}))
+    assert "(PR #78 merged at" in watchdog().stdout
+    g("push", "-q", "origin", "--delete", "mission/M9-left")
+    g("checkout", "-q", "-B", "main", "origin/main")
+    gh_cfg()
+    set_state("mission=M1", hours=6)
 
 
 def t_watchdog_alarms_on_a_lead_in_a_loop():
