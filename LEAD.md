@@ -228,11 +228,11 @@ Up to two rounds on the mission branch, before the PR. Code changed after the la
 
 This follows `~/agent-room/docs/QODO-REVIEW.md` ([`docs/QODO-REVIEW.md`](docs/QODO-REVIEW.md)) with its four agent-room deviations. The switch is `echo "$QODO_REVIEW"`.
 
-**Off:** write `reviews/qodo/PR-<PR>/DISPOSITIONS.md` with the line `qodo: off`, commit and push it, and post `STATUS: PR #<PR>: Qodo off`. Go to 5.6.
+**Off:** write `reviews/qodo/PR-<PR>/DISPOSITIONS.md` with the line `qodo: off`, commit and push it, and post `STATUS: PR #<PR>: Qodo off`. Then `python3 room.py state set step=gate`, and go to 5.6.
 
 **On:**
 1. First review: a fresh reader with [`briefs/qodo-reader.md`](briefs/qodo-reader.md), variant `first-review`. It waits up to 15 minutes.
-2. No first review: write the dispositions file with `qodo: no first review`, commit, push, and post `STATUS: no Qodo review for PR #<PR>`. If the last line of `QODO-VALUE.md` says `no first review` too, hold (5.6, reason 6). Else go to 5.6.
+2. No first review: write the dispositions file with `qodo: no first review`, commit, push, and post `STATUS: no Qodo review for PR #<PR>`. Then `python3 room.py state set step=gate`. If the last line of `QODO-VALUE.md` says `no first review` too, hold (5.6, reason 6). Else go to 5.6.
 3. A review: commit the fetch the reader archived.
    ```bash
    git add reviews/qodo/PR-<PR>/<f> && git commit -m "review: qodo PR #<PR> fetch <f>"
