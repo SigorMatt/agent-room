@@ -53,10 +53,10 @@ Starts a lead through the lead task, as `ROLE` (`lead`, `watchdog` or `architect
    - Either missing: exit 6, `not configured: …`, naming what's missing and pointing to the manual page [Set up the lead task](../manual/set-up-the-lead-task.md).
 2. **Check the guards.** Each failure exits 3 with `refused: <why>` and starts nothing.
     - Room N isn't the current room, or its issue is closed.
-    - `status` is `done`. Or `status` is `paused` or `stopped`, the lease is released, and `ROLE` isn't `architect` (only the architect resumes, on Matthew's word).
+    - `status` is `done` and the lease is released. Or `status` is `paused` or `stopped`, the lease is released, and `ROLE` isn't `architect` (only the architect resumes, on Matthew's word). A halted status with the lease still held counts as running, as in M4: the lead may have died between writing it and posting (cold R1-5).
     - Without `--takeover`: the lease is held (`lease_session` isn't `none`). A lead is running, and a takeover is the watchdog's or the architect's call.
     - Unless `--force`: the room has a trusted `LEAD-STARTED` newer than the room's newest trusted lead `LEAD ONLINE`, and under 20 minutes old. A lead is still starting.
-3. **Build the text.** It's `join_line(N, takeover)`, which already uses the pin from `PLAYBOOK.md`.
+3. **Build the text.** It's `join_line(N, takeover)`, which already uses the pin from `PLAYBOOK.md`. If that text doesn't match the form `lead-task-prompt` describes (`<V>` being `main` or `v` followed by dot-separated numbers, as with a pre-release pin like `v1.0.0-rc.1`), exit 6: `pin <V> isn't accepted by the lead task's prompt` (cold R1-6).
 4. **POST it.**
    - **Request:** `curl` to `<base>/v1/claude_code/routines/<task>/fire`. `<base>` is `ROOM_FIRE_URL`, default `https://api.anthropic.com`.
    - **Headers:** `Authorization: Bearer <token>`, `anthropic-beta: experimental-cc-routine-2026-04-01` (overridable by `ROOM_FIRE_BETA`), `anthropic-version: 2023-06-01`, and `Content-Type: application/json`.
@@ -82,12 +82,12 @@ Unchanged except the second paragraph of `HANDOFF`: `The successor is being star
 
 ### `watchdog`
 
-Three changes, all covered by tests. `--no-start` turns off both kinds of start (drills, and projects without a lead task).
+Four changes, all covered by tests. `--no-start` turns off both kinds of start (drills, and projects without a lead task).
 
 1. **A start after a new alarm.**
     - **When:** right after posting a `LEAD-SILENT` for a stall (step 6 of the M4 rules) or for "no lead has joined room N in 12h" (pre-start). Never after a `state unreadable` alarm.
     - **What:** it runs the `start-lead` logic as `watchdog`, with `--takeover` when the lease is held, else plain.
-    - **Once per stall:** it starts nothing if the room already has a trusted watchdog `LEAD-STARTED` newer than the progress time (for pre-start: any watchdog `LEAD-STARTED`).
+    - **At most two starts per stall** (cold R1-2). The first comes with the first alarm. A second comes only when the lead it started made no progress either: the time `silent-after` has passed since that lead's first trusted `LEAD ONLINE` after the watchdog's `LEAD-STARTED`, or since the `LEAD-STARTED` itself if no `LEAD ONLINE` followed. The second start gets its own alarm, `LEAD-SILENT: the lead started at <time> made no progress (step <step>, mission <mission>)`, within the three-alarm cap. With two watchdog `LEAD-STARTED`s newer than the progress time, it only alarms. For pre-start, count every watchdog `LEAD-STARTED` in the room.
     - **Results:** exit 6 or 3 from `start-lead` prints a note and changes nothing else. Exit 1 prints the error; the next run tries again under the once-per-stall rule.
     - The watchdog's own exit stays 0 unless it fails to read or post.
 2. **A start after Matthew's decision.**
@@ -99,7 +99,8 @@ Three changes, all covered by tests. `--no-start` turns off both kinds of start 
       - no trusted `LEAD-STARTED` is newer than it.
     - **What:** it starts a plain lead as `watchdog`. Nobody started the lead that answers the decision, so the watchdog does. It posts no `LEAD-SILENT` for this.
     - Otherwise `waiting for owner` stays quiet as before.
-3. **A cap on repeated alarms.** While buzzes fail, a stall gets at most three `LEAD-SILENT` posts: the first and two retries. With three trusted watchdog `LEAD-SILENT`s newer than the progress time, it stays quiet: `quiet: 3 alarms already posted for this stall`. Finding P.
+3. **A cap on repeated alarms.** While buzzes fail, a stall gets at most three `LEAD-SILENT` posts, counting the second-start alarm. With three trusted watchdog `LEAD-SILENT`s newer than the progress time, it stays quiet: `quiet: 3 alarms already posted for this stall`. The cap covers `state unreadable` alarms too (cold R1-9). Finding P.
+4. **`waiting for owner` with the lease held** (cold R1-1). A lead that parks releases the lease, so a held lease at that step means a lead joined, maybe after Matthew's decision, and hasn't moved on yet. The watchdog then doesn't stay quiet: it measures from the later of the progress time and the newest trusted lead `LEAD ONLINE`, and alarms and starts a takeover by the usual rules. With the lease released, `waiting for owner` stays quiet as before, apart from the start after a decision.
 
 ### `preflight`
 
