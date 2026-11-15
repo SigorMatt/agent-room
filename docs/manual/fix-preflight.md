@@ -24,6 +24,8 @@
    | `✗ approving reviews: can't read the rules` | Usually access: as for push access |
    | `! admin bypass` | Nothing. It's for information only |
    | `! … turn on 'Automatically delete head branches'` | Repo **Settings**, **General**, **Pull Requests**: tick it |
+   | `✗ merge commits are not allowed` | Repo **Settings**, **General**, **Pull Requests**: tick **Allow merge commits**. The lead merges with a merge commit |
+   | `! couldn't read allow_merge_commit` | Check that **Allow merge commits** is ticked there |
    | `✗ state branch lacks PLAYBOOK.md` or `DESIGN.md` | The architect commits them. For a new project, tell it `Run state init.` |
    | `✗ … no pipeline version` or `… not a release tag` | The architect fixes the `pipeline:` line of `PLAYBOOK.md` |
    | `! … the pipeline is 'main'` | Fine until agent-room's first release, `v1.0.0` |

@@ -1478,6 +1478,17 @@ def cmd_preflight(a):
                   "Matthew: turn on 'Automatically delete head branches' (repo Settings > General > "
                   "Pull Requests), so merged mission branches are removed")
 
+    # merge commits allowed: `merge` uses merge_method=merge, which GitHub refuses when they are off
+    if repo is not None:
+        amc = repo.get("allow_merge_commit")
+        why = "(repo Settings > General > Pull Requests), because 'merge' uses a merge commit"
+        if amc is True:
+            check("✓", "merge commits are allowed")
+        elif amc is False:
+            check("✗", f"merge commits are not allowed: Matthew: turn on 'Allow merge commits' {why}")
+        else:
+            check("!", f"couldn't read allow_merge_commit; Matthew: check that 'Allow merge commits' is on {why}")
+
     # the state branch, with the architect's files and a pinned version: read from the pushed
     # branch after a fetch, so uncommitted edits in the worktree can't pass for it
     path = None

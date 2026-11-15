@@ -211,6 +211,7 @@ For the first phase and every later one. For a later phase, first add its `### P
    ```
 
    - `✗` lines: Matthew fixes them, then rerun. Don't hand over until it passes.
+   - `✗` on "merge commits are not allowed": ask Matthew to turn on "Allow merge commits" (repo Settings, General, Pull Requests). The lead's `merge` uses a merge commit. A `!` there means the setting couldn't be read: ask him to check it.
    - `!` on "Automatically delete head branches": ask Matthew to turn it on (repo Settings, General, Pull Requests). Mission branches can't be deleted any other way.
    - `!` on `pipeline: main`: expected before `v1.0.0`.
 7. Confirm with Matthew that the `agent-room` cloud environment has `ROOM_NTFY_TOPIC`, `QODO_REVIEW` (`on` or `off`), and the playbook's domains and secrets. Secrets go in as network secrets.

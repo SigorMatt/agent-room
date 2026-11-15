@@ -1061,6 +1061,7 @@ def t_preflight_architect_passes():
     expect(r, "approving reviews", "✓")
     expect(r, "admin bypass", "!")  # no protection at all: reported, never a failure
     expect(r, "deleted automatically", "✓")
+    expect(r, "merge commits are allowed", "✓")
     expect(r, "state branch", "!")  # pinned to main, not a release tag
     assert "ROOM_NTFY_TOPIC" not in r.stdout and "lead-owned" not in r.stdout, "lead checks only for the lead"
     # cold M2 R1-14: an uncommitted pin in the worktree is not on the branch
@@ -1120,6 +1121,28 @@ def t_preflight_delete_branch_on_merge():
     gh_cfg(repo={"permissions": {"push": True}})
     r = room("preflight", "--role", "architect")
     expect(r, "couldn't read delete_branch_on_merge", "!")
+
+
+def t_preflight_allow_merge_commit():
+    # M5-I gap 5: `merge` uses a merge commit, which GitHub refuses when "Allow merge commits" is off
+    on = {"permissions": {"push": True}, "delete_branch_on_merge": True}
+    gh_cfg(repo=dict(on, allow_merge_commit=False))
+    r = room("preflight", "--role", "architect", check=False)
+    assert r.returncode == 1, r.stdout
+    expect(r, "merge commits are not allowed", "✗")
+    assert "turn on 'Allow merge commits'" in line(r, "merge commits are not allowed"), r.stdout
+    r = room("preflight", "--role", "lead", check=False, ROOM_NTFY_TOPIC="t", QODO_REVIEW="on")
+    assert r.returncode == 1, r.stdout
+    expect(r, "merge commits are not allowed", "✗")
+    gh_cfg(repo=on)
+    r = room("preflight", "--role", "architect")
+    assert r.returncode == 0, r.stdout
+    expect(r, "couldn't read allow_merge_commit", "!")
+    assert "'Allow merge commits'" in line(r, "couldn't read allow_merge_commit"), r.stdout
+    gh_cfg(repo=dict(on, allow_merge_commit=True))
+    r = room("preflight", "--role", "architect")
+    assert r.returncode == 0, r.stdout
+    expect(r, "merge commits are allowed", "✓")
 
 
 def t_preflight_approving_reviews():
