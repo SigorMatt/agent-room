@@ -61,7 +61,7 @@ if len(parts) == 4 and method == "POST":
     n = str(len(repo["issues"]) + 1)
     repo["issues"][n] = {"number": int(n), "title": body["title"], "body": body.get("body", ""), "state": "open",
                          "comments": [],
-                         "labels": body.get("labels", []), "updated_at": now}
+                         "labels": body.get("labels", []), "created_at": now, "updated_at": now}
     done({"number": int(n), "html_url": f"https://github.com/{parts[1]}/{parts[2]}/issues/{n}"})
 if len(parts) == 4 and method == "GET":
     done([{"number": i["number"], "title": i["title"], "comments": len(i["comments"]), "updated_at": i["updated_at"]}
@@ -80,7 +80,8 @@ if issue is None:
     fail(404, "Not Found")
 
 if len(parts) == 5 and method == "GET":
-    done({"number": issue["number"], "state": issue["state"], "closed_at": issue.get("closed_at")})
+    done({"number": issue["number"], "state": issue["state"], "created_at": issue.get("created_at"),
+          "closed_at": issue.get("closed_at")})
 if len(parts) == 5 and method == "PATCH":
     if body.get("state") == "closed" and issue["state"] != "closed":
         issue["closed_at"] = now

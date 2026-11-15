@@ -2306,6 +2306,7 @@ def add_gate_commands(sub, common):
 WAITING_FOR_OWNER = "waiting for owner"
 QUIET_STATUSES = ("paused", "stopped", "done")
 PROGRESS_KEYS = ("step", "pr")  # the machine-block keys whose change is progress; merge records pr
+PRESTART_HOURS = 12  # a room no lead has joined gets one alarm this long after its issue was opened
 DEFAULT_BUDGET_HOURS = 8
 
 
@@ -2350,16 +2351,21 @@ def halted(values):
 
 def quiet_reason(a, values, playbook):
     """Why the watchdog stays quiet whatever the progress, or None."""
+    room = current_room(playbook, values)
     if halted(values):
         holder, _ = lease_of(values)
-        if holder == "none":  # the lead posted PAUSED, STOPPED or DONE and released the lease
+        own = (values.get("room") or "").strip()
+        if own.isdigit() and int(own) > 0 and room and int(own) != room[0]:
+            # e.g. phase 1's DONE, while the architect has opened the next phase's room: it says nothing of this one
+            print(f"note: status is {status_of(values)}, but for room {own}, not the current room {room[0]}, so it "
+                  "counts as running")
+        elif holder == "none":  # the lead posted PAUSED, STOPPED or DONE and released the lease
             return f"status is {status_of(values)} and the lease is released"
-        # written, but the lease is still held: the lead may have died before its post and release
-        print(f"note: status is {status_of(values)}, but {holder} still holds the lease, so it counts as running")
+        else:  # written, but the lease is still held: the lead may have died before its post and release
+            print(f"note: status is {status_of(values)}, but {holder} still holds the lease, so it counts as running")
     step = values.get("step") or "none"
     if step.strip().lower().startswith(WAITING_FOR_OWNER):
         return f"step is {step}"
-    room = current_room(playbook, values)
     if room and room[0] != a.room:
         return (f"room {a.room} is not the current room ({room[1]} records room {room[0]}); this watchdog is left "
                 "from an earlier phase: delete it")
@@ -2505,7 +2511,31 @@ def unreadable_state_alarm(a, path, reason):
     return 0
 
 
+def prestart_alarm(a):
+    """Before any lead has joined room N (no trusted lead LEAD ONLINE there), the state may be missing or still
+    the previous phase's: quiet, with a note, until PRESTART_HOURS after the room's issue was opened, then one
+    alarm. Returns the exit code, or None once a lead has joined, when the usual rules apply."""
+    if any(m["role"] == "lead" and trusted(m) and message_kind(m["text"]) == "LEAD ONLINE"
+           for m in map(parse, comments(a.room))):
+        return None
+    opened = parse_time((gh(f"repos/{REPO}/issues/{a.room}") or {}).get("created_at"))
+    if opened is None or time.time() - opened < PRESTART_HOURS * 3600:
+        print(f"quiet: no lead has joined room {a.room} yet" +
+              (f" (opened {span(time.time() - opened)} ago)" if opened is not None else ""))
+        return 0
+    seen = alarms_since(a, None)  # only one alarm for it
+    if seen:
+        print(f"quiet: no lead has joined room {a.room} yet; LEAD-SILENT #{seen[-1]['id']} already reports it")
+        return 0
+    print(f"alarm: no lead has joined room {a.room} in {PRESTART_HOURS}h (opened {iso(opened)})")
+    alarm(a, f"LEAD-SILENT: no lead has joined room {a.room} in {PRESTART_HOURS}h")
+    return 0
+
+
 def cmd_watchdog(a):
+    code = prestart_alarm(a)  # first: before any lead joins, missing state, flags and status say nothing
+    if code is not None:
+        return code
     try:
         path, values, note = pushed_state()  # fetched and read from git objects: the watchdog never writes state
     except StateError as e:

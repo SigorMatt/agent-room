@@ -233,6 +233,7 @@ def setup():
     room("state", "init-lead", check=True)
     room("lease", "take", check=True)
     assert "room 1 in SigorMatt/pet" in room("new", "Phase 1", check=True).stdout
+    room("say", "1", "lead", "LEAD ONLINE", check=True)  # a lead has joined room 1: the watchdog's usual rules apply
     set_state("mission=M1", "room=1")
     g("fetch", "-q", "origin")
     gh_cfg()
@@ -547,6 +548,7 @@ def t_watchdog_quiet_for_another_room():
     # cold M4 R1-10: a watchdog left over from an earlier phase stays quiet, and says why
     age_alarms()
     assert "room 2 in SigorMatt/pet" in room("new", "Phase 2", check=True).stdout
+    room("say", "2", "lead", "LEAD ONLINE", "--no-buzz", check=True)
     set_state("room=2", "step=spec 2", hours=5)
     n = len(alarms())
     r = watchdog()
@@ -1108,6 +1110,48 @@ def t_budget_phrasings():
     finally:
         edit_state("PLAYBOOK.md", lambda t: original)
     set_state("mission_started=none")
+
+
+def opened(n, hours):
+    """Make room N's issue look opened HOURS ago."""
+    db = load_db()
+    db["repos"]["SigorMatt/pet"]["issues"][n]["created_at"] = iso(time.time() - hours * 3600)
+    with open(DB, "w") as f:
+        json.dump(db, f)
+
+
+def t_watchdog_before_any_lead_joins():
+    # cold M4 S1-4, S1-5: until a trusted lead posts LEAD ONLINE in room N, the watchdog is quiet with a note,
+    # whatever the state says or lacks; 12 hours after the room was opened it alarms, once
+    assert "room 5 in SigorMatt/pet" in room("new", "Phase 5", check=True).stdout
+    original = edit_state("PLAYBOOK.md", lambda t: re.sub(r"^room: .*$", "room: 5", t, count=1, flags=re.M), hours=6)
+    set_state("step=gate 5", "status=done", hours=6)  # the previous phase ended, as the spec says
+    room("lease", "release", check=True)
+    r = room("watchdog", "5", ROOM_SESSION="wd")
+    assert r.returncode == 0 and r.stdout.strip().startswith("quiet: no lead has joined room 5 yet (opened "), out(r)
+    tip = state_sha()  # at phase 1's kickoff there is no MISSIONS.md yet: no alarm for that either
+    g("--git-dir", PET, "update-ref", "-d", "refs/heads/agent-room/state")
+    try:
+        r = room("watchdog", "5", ROOM_SESSION="wd")
+        assert r.returncode == 0 and r.stdout.strip().startswith("quiet: no lead has joined room 5 yet"), out(r)
+    finally:
+        g("--git-dir", PET, "update-ref", "refs/heads/agent-room/state", tip)
+    room("say", "5", "lead", "LEAD ONLINE", "--no-buzz", check=True, FAKE_GH_LOGIN="mallory")  # doesn't count
+    opened("5", 13)
+    r = room("watchdog", "5", ROOM_SESSION="wd")
+    assert r.returncode == 0 and "alarm: no lead has joined room 5 in 12h" in r.stdout, out(r)
+    assert text_of(comments("5")[-1]) == "LEAD-SILENT: no lead has joined room 5 in 12h (buzz sent)"
+    n = len(comments("5"))
+    r = room("watchdog", "5", ROOM_SESSION="wd")
+    assert "quiet: no lead has joined room 5 yet; LEAD-SILENT #" in r.stdout and len(comments("5")) == n, out(r)
+    # once a lead has joined, the usual rules apply, and the block's status for room 1 says nothing of room 5
+    room("say", "5", "lead", "LEAD ONLINE", "--no-buzz", check=True)
+    backdate(lambda c: "role=watchdog" in c["body"], 10, n="5")
+    r = room("watchdog", "5", ROOM_SESSION="wd")
+    assert "note: status is done, but for room 1, not the current room 5, so it counts as running" in r.stdout and \
+        "alarm: no progress for 6h" in r.stdout, out(r)
+    edit_state("PLAYBOOK.md", lambda t: original, hours=6)
+    room("lease", "take", check=True)
 
 
 setup()
