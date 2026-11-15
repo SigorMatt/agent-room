@@ -33,7 +33,7 @@ In the other account, once:
 4. In the other account, start a new chat in the project's Claude Project. Check its first line, then send:
 
    ```text
-   We moved this project from my other account. Create the watchdog for room N as at kickoff (ARCHITECT.md section 8, steps 4 and 5), then give me the join line.
+   We moved this project from my other account (ARCHITECT.md 9.8). Create the watchdog for room N as at kickoff (section 8, steps 4 and 5), then give me the join line.
    ```
 
 5. Start the lead in the other account ([Start the next lead by hand](start-the-next-lead-by-hand.md)).
