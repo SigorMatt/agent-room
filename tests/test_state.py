@@ -372,11 +372,14 @@ def t_broken_state_worktree_is_rebuilt():
         r = room(*args, check=False, **kw)
         assert r.returncode in (0, 5) and len(r.stderr.strip().splitlines()) == 1, (args, r.returncode, r.stderr)
         assert re.fullmatch(r"\[state worktree .* was broken \(no git data left to save; its files are kept\); moved "
-                            r"it to .*/R\.broken-\d{8}T\d{6}Z(-\d+)? and made a new one\]", r.stderr.strip()), r.stderr
+                            r"it to .*/R\.broken-\d{8}T\d{6}Z(-\d+)?, without its \.git link, so it holds plain files, "
+                            r"and made a new one\]", r.stderr.strip()), r.stderr
         assert g("-C", sdir("R"), "rev-parse", "HEAD").stdout.strip() == sha(PET, "agent-room/state")
     assert room("state", "path", **kw).stderr == "", "a healthy worktree is left alone"
     aside = [d for d in os.listdir(os.path.join(tmp, "state")) if d.startswith("R.broken-")]
     assert len(aside) == 2, aside
+    # cold M4 R2-8: the rebuilt worktree may get the moved one's admin dir name, so no .git may point there
+    assert not any(os.path.lexists(os.path.join(tmp, "state", d, ".git")) for d in aside), aside
 
 
 def t_refuses_a_dir_that_is_not_the_state_worktree():
@@ -415,9 +418,11 @@ def t_recreated_state_branch_rebuilds_stale_worktrees():
     for state, kw in (("GA", here), ("GB", away)):
         r = room("state", "path", state=state, **kw)
         assert r.stdout.strip() == sdir(state), r.stdout
+        link = r", without its \.git link, so it holds plain files," if state == "GA" else ""  # linked, or a clone
         assert re.fullmatch(r"\[state worktree .* is stale \(no history of the recreated agent-room/state\); saved "
                             r"its HEAD as refs/agent-room/broken-\d{8}T\d{6}Z(-\d+)? \([0-9a-f]{12}\) in \S+; moved "
-                            r"it to .*\.broken-\d{8}T\d{6}Z(-\d+)? and made a new one\]", r.stderr.strip()), r.stderr
+                            r"it to .*\.broken-\d{8}T\d{6}Z(-\d+)?" + link + r" and made a new one\]", r.stderr.strip()), \
+            r.stderr
         assert g("-C", sdir(state), "rev-parse", "HEAD").stdout.strip() == new
     # the project checkout itself is still refused, even at a commit that holds docs/playbook/
     os.makedirs(os.path.join(work, "docs", "playbook"))
@@ -535,15 +540,25 @@ def t_stale_worktree_local_work_is_saved():
     assert r.returncode == 0, (r.returncode, r.stderr)
     m = re.fullmatch(r"\[state worktree (\S+) is stale \(no history of the recreated agent-room/state\); saved its "
                      r"HEAD and uncommitted changes as (refs/agent-room/broken-\d{8}T\d{6}Z(?:-\d+)?) \(([0-9a-f]{12})\) "
-                     r"in (\S+); moved it to (\S+) and made a new one\]", r.stderr.strip())
+                     r"in (\S+); moved it to (\S+), without its \.git link, so it holds plain files, and made a new "
+                     r"one\]", r.stderr.strip())
     assert m and m.group(1) == wt and m.group(4) == os.path.realpath(os.path.join(work, ".git")), r.stderr
-    ref = m.group(2)
+    ref, aside = m.group(2), m.group(5)
     assert g("-C", work, "rev-parse", ref).stdout.strip().startswith(m.group(3))
     assert g("-C", work, "rev-parse", f"{ref}^").stdout.strip() == unpushed, "the unpushed commit is kept"
     assert "intent: open PR for M3" in g("-C", work, "show", f"{ref}:docs/playbook/MISSIONS.md").stdout
     assert g("-C", work, "show", f"{ref}:docs/playbook/NOTES.md").stdout == "untracked notes\n"
-    assert os.path.isdir(m.group(5)) and "intent: open PR" in open(os.path.join(m.group(5), "docs", "playbook",
-                                                                                 "MISSIONS.md")).read()
+    assert os.path.isdir(aside) and "intent: open PR" in open(os.path.join(aside, "docs", "playbook",
+                                                                            "MISSIONS.md")).read()
+    # cold M4 R2-8: the moved copy holds plain files; git there can't reach the rebuilt worktree, which got its
+    # admin dir's name
+    assert not os.path.lexists(os.path.join(aside, ".git"))
+    assert open(os.path.join(wt, ".git")).read().strip().endswith("/worktrees/lw-A"), "the name the old one had"
+    new_head = g("-C", wt, "rev-parse", "HEAD").stdout.strip()
+    for args in (("rev-parse", "HEAD"), ("add", "-A"), ("commit", "-qm", "restore old work")):
+        assert g("-C", aside, *args, check=False).returncode != 0, args
+    assert g("-C", wt, "rev-parse", "HEAD").stdout.strip() == new_head and \
+        g("-C", wt, "status", "--porcelain").stdout == "", "the rebuilt worktree is untouched"
 
 
 def push_edit(repo, name, fn):

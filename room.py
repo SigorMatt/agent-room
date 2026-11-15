@@ -745,9 +745,15 @@ def move_aside(path, why, save=False):
     if os.path.lexists(aside):
         aside += f"-{os.getpid()}"
     saved = save_local_work(path, stamp, aside) if save else None
+    linked = os.path.isfile(os.path.join(path, ".git"))
     os.rename(path, aside)
-    print(f"[state worktree {path} {why}; " + (f"{saved}; " if saved else "") +
-          f"moved it to {aside} and made a new one]", file=sys.stderr)
+    if linked:
+        # its .git names an admin dir in the project's repo, which the rebuilt worktree at PATH gets after the
+        # prune: left in place, git in the moved copy would act on the new worktree. Its work is on the ref.
+        os.remove(os.path.join(aside, ".git"))
+    print(f"[state worktree {path} {why}; " + (f"{saved}; " if saved else "") + f"moved it to {aside}" +
+          (", without its .git link, so it holds plain files," if linked else "") + " and made a new one]",
+          file=sys.stderr)
 
 
 def ensure_worktree():
