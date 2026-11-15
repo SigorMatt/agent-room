@@ -882,7 +882,7 @@ def intent(text, **env):
 
 def t_intent_command():
     # cold M4 R1-13, R1-14: a post intent records the room's last comment ID; other intents are recorded as given
-    assert intent("post ESCALATION-7: which greeting?") == f"post ESCALATION-7 after #{last_id()}"
+    assert intent("post ESCALATION-7: which greeting?") == f"post ESCALATION-7 in room 1 after #{last_id()}"
     assert intent("merge PR #12 at " + "a" * 40) == "merge PR #12 at " + "a" * 40
     assert intent("close room") == "close room"
     assert intent("none") == "none"
@@ -901,12 +901,12 @@ def t_reconcile_post_intent():
     intent(f"post ESCALATION-{n}")
     r = reconcile()
     assert f"\ncounter {n}: neither ESCALATION-{n} nor MERGE-HOLD-{n} is in the room\n" in r.stdout, out(r)
-    assert hint(r) == f"intent not done: redo it (no ESCALATION-{n} in the room after #{last_id()})", out(r)
+    assert hint(r) == f"intent not done: redo it (no ESCALATION-{n} in room 1 after #{last_id()})", out(r)
     room("say", "1", "lead", f"ESCALATION-{n}: which greeting?", check=True)
     esc = comments()[-1]["id"]
     r = reconcile()
     assert f"\ncounter {n}: ESCALATION-{n} is in the room (#{esc}), no DECISION-{n} yet\n" in r.stdout, out(r)
-    assert hint(r) == f"intent done: clear it (ESCALATION-{n} is in the room: #{esc})", out(r)
+    assert hint(r) == f"intent done: clear it (ESCALATION-{n} is in room 1: #{esc})", out(r)
     room("say", "1", "architect", f"DECISION-{n}: say hello", check=True, ROOM_SESSION="arch")
     dec = comments()[-1]["id"]
     assert f"(#{esc}), answered by DECISION-{n} (#{dec})" in reconcile().stdout
@@ -920,24 +920,41 @@ def t_reconcile_post_intent():
     # a kind without a number: only a post after the recorded comment counts
     room("say", "1", "lead", "PLAN: M1 to M3", check=True)
     intent("post PLAN")
-    assert hint(reconcile()) == f"intent not done: redo it (no PLAN in the room after #{last_id()})"
+    assert hint(reconcile()) == f"intent not done: redo it (no PLAN in room 1 after #{last_id()})"
     room("say", "1", "lead", "PLAN: M1 to M4, re-planned", check=True)
-    assert hint(reconcile()) == f"intent done: clear it (PLAN is in the room: #{last_id()})"
+    assert hint(reconcile()) == f"intent done: clear it (PLAN is in room 1: #{last_id()})"
     # cold M4 R1-13: no clocks: an intent committed by a lead whose clock runs 3 minutes ahead
     t, ahead = ago(-0.05)
     intent("post PAUSED", **ahead)
     room("say", "1", "lead", "PAUSED: at a safe point", "--no-buzz", check=True)
-    assert hint(reconcile()) == f"intent done: clear it (PAUSED is in the room: #{last_id()})"
+    assert hint(reconcile()) == f"intent done: clear it (PAUSED is in room 1: #{last_id()})"
     # cold M4 R1-14: recording the same intent again after a post of its kind is a new intent, not done yet
     first = intent("post STATUS")
     room("say", "1", "lead", "STATUS: task 2 done", check=True)
-    assert hint(reconcile()).startswith("intent done: clear it (STATUS is in the room")
+    assert hint(reconcile()).startswith("intent done: clear it (STATUS is in room 1")
     again = intent("post STATUS")
-    assert again == f"post STATUS after #{last_id()}" and again != first
-    assert hint(reconcile()) == f"intent not done: redo it (no STATUS in the room after #{last_id()})"
+    assert again == f"post STATUS in room 1 after #{last_id()}" and again != first
+    assert hint(reconcile()) == f"intent not done: redo it (no STATUS in room 1 after #{last_id()})"
     # set by hand without an ID, a kind without a number can't be judged
     set_state("intent=post STATUS")
     assert hint(reconcile()).startswith("intent unknown: which STATUS? Record post intents with")
+    set_state("intent=none")
+
+
+def t_intent_names_its_room():
+    # cold M4 R2-7: intent refuses a room that isn't the current one, and a post intent names its room, which
+    # reconcile checks whichever room it runs for
+    before = state_sha()
+    r = room("intent", "2", "post STATUS")
+    assert r.returncode == 1 and "not recorded: room 2 is not the current room (MISSIONS.md records room 1)" in \
+        r.stderr, out(r)
+    assert state_sha() == before
+    room("say", "2", "lead", "PLAN: the old phase's last word", "--no-buzz", check=True)
+    set_state(f"intent=post STATUS in room 2 after #{last_id('2')}")  # as recorded while room 2 was current
+    room("say", "1", "lead", "STATUS: posted in room 1", check=True)  # a later comment ID, in another room
+    assert hint(reconcile()) == f"intent not done: redo it (no STATUS in room 2 after #{last_id('2')})"
+    room("say", "2", "lead", "STATUS: posted in room 2", "--no-buzz", check=True)
+    assert hint(reconcile()) == f"intent done: clear it (STATUS is in room 2: #{last_id('2')})"
     set_state("intent=none")
 
 

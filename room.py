@@ -2294,8 +2294,8 @@ def add_gate_commands(sub, common):
 #   budget
 #
 # watchdog, reconcile and budget read the pushed state branch and never write it; the watchdog schedules nothing.
-# Intents reconcile recognizes: "merge PR #<n> at <sha>", "open PR <branch or M<k>>", "post <KIND> after #<id>" (as
-# 'intent' records it), "close room".
+# Intents reconcile recognizes: "merge PR #<n> at <sha>", "open PR <branch or M<k>>", "post <KIND> in room <n> after
+# #<id>" (as 'intent' records it), "close room".
 
 WAITING_FOR_OWNER = "waiting for owner"
 QUIET_STATUSES = ("paused", "stopped", "done")
@@ -2676,19 +2676,23 @@ def intent_hint(a, intent, path, msgs, pr):
             return (f"intent not done: redo it (PR #{p.get('number')} from {p['head']['ref']} was closed without "
                     f"merging; open a new one{ignored})")
         return f"intent not done: redo it (no PR from {ref}{ignored})"
-    m = re.fullmatch(r"post (.+?)(?: after #(\d+))?", intent)
+    m = re.fullmatch(r"post (.+?)(?: in room (\d+))?(?: after #(\d+))?", intent)
     kind = message_kind(m.group(1)) if m else None
     if kind:
-        # 'intent' records the room's last comment ID with it: a later trusted lead message of the kind did it.
-        # Without one, only a numbered kind, unique in the room, can be judged. No clocks involved.
-        after = int(m.group(2)) if m.group(2) else None
+        # 'intent' records the room and its last comment ID: a later trusted lead message of the kind in that room
+        # did it. Without an ID, only a numbered kind, unique in the room, can be judged. No clocks involved.
+        where = int(m.group(2)) if m.group(2) else a.room
+        after = int(m.group(3)) if m.group(3) else None
         if after is None and not re.search(r"-\d+$", kind):
             return (f"intent unknown: which {kind}? Record post intents with '{ME} intent N \"post {kind}\"', "
                     "which notes the room's last comment")
+        if where != a.room:
+            leads = [x for x in map(parse, comments(where)) if trusted(x) and x["role"] == "lead"]
+        place = f"room {where}" if m.group(2) else "the room"
         hits = [x for x in leads if message_kind(x["text"]) == kind and (after is None or x["id"] > after)]
         if hits:
-            return f"intent done: clear it ({kind} is in the room: #{hits[-1]['id']})"
-        return f"intent not done: redo it (no {kind} in the room" + (f" after #{after})" if after is not None else ")")
+            return f"intent done: clear it ({kind} is in {place}: #{hits[-1]['id']})"
+        return f"intent not done: redo it (no {kind} in {place}" + (f" after #{after})" if after is not None else ")")
     if re.fullmatch(r"close (?:the )?room", intent):
         issue = gh(f"repos/{REPO}/issues/{a.room}") or {}
         if issue.get("state") != "closed":
@@ -2708,18 +2712,24 @@ def intent_hint(a, intent, path, msgs, pr):
 
 
 def cmd_intent(a):
-    """Record before acting: the intent, in its own state write. A post intent also records the room's last
-    comment ID (post KIND after #ID), so reconcile can tell a later post of that kind from an earlier one."""
+    """Record before acting: the intent, in its own state write, for room N, which must be the current room. A
+    post intent also records the room and its last comment ID (post KIND in room N after #ID), so reconcile can
+    tell a later post of that kind from an earlier one, in the right room."""
     text = single_line("intent", a.intent)
     if not text:
         raise StateError("say what is about to happen (merge PR #<n> at <sha>, open PR <branch>, post <KIND>, "
                          "close room), or none")
+    path, values, _ = pushed_state()
+    found = current_room(pushed_text(path, "PLAYBOOK.md"), values)
+    if found and found[0] != a.room:
+        raise StateError(f"not recorded: room {a.room} is not the current room ({found[1]} records room "
+                         f"{found[0]})")
     m = re.fullmatch(r"post\s+(.+)", text)
     if m:
         kind = message_kind(m.group(1))
         if not kind:
             raise StateError(f"a post intent names the message kind: post ESCALATION-3, post PAUSED…, not {text!r}")
-        text = f"post {kind} after #{max((c['id'] for c in comments(a.room)), default=0)}"
+        text = f"post {kind} in room {a.room} after #{max((c['id'] for c in comments(a.room)), default=0)}"
     change_state(a, f"intent: {text}", lambda v: {"intent": text})
     print(f"intent: {text}")
 
