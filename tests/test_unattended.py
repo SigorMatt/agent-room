@@ -841,7 +841,7 @@ def reconcile(n="1", **env):
 
 
 def hint(r):
-    lines = [ln for ln in r.stdout.splitlines() if re.match(r"intent (done|not done|unknown):", ln)]
+    lines = [ln for ln in r.stdout.splitlines() if re.match(r"intent (done|not done|unknown|from an earlier room):", ln)]
     assert len(lines) == 1, out(r)
     return lines[0]
 
@@ -946,7 +946,7 @@ def t_intent_command():
     # cold M4 R1-13, R1-14: a post intent records the room's last comment ID; other intents are recorded as given
     assert intent("post ESCALATION-7: which greeting?") == f"post ESCALATION-7 in room 1 after #{last_id()}"
     assert intent("merge PR #12 at " + "a" * 40) == "merge PR #12 at " + "a" * 40
-    assert intent("close room") == "close room"
+    assert intent("close room") == "close room 1"
     assert intent("none") == "none"
     before = state_sha()
     for bad, code, why in (("post nothing here", 1, "names the message kind"), ("", 1, "say what is about to happen"),
@@ -1041,6 +1041,13 @@ def t_reconcile_close_room_intent():
     assert hint(reconcile("4")) == missing
     room("close", "4", "lead", "STOPPED: halted on STOP", check=True)  # the redo: closing again is harmless
     assert hint(reconcile("4")) == f"intent done: clear it (room 4 is closed, closing STOPPED #{comments('4')[-1]['id']})"
+    # cold M4 S1-3: intent records which room it closes; left in the block, it is judged against that room only
+    assert intent("close the room") == "close room 1"
+    assert hint(reconcile("1")) == "intent not done: redo it (room 1 is open)"
+    assert hint(reconcile("4")) == "intent from an earlier room: clear it (close room 1; this is room 4)"
+    set_state("intent=close room 4")
+    assert hint(reconcile("4")).startswith("intent done: clear it (room 4 is closed, closing STOPPED")
+    set_state("intent=none")
 
 
 def t_reconcile_unknown_intent_status_and_drill():

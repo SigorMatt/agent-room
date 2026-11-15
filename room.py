@@ -2709,7 +2709,10 @@ def intent_hint(a, intent, path, msgs, pr):
         if hits:
             return f"intent done: clear it ({kind} is in {place}: #{hits[-1]['id']})"
         return f"intent not done: redo it (no {kind} in {place}" + (f" after #{after})" if after is not None else ")")
-    if re.fullmatch(r"close (?:the )?room", intent):
+    m = re.fullmatch(r"close (?:the )?room(?: (\d+))?", intent)
+    if m:
+        if m.group(1) and int(m.group(1)) != a.room:  # e.g. phase 1's DONE, still in the block in phase 2
+            return f"intent from an earlier room: clear it (close room {m.group(1)}; this is room {a.room})"
         issue = gh(f"repos/{REPO}/issues/{a.room}") or {}
         if issue.get("state") != "closed":
             return f"intent not done: redo it (room {a.room} is open)"
@@ -2746,6 +2749,8 @@ def cmd_intent(a):
         if not kind:
             raise StateError(f"a post intent names the message kind: post ESCALATION-3, post PAUSED…, not {text!r}")
         text = f"post {kind} in room {a.room} after #{max((c['id'] for c in comments(a.room)), default=0)}"
+    elif re.fullmatch(r"close (?:the )?room(?: \d+)?", text):
+        text = f"close room {a.room}"  # left in the block after DONE, it mustn't send the next phase to close its room
     change_state(a, f"intent: {text}", lambda v: {"intent": text})
     print(f"intent: {text}")
 
