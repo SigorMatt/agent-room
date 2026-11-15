@@ -9,7 +9,7 @@
 
 ## What you need first
 
-- The hold message, `MERGE-HOLD-n: PR #<number>, reason <r> (…)`, or the playbook draft.
+- The hold message, `MERGE-HOLD-n: PR #<number>, reason <r> (…)`, or the playbook draft. A hold with several reasons names each: `reason 1, reason 5`.
 
 ## Steps
 

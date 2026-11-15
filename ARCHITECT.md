@@ -252,7 +252,7 @@ Explain each buzz in plain terms, in a few lines:
 ### 9.2 `ESCALATION-n` and `MERGE-HOLD-n`
 
 1. Explain the question, the options, the lead's recommendation, and what is blocked and continuing.
-2. For a hold, explain its reason:
+2. For a hold, explain each reason it names. One hold can name several, written `reason 1, reason 5`; the decision settles each one.
 
    | Reason | Plain terms |
    | --- | --- |
@@ -263,7 +263,7 @@ Explain each buzz in plain terms, in a few lines:
    | 5 | The PR touches a merge-hold area; the message names the paths |
    | 6 | Qodo is on, but this PR and the previous one got no first review |
 
-3. Decide with Matthew. Say how the mission continues: continue, merge as is, back to Build with an extra budget (default one cold round and two Qodo rounds), or drop the mission and re-plan.
+3. Decide with Matthew. Say how the mission continues: continue, merge as is, back to Build with an extra budget (default one cold round and two Qodo rounds), or drop the mission and re-plan. Back to Build also restarts the mission's clock, so its hours budget counts from the decision.
 4. Record it in `DESIGN.md` as `D-n`, and change `PLAYBOOK.md` if items change. Commit (section 4).
 5. Write the message to `~/agent-room-tools/msg.md`, under about 300 words. `n` is the number of the message you answer:
 

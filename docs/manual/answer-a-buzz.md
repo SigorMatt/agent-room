@@ -33,12 +33,12 @@ The design doesn't settle a question. Meanwhile the lead keeps building whatever
 
 ### `MERGE-HOLD-n`: a pull request is ready but held
 
-The message reads `MERGE-HOLD-n: PR #<number>, reason <r> (…)`. The reasons are on [Merge-hold list](merge-hold-list.md).
+The message reads `MERGE-HOLD-n: PR #<number>, reason <r> (…)`. One hold can name several reasons, as `reason 1, reason 5`; your decision covers each. The reasons are on [Merge-hold list](merge-hold-list.md).
 
 1. The architect explains the reason. Open the pull request on GitHub if you want to look.
 2. Choose how the mission continues:
    - **merge as is;**
-   - **back to Build** with an extra budget: by default one more cold-review round and up to two Qodo rounds;
+   - **back to Build** with an extra budget: by default one more cold-review round and up to two Qodo rounds. The mission's hours budget starts again from your decision;
    - **drop the mission and re-plan.**
 3. The architect records it and posts `DECISION-n`. Wait for the ACK.
 
