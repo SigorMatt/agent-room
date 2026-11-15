@@ -21,7 +21,7 @@ After you approve the playbook, when its "Environment needs" section lists websi
 
 1. Open `https://claude.ai/code`, open the environment selector, and open the settings of the `agent-room` environment.
 2. **Network access:** add each listed website to **Allowed domains**. Keep `ntfy.sh` and the package-manager default.
-3. **Secrets:** add each under **Network secrets**, with the website it's for, the header it goes in, and its value. If the playbook doesn't name the header, ask the architect which one the service expects. Use an environment variable only if the playbook says there's no other way.
+3. **Secrets:** add each under **Network secrets**, with the website it's for, the header it goes in, and its value. The playbook names the header and the value's prefix for each, such as `Authorization: Bearer `. If one is missing, ask the architect which the service expects. Use an environment variable only if the playbook says there's no other way.
 4. Tell the architect:
 
    ```text

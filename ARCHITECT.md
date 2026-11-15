@@ -169,7 +169,7 @@ Fill the [template](templates/playbook/PLAYBOOK.md):
    - Use `**/` for any depth: `**/requirements*.txt` holds every requirements file, `requirements*.txt` only the root one.
    - A label containing "deleted" matches only deleted files.
    - The gate refuses to run without at least one glob.
-5. **Environment needs:** every domain to allow and every secret to add, each with what it is for.
+5. **Environment needs:** every domain to allow, with what it is for, and every secret to add. Secrets go in as network secrets, so ask for each one's purpose, the domain it is sent to, its header name and its value prefix (for example `Authorization: Bearer `).
 6. **Lead's discretion:** the areas the lead decides without escalating.
 7. **Phase 0 known debt:** "None" for a new project; see 5.3 otherwise.
 

@@ -42,6 +42,8 @@ A PR touching any of these areas is held for Matthew (`MERGE-HOLD-n`). Edit the 
 - Domains to allow: none
 - Secrets to add: none
 
+<!-- Architect: give each domain what it is for. Secrets are network secrets: give each one its purpose, the domain it is sent to, its header name and its value prefix, e.g. `- PAYMENTS_KEY: test charges; api.example.com; header Authorization; prefix "Bearer "` for `Authorization: Bearer <value>`. -->
+
 ## Lead's discretion
 
 - <areas the lead decides without escalating, e.g. internal naming, test layout>
