@@ -1017,6 +1017,20 @@ def t_sensitive_paths():
     assert gate().returncode == 0
 
 
+
+def t_glob_that_can_never_match():  # cold M3 R2-11
+    mission()
+    original = edit_state("PLAYBOOK.md", lambda t: t.replace(
+        "## Merge-hold list\n", "## Merge-hold list\n\n- Keys: `secrets/`, `/config/keys/**`, `**/*.pem`\n", 1))
+    try:
+        r = gate()
+        failed(r, "sensitive paths", "glob can never match: secrets/; glob can never match: /config/keys/**")
+        assert "*.pem" not in line(r, "sensitive paths")
+        assert verdict(r) == "gate: FAIL hold reasons none; fix first: sensitive paths", out(r)
+    finally:
+        edit_state("PLAYBOOK.md", lambda t: original)
+    assert gate().returncode == 0
+
 def t_allow_hold():
     s = mission(extra={".github/workflows/ci.yml": "on: push\n"})
     gh_cfg(check_runs={s["head"]: [{"id": 1, "name": "ci", "status": "completed", "conclusion": "success",

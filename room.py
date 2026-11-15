@@ -2057,6 +2057,10 @@ def check_sensitive(g, root, head, playbook, a, room):
                                     ("list" if rules is None else "globs") + "; the gate never runs without it",
                                     None)])
         return
+    never = [glob for _, glob, _, _ in rules if glob.startswith("/") or glob.endswith("/")]
+    if never:  # gitignore or CODEOWNERS style: a changed path never starts or ends with '/'
+        g.fail("sensitive paths", [(f"glob can never match: {glob}", None) for glob in never])
+        return
     out = zsplit(git("diff", "--name-status", "--no-renames", "-z", f"refs/remotes/origin/main...{head}",
                      cwd=root).stdout)
     changes = list(zip(out[0::2], out[1::2]))
