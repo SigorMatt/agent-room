@@ -30,3 +30,6 @@
 | S2-1 | medium | room.py | A quoted `lease_session:` line decides the holder once the fence breaks | fixed in 8cd9599 | Line scanning removed; the lease is the last block that parses in the branch history; regression test |
 | S2-2 | medium | room.py | A takeover can't get through a broken block | fixed in 8cd9599 | `lease take --takeover` starts from the last valid block and repairs it; regression test |
 | S2-3 | medium | room.py | A holder commit can drop or break the block | fixed in 8cd9599 | Commits changing MISSIONS.md must keep a valid block with the current lease, for everyone; regression test |
+| S3-1 | medium | room.py | With the closing fence deleted by hand, the block runs on into a later fenced quote, which then decides the lease | deferred: B-3 to M4 | Needs a hand edit outside room.py plus a quoted block; BUILD-STATE.md, "Deferred to later milestones" |
+| S3-2 | medium | room.py | With the opening fence damaged by hand, a quoted second `agent-room-state` block becomes the lease | deferred: B-3 to M4 | Same; BUILD-STATE.md |
+| S3-3 | low | room.py | Repairing a block that also lost its closing fence deletes the records up to the next fence | deferred: B-3 to M4 | Same; BUILD-STATE.md |
