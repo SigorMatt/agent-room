@@ -456,13 +456,18 @@ def t_watchdog_quiet_for_another_room():
     r = room("watchdog", "2", ROOM_SESSION="wd")
     assert r.returncode == 0 and "alarm" in r.stdout and "LEAD-SILENT" in text_of(comments("2")[-1]), out(r)
     assert len(alarms()) == n
-    # with no room in the block, PLAYBOOK.md's decides
-    set_state("room=0", hours=5)
+    # cold M4 R2-2: PLAYBOOK.md's room comes first, as in the gate: at a phase's kickoff the architect records the
+    # new room there while the block still names the old one, and the new phase's watchdog is the current one
+    set_state("room=1", hours=5)
     original = edit_state("PLAYBOOK.md", lambda t: re.sub(r"^room: .*$", "room: 2", t, count=1, flags=re.M), hours=5)
     r = watchdog()
-    assert "quiet: room 1 is not the current room (PLAYBOOK.md records room 2)" in r.stdout, out(r)
+    assert r.stdout.strip() == ("quiet: room 1 is not the current room (PLAYBOOK.md records room 2); this watchdog "
+                                "is left from an earlier phase: delete it"), out(r)
+    backdate(lambda c: "role=watchdog" in c["body"], 10, n="2")
+    r = room("watchdog", "2", ROOM_SESSION="wd")
+    assert r.returncode == 0 and "alarm" in r.stdout, out(r)
     edit_state("PLAYBOOK.md", lambda t: original, hours=5)
-    set_state("room=1", hours=5)
+    assert "room 1 is not the current room" not in watchdog().stdout, "PLAYBOOK.md's room: 0 names no room"
 
 
 def t_watchdog_missing_status_reads_running():

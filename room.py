@@ -2048,15 +2048,25 @@ def check_checks(g, head):
         g.ok("checks", f"{len(state)} passed" + (f" (required: {', '.join(sorted(required))})" if required else ""))
 
 
-def room_number(playbook, missions):
+def current_room(playbook, values):
+    """(number, where) of the current room: PLAYBOOK.md's `room:` line, where the architect records it at each
+    phase's kickoff, else the machine block VALUES' room; None if neither names one. The gate and the watchdog
+    both use it."""
     m = re.search(r"^room:[ \t]*(\d+)", playbook or "", re.M)
-    if m and int(m.group(1)) > 0:
-        return int(m.group(1))
+    for n, where in ((m.group(1) if m else None, "PLAYBOOK.md"), ((values or {}).get("room"), "MISSIONS.md")):
+        if (n or "").strip().isdigit() and int(n) > 0:
+            return int(n), where
+    return None
+
+
+def room_number(playbook, missions):
+    """The current room's number (see current_room), with MISSIONS.md as text; None if no room is recorded."""
     try:
-        n = int(read_block(missions or "").get("room", "0"))
-    except (StateError, ValueError):
-        return None
-    return n if n > 0 else None
+        values = read_block(missions or "")
+    except StateError:
+        values = {}
+    found = current_room(playbook, values)
+    return found[0] if found else None
 
 
 def find_decision(room, decision):
@@ -2325,15 +2335,6 @@ def halted(values):
     return status_of(values).strip().lower() in QUIET_STATUSES
 
 
-def current_room(values, playbook):
-    """(number, where) of the room the state records: the block's room, else PLAYBOOK.md's; None if neither."""
-    for n, where in ((values.get("room"), "MISSIONS.md"),
-                     ((re.search(r"^room:[ \t]*(\d+)", playbook or "", re.M) or [None, None])[1], "PLAYBOOK.md")):
-        if (n or "").strip().isdigit() and int(n) > 0:
-            return int(n), where
-    return None
-
-
 def quiet_reason(a, values, playbook):
     """Why the watchdog stays quiet whatever the progress, or None."""
     if halted(values):
@@ -2343,7 +2344,7 @@ def quiet_reason(a, values, playbook):
     step = values.get("step") or "none"
     if step.strip().lower().startswith(WAITING_FOR_OWNER):
         return f"step is {step}"
-    room = current_room(values, playbook)
+    room = current_room(playbook, values)
     if room and room[0] != a.room:
         return (f"room {a.room} is not the current room ({room[1]} records room {room[0]}); this watchdog is left "
                 "from an earlier phase: delete it")
