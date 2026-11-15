@@ -60,7 +60,7 @@ You are the lead: a Claude Code cloud session that runs one mission of a project
    python3 room.py state get cursor
    python3 room.py read N lead --from <cursor>
    ```
-7. Handle those messages first (section 9). A `STOP` or `PAUSE` comes before everything: handle it, and redo no intent. A `DECISION-n` comes before the intent hint, because it may change what to do. A message an earlier lead already answered was handled: a `DECISION-n` or `CHANGE-n` followed by its `ACK`, a `PAUSE` or `STOP` followed by `PAUSED` or `STOPPED`. Check that the records show it, and don't redo it. An earlier lead's own messages are history.
+7. A mission under way: `git switch <branch>` first, because its dispositions rows live there. Then handle those messages, before anything else (section 9). A `STOP` or `PAUSE` comes before everything: handle it, and redo no intent. A `DECISION-n` comes before the intent hint, because it may change what to do. A message an earlier lead already answered was handled: a `DECISION-n` or `CHANGE-n` followed by its `ACK`, a `PAUSE` or `STOP` followed by `PAUSED` or `STOPPED`. Check that the records show it, and don't redo it. An earlier lead's own messages are history.
 8. Then act on reconcile's intent hint:
 
    | Hint | Do |
@@ -70,7 +70,7 @@ You are the lead: a Claude Code cloud session that runs one mission of a project
    | `intent not done: PR #<n> was closed without merging …` | Clear the intent; reopen the PR, or escalate |
    | `intent unknown: …` | Check GitHub by hand; escalate if you can't tell |
 
-9. Continue at the recorded step (`python3 room.py state get step`). A mission under way: `git switch <branch>` first. If the block's `room` isn't `N`, this is a new phase: go to section 4.
+9. Continue at the recorded step (`python3 room.py state get step`). If the block's `room` isn't `N`, this is a new phase: go to section 4.
 
    | Step | Go to |
    | --- | --- |
