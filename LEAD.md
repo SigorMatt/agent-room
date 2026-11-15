@@ -110,7 +110,7 @@ Your session may have no background commands and no scheduling tools (a session 
    python3 room.py lease release
    ```
    Then end. The lead started after his `DECISION` continues.
-6. Nothing wakes you to read the room. So read it before each `state set step=…` and after each foreground wait, such as a subagent run in the foreground, and handle what came (section 9). That is how you see `PAUSE`, `STOP` and `CHANGE-n` mid-mission:
+6. Nothing wakes you to read the room. So read it before each `state set step=…`, after each foreground wait, such as a subagent run in the foreground, and whenever a subagent's result wakes you, before you act on that result. Handle what came first (section 9). That is how you see `PAUSE`, `STOP` and `CHANGE-n` mid-mission, during Build too:
    ```bash
    python3 room.py read N lead
    ```
@@ -160,7 +160,7 @@ Record before acting: `python3 room.py intent N "<intent>"` before posting `PLAN
 
 1. Brief one builder per task with [`briefs/builder.md`](briefs/builder.md): at most three at once, each in its own worktree (the Agent tool's worktree isolation). Record each under "Tasks in flight" (task, builder ID, attempt), and commit with `state commit`.
 2. A `QUESTION`: answer from the docs in one or two sentences, citing the section, and resume the same builder. If the docs don't settle it, decide only when any reasonable choice leaves the design intact, and record that under "Lead decisions" in `MISSIONS.md`. Otherwise escalate (section 8) and park the builder, keeping its ID.
-3. A `RESULT … done`: merge its branch, run the checks, push. Verify with the checks and `git diff --stat`, never by reading the diff. A conflict that isn't trivial: resume the builder to merge `<branch>` and resolve it.
+3. A `RESULT … done`: first read the room (`python3 room.py read N lead`) and handle what came (section 9): after a `STOP`, merge nothing more; after a `PAUSE`, brief no new builder. Then merge its branch, run the checks, push. Verify with the checks and `git diff --stat`, never by reading the diff. A conflict that isn't trivial: resume the builder to merge `<branch>` and resolve it.
    ```bash
    git merge --no-edit <builder-branch>
    <test>
