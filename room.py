@@ -2022,6 +2022,13 @@ def row_files(cell):
     return out
 
 
+def same_commit(line, sha):
+    """Whether a record's commit LINE names SHA: backticks stripped, a hex prefix of 7 or more characters,
+    any text after it ignored (`95eebe4…` (fetch 3))."""
+    m = re.match(r"([0-9a-f]{7,40})(?![0-9a-z])", line.replace("`", "").strip().lower())
+    return bool(m and sha and sha.startswith(m.group(1)))
+
+
 def target_problem(target, mission, phase):
     """Why a deferral TARGET isn't later than MISSION (M<k>) or the current PHASE, or None."""
     m = re.fullmatch(r"M(\d+)", target)
@@ -2160,7 +2167,7 @@ def check_dispositions(g, root, head, rec, ledger_text, room, phase=None):
             if listed != dirs:
                 reasons.append((f"{path} says fetches: {lines.get('fetches') or '(none)'}, but the archived fetches "
                                 f"are {', '.join(map(str, dirs))}", None))
-            if lines.get("reviewed", "").lower() != (q["reviewed"] or ""):
+            if not same_commit(lines.get("reviewed", ""), q["reviewed"]):
                 reasons.append((f"{path} says reviewed: {lines.get('reviewed') or '(none)'}, but the last fetch "
                                 f"reviewed {q['reviewed'] or '(no marker)'}", None))
     # QODO-REVIEW rule 5: the header's open count must agree with the open findings that parse; and every

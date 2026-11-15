@@ -1012,6 +1012,26 @@ def t_qodo_archive_must_be_whole():  # cold M3 R2-5
            f"{qpath} says fetches: 1, 2, but the archived fetches are 2")
 
 
+
+def t_reviewed_line_is_normalised():  # cold M3 S1-6
+    sha = "95eebe47" + "a" * 32
+    for line in (sha, f"`{sha}`", sha[:7], f"{sha[:12]} (fetch 3)", f"`{sha[:7]}`, the last fetch", sha.upper()):
+        assert R.same_commit(line, sha), line
+    for line in ("", sha[:6], "95eebe48", f"{sha}0", "fetch 3: " + sha, "none"):
+        assert not R.same_commit(line, sha), line
+    assert not R.same_commit(sha[:7], None)
+    s = mission()
+    qpath = f"reviews/qodo/PR-{PR}/DISPOSITIONS.md"
+    start(base=s["head"])
+    text = qodo_dispositions(default_qodo_rows(s), reviewed=s["c1"])
+    commit("review: reviewed in backticks, short, with a note",
+           {qpath: text.replace(f"reviewed: {s['c1']}", f"reviewed: `{s['c1'][:7]}` (fetch 1)")})
+    publish()
+    assert gate().returncode == 0
+    commit("review: wrong commit", {qpath: text.replace(f"reviewed: {s['c1']}", f"reviewed: `{s['c2'][:7]}`")})
+    publish()
+    failed(gate(), "dispositions", f"says reviewed: `{s['c2'][:7]}`, but the last fetch reviewed {s['c1']}")
+
 def t_qodo_severity_must_parse():  # cold M3 R2-9
     start()
     c1 = commit("feat", {"app.py": APP1})
