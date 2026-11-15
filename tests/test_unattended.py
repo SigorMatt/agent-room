@@ -658,7 +658,29 @@ def t_watchdog_alarms_when_there_is_no_state():
     assert block()["step"] == "build 10"
 
 
-FLAKY_GIT = os.path.join(tmp, "flaky-bin")  # a git whose fetch fails, as a connection dropped through the proxy would
+def t_lost_state_branch_alarms_after_a_stall_alarm():
+    # qodo PR #8 "A lost state branch gets no new alarm": an ordinary stall alarm doesn't report the state branch
+    # going missing afterwards; only an earlier "state unreadable" alarm does
+    age_alarms()
+    set_state("step=build 11", hours=6)
+    push_mission(5)  # outside progress, so the unreadable-state check has a time to measure from
+    r = watchdog()
+    assert "alarm: no progress for 5h" in r.stdout, out(r)
+    tip = state_sha()
+    g("--git-dir", PET, "update-ref", "-d", "refs/heads/agent-room/state")
+    try:
+        n = len(alarms())
+        r = watchdog()
+        assert "alarm: state unreadable (agent-room/state doesn't exist in SigorMatt/pet)" in r.stdout, out(r)
+        r = watchdog()
+        assert "already reports this stall" in r.stdout and len(alarms()) == n + 1, out(r)
+    finally:
+        g("--git-dir", PET, "update-ref", "refs/heads/agent-room/state", tip)
+    g("push", "-q", "origin", "--delete", MISSION_BRANCH)
+    g("checkout", "-q", "-B", "main", "origin/main")
+
+
+FLAKY_GIT =os.path.join(tmp, "flaky-bin")  # a git whose fetch fails, as a connection dropped through the proxy would
 os.makedirs(FLAKY_GIT)
 with open(os.path.join(FLAKY_GIT, "git"), "w") as f:
     f.write(f'#!/bin/sh\nif [ "$1" = fetch ]; then\n'

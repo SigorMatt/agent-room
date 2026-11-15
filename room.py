@@ -2888,9 +2888,10 @@ def unreadable_state_alarm(a, path, reason):
         print(f"quiet: state unreadable ({reason}), but progress {span(now - progress)} ago ({what} at "
               f"{iso(progress)}), under {span(a.silent_after)}")
         return 0
+    # only an earlier "state unreadable" alarm reports this, and only as the newest alarm: an ordinary stall alarm,
+    # or one after which the state came back, says nothing of the state being gone now
     seen = alarms_since(a, progress)
-    if progress is None:  # no time to measure the stall from: the newest alarm must already say this
-        seen = seen[-1:] if seen and "LEAD-SILENT: state unreadable" in seen[-1]["text"] else []
+    seen = seen[-1:] if seen and "LEAD-SILENT: state unreadable" in seen[-1]["text"] else []
     if seen:
         print(f"quiet: LEAD-SILENT #{seen[-1]['id']} at {seen[-1]['at']} already reports this stall")
         return 0
