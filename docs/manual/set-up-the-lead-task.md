@@ -70,5 +70,6 @@ Why a variable and not a network secret: leads send the token to `api.anthropic.
 - No **API** trigger: you're in the app. Use a browser on a computer.
 - `agent-room` isn't in the **Cloud environment** list: create it first ([Create the `agent-room` cloud environment](create-the-cloud-environment.md)).
 - The repo isn't in the **Repository** list: [Connect GitHub](connect-github.md).
-- You lost the token before saving it, and no lead has run from the task yet: delete the task and create it again from step 1. Once leads have run from it, never delete it: deleting a task deletes the sessions it started. Ask the architect instead.
+- You lost the token before saving it, and no lead has run from the task yet: delete the task and create it again from step 1, then tell the architect, so it records the new task's ID. Once leads have run from it, never delete it: deleting a task deletes the sessions it started. Ask the architect instead.
 - Later, a `NEXT-LEAD-NEEDED` says `not configured` or `token rejected`, or preflight warns `lead task not configured`: the variable is missing, misspelt, or holds an old token. Check the line from step 9. A lead reads the variables when it starts, so the fix reaches the next lead. Then answer the buzz ([Answer a buzz](answer-a-buzz.md)).
+- Later, a `NEXT-LEAD-NEEDED` says `lead task … not found`, or you recreated the task: the playbook still names the old one. Ask the architect to set it up again with you; it records the new task's ID ([Troubleshooting](troubleshooting.md), the new-task line).
