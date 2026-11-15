@@ -14,9 +14,9 @@ The build of the agent-room pipeline v1, as designed in [`v1.md`](v1.md). A fres
 | M0 | Commit design and build state | Done (#5) |
 | M1 | Platform check | In progress |
 | M2 | Core machinery | Done (#6) |
-| M3 | Review records, `gate` and `merge` (spec `m3-reviews-gate.md`) | In review (PR) |
-| M4 | Unattended operation (spec `m4-unattended.md`) | Not started |
-| M5 | Protocols (`ARCHITECT.md`, `LEAD.md`, briefs, thin skill), manuals and index | Not started |
+| M3 | Review records, `gate` and `merge` (spec `m3-reviews-gate.md`) | Done (#7) |
+| M4 | Unattended operation (spec `m4-unattended.md`) | In review (PR) |
+| M5 | Protocols (`ARCHITECT.md`, `LEAD.md`, briefs, thin skill), manuals and index | In progress (spec `m5-protocols-manuals.md`) |
 | M6 | Dress rehearsal on `pet-todo` (build lead plays the architect) | Not started |
 | M7 | Matthew's owner run, then tag `v1.0.0` | Not started |
 
