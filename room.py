@@ -2436,7 +2436,7 @@ def run_gate(a, expect_sha=None):
 
     # 2. the lease
     sid = session_id(a)
-    holder, gen = lease_holder()
+    holder, gen, _ = lease_holder()
     if holder != sid:
         print(f"✗ lease: held by {holder} (generation {gen}), not this session ({sid})")
         print("gate: lease lost")
