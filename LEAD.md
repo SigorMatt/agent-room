@@ -236,9 +236,10 @@ This follows `~/agent-room/docs/QODO-REVIEW.md` ([`docs/QODO-REVIEW.md`](docs/QO
 **On:**
 1. First review: a fresh reader with [`briefs/qodo-reader.md`](briefs/qodo-reader.md), variant `first-review`. It waits up to 15 minutes.
 2. No first review: write the dispositions file with `qodo: no first review`, commit, push, and post `STATUS: no Qodo review for PR #<PR>`. Then `python3 room.py state set step=gate`. If the last line of `QODO-VALUE.md` says `no first review` too, hold (5.6, reason 6). Else go to 5.6.
-3. A review: commit the fetch the reader archived.
+3. A review: commit the fetch the reader archived. After the first review, also append the reader's QODO-VALUE draft under "## Lines" of `QODO-VALUE.md`, ending ` · draft`, so a successor has it:
    ```bash
    git add reviews/qodo/PR-<PR>/<f> && git commit -m "review: qodo PR #<PR> fetch <f>"
+   python3 room.py state commit -m "qodo value: PR #<PR> draft"
    ```
 4. Decide each finding from the reader's proposals, as in 5.3 step 4. An `Action required` finding is fixed or goes to Matthew. Builders fix, one commit per finding: `fix: <what> (qodo PR #<PR>: <finding title>)`.
 5. Push the fixes with the archive commit. That starts a round: three at most, plus the extra Qodo rounds a `DECISION` grants.
@@ -291,14 +292,15 @@ This follows `~/agent-room/docs/QODO-REVIEW.md` ([`docs/QODO-REVIEW.md`](docs/QO
 ### 5.7 Close
 
 1. Record the step: `python3 room.py state set step=close`.
-2. Record the merge in `<state>/docs/playbook/`, then commit:
+2. Record the merge in `<state>/docs/playbook/`, then commit. Do only what is missing: a lead that joins at `close` skips what is already there.
    - `MISSIONS.md`: the mission's row `merged`, with its PR and merge sha; clear "Current mission".
    - `LEDGER.md`: items this mission fixed get `fixed in <sha>`.
-   - `QODO-VALUE.md`: one line, as the first-review reader drafted it with your final counts; or `PR #<PR> · Qodo off`, or `PR #<PR> · no first review`.
+   - `QODO-VALUE.md`: finalise this PR's `draft` line with the round findings and dismissals, and drop ` · draft`; or add `PR #<PR> · Qodo off` or `PR #<PR> · no first review`. Skip it if a final line for this PR is there.
    ```bash
    python3 room.py state commit -m "close: M<k> merged as <merge sha>"
    python3 room.py say N lead "STATUS: M<k> merged, PR #<PR> (<merge sha>). <QODO-VALUE line>"
    ```
+   Skip the `STATUS` if the room already has one for this merge.
 3. More planned missions in the phase: hand over with `--step spec` (section 6). The last one: section 7.
 
 ## 6. Handover
