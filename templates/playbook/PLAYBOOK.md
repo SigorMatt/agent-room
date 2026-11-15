@@ -22,14 +22,17 @@ Goal: <one sentence>. Items: P1-1. Mission budget: 8 hours.
 
 ## Merge-hold list
 
-A PR touching any of these areas is held for Matthew (`MERGE-HOLD-n`). Edit the patterns per project: `*` stays within one path segment, `**/` matches any number of directories, including none.
+A PR touching any of these areas is held for Matthew (`MERGE-HOLD-n`). Edit the patterns per project: `*` stays within one path segment, `**/` matches any number of directories, including none. Holding too much is cheaper than missing a change.
 
 - CI and workflow files: `.github/workflows/**`, `.github/actions/**`
-- Authentication, cryptography or secrets handling: `**/auth/**`, `**/crypto/**`, `**/*secret*`
-- New dependencies: `**/requirements*.txt`, `**/pyproject.toml`, `**/setup.py`, `**/setup.cfg`, `**/Pipfile`,
-  `**/package.json`, `**/go.mod`, `**/Cargo.toml`
-- Destructive data migrations: `**/migrations/**`
-- Deleted or weakened tests: `**/tests/**`, `**/test/**`, `**/__tests__/**`, `**/*_test.*`, `**/*.test.*`, `**/test_*`
+- Authentication, cryptography or secrets handling: `**/*auth*`, `**/*auth*/**`,
+  `**/*crypto*`, `**/*crypto*/**`, `**/*secret*`, `**/*secret*/**`, `**/*password*`, `**/*token*`
+- New dependencies: `**/requirements*.txt`, `**/requirements/*.txt`, `**/pyproject.toml`, `**/setup.py`,
+  `**/setup.cfg`, `**/Pipfile`, `**/environment.yml`, `**/package.json`, `**/package-lock.json`, `**/*.lock`,
+  `**/go.mod`, `**/Cargo.toml`, `**/Gemfile*`, `**/*.gemspec`, `**/pom.xml`, `**/build.gradle*`, `**/*.csproj`
+- Destructive data migrations: `**/migrations/**`, `**/migrate/**`, `**/alembic/**`
+- Deleted or weakened tests: `**/tests/**`, `**/test/**`, `**/spec/**`, `**/__tests__/**`, `**/*_test.*`,
+  `**/*.test.*`, `**/*_spec.*`, `**/*.spec.*`, `**/test_*`, `**/conftest.py`
 
 ## Environment needs
 

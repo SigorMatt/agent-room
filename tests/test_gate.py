@@ -459,7 +459,7 @@ def t_globs_and_merge_hold_list():
     assert rx("**/test_*").fullmatch("test_a.py") and rx("**/test_*").fullmatch("x/y/test_a.py")
     assert rx("a?c").fullmatch("abc") and not rx("a?c").fullmatch("a/c") and not rx("a.c").fullmatch("abc")
     rules = R.merge_hold_rules(open(os.path.join(TEMPLATES, "PLAYBOOK.md")).read())
-    assert len(rules) == 20, rules
+    assert len(rules) == 40, rules
     assert {label for label, _, deleted, _ in rules if deleted} == {"Deleted or weakened tests"}
     assert ("CI and workflow files", ".github/workflows/**") in [(r[0], r[1]) for r in rules]
     assert R.merge_hold_rules("# Playbook\n\n## Phases\n") is None
@@ -495,6 +495,26 @@ def t_blank_line_inside_a_table():  # cold M3 R1-12
                             "| R1-1 | low | app.py:1 | a finding | it breaks |\n\n")
     assert R.parse_cold_report("r.md", "round", 1, report)["findings"] == {"R1-1": "low", "R1-2": "high"}
 
+
+
+def t_template_covers_common_layouts():  # cold M3 R2-7
+    rules = R.merge_hold_rules(open(os.path.join(TEMPLATES, "PLAYBOOK.md")).read())
+    auth = "Authentication, cryptography or secrets handling"
+    for path, label in (("app/auth.py", auth), ("src/authentication/login.py", auth), ("app/oauth/flow.py", auth),
+                        ("app/security/tokens.py", auth), ("lib/crypto.py", auth), ("config/passwords.yml", auth),
+                        ("db/migrate/20261115_drop_users.rb", "Destructive data migrations"),
+                        ("alembic/versions/3f2a_drop_column.py", "Destructive data migrations"),
+                        ("requirements/base.txt", "New dependencies"), ("poetry.lock", "New dependencies"),
+                        ("package-lock.json", "New dependencies"), ("Gemfile", "New dependencies"),
+                        ("Gemfile.lock", "New dependencies"), ("x.gemspec", "New dependencies"),
+                        ("pom.xml", "New dependencies"), ("build.gradle", "New dependencies"),
+                        ("build.gradle.kts", "New dependencies"), ("src/App.csproj", "New dependencies"),
+                        ("environment.yml", "New dependencies")):
+        assert held(rules, path) == label, (path, held(rules, path))
+    for path in ("web/src/app.spec.ts", "spec/models/user_spec.rb", "src/test/java/FooTest.java", "conftest.py",
+                 "tests/conftest.py"):
+        assert held(rules, path, "D") == "Deleted or weakened tests", path
+    assert held(rules, "spec/models/user_spec.rb") is None and held(rules, "src/app.py") is None
 
 def t_wrapped_merge_hold_bullet():  # cold M3 R1-11
     playbook = ("## Merge-hold list\n\nHeld for Matthew.\n\n"
