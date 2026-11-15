@@ -594,6 +594,13 @@ def push_edit(repo, name, fn):
 AGAIN = dict(cwd=os.path.join(tmp, "work", "again"), ROOM_REPO="SigorMatt/again", state="GA")
 BREAK_FENCE = ("```agent-room-state\n", "```agent-room-state:\n")  # no longer the block's info string
 MANGLE = ("```agent-room-state\n", "```agent-room-state  # machine block\n")
+
+
+def drop_closing_fence(text):
+    """MISSIONS.md TEXT without its machine block's closing fence, whatever the block's last key (the template's
+    block has gained keys, so no fixed key line marks the end)."""
+    end = text.index("\n```\n", text.index("```agent-room-state"))
+    return text[:end + 1] + text[end + 5:]
 VALID = "MISSIONS.md must keep a valid agent-room-state block with the current lease"
 
 
@@ -714,8 +721,7 @@ def t_strict_block_parsing():
             edit_file(playbook_path(S["FL1"], "MISSIONS.md"), lambda t: t.replace(
                 "### Parked questions\n", "### Parked questions\n\n- state before the takeover:\n" + quote, 1))
             assert "pushed" in room("state", "commit", "-m", "note", session="L1", state=S["FL1"], **K).stdout
-            push_edit(repo, "MISSIONS.md", lambda t: t.replace("waiting_for_owner: no\n```\n",
-                                                               "waiting_for_owner: no\n", 1))
+            push_edit(repo, "MISSIONS.md", drop_closing_fence)
         else:
             edit_file(playbook_path(S["FL1"], "MISSIONS.md"), lambda t: t.replace(
                 "### Parked questions\n", "### Parked questions\n\n- state before the takeover:\n" + same_info, 1))
@@ -742,8 +748,7 @@ def t_block_repair_deletes_nothing():
         "### Parked questions\n\n- none", "### Parked questions\n\n- Q-1: error seen:\n\n```text\nTraceback\n```\n", 1))
     assert "pushed" in room("state", "commit", "-m", "note", session="L1", state=S["FL1"], **K).stdout
     before = remote_file(repo, "docs/playbook/MISSIONS.md")
-    push_edit(repo, "MISSIONS.md", lambda t: t.replace(*MANGLE, 1).replace("waiting_for_owner: no\n```\n",
-                                                                         "waiting_for_owner: no\n", 1))
+    push_edit(repo, "MISSIONS.md", lambda t: drop_closing_fence(t.replace(*MANGLE, 1)))
     damaged = remote_file(repo, "docs/playbook/MISSIONS.md")
     r = room("state", "set", "step=build", session="L1", state=S["FL1"], **K)
     assert "restores it" in r.stderr, r.stderr

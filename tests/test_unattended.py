@@ -127,6 +127,12 @@ def edit_state(name, fn, hours=None, **env):
     return text
 
 
+def drop_closing_fence(text):
+    """MISSIONS.md TEXT without its machine block's closing fence, whatever the block's last key."""
+    end = text.index("\n```\n", text.index("```agent-room-state"))
+    return text[:end + 1] + text[end + 5:]
+
+
 def push_edit(name, fn, hours=None):
     """Edit a playbook file on the state branch from another clone, as a hand edit on GitHub would (room.py's own
     state commit refuses to break the machine block)."""
@@ -607,14 +613,21 @@ def t_watchdog_reads_the_last_valid_block():
     # no progress
     age_alarms()
     t = set_state("step=build 9", hours=6)
-    push_edit("MISSIONS.md", lambda s: s.replace("```agent-room-state\n", "``` agent-room-state\n", 1), hours=5)
-    r = watchdog()
-    assert r.returncode == 0 and "note: docs/playbook/MISSIONS.md has no valid agent-room-state block" in r.stdout \
-        and "its last valid block" in r.stdout, out(r)
-    assert "alarm: no progress for 6h" in r.stdout, out(r)
-    assert text_of(alarms()[-1]).startswith(f"LEAD-SILENT: no progress since {iso(t)} (step build 9, mission M1)")
-    set_state("step=build 10", hours=5)  # the holder's next write restores the block
-    assert block()["step"] == "build 10"
+    # damage by B-3's strict rules: an info string that isn't exactly agent-room-state, and then no closing fence
+    # (a space after the backticks, by contrast, is still a valid fence)
+    for damage in (lambda s: s.replace("```agent-room-state\n", "```agent-room-state  # hand edit\n", 1),
+                   drop_closing_fence):
+        push_edit("MISSIONS.md", damage, hours=5)
+        r = watchdog()
+        assert r.returncode == 0 and "note: docs/playbook/MISSIONS.md has no valid agent-room-state block" in \
+            r.stdout and "its last valid block" in r.stdout, out(r)
+        assert "alarm: no progress for 6h" in r.stdout, out(r)
+        assert text_of(alarms()[-1]).startswith(f"LEAD-SILENT: no progress since {iso(t)} (step build 9, mission M1)")
+        set_state("step=build 10", hours=5)  # the holder's next write restores the block
+        assert block()["step"] == "build 10"
+        t = set_state("step=build 9", hours=6)
+        age_alarms()
+    set_state("step=build 10", hours=5)
 
 
 def t_watchdog_alarms_when_there_is_no_state():
