@@ -686,11 +686,12 @@ def t_watchdog_starts_the_lead_after_a_decision():
     room("say", "1", "architect", "LEAD-STARTED: https://claude.ai/code/a (plain join line, started by architect)",
          check=True, ROOM_SESSION="arch")
     assert watchdog().stdout.strip() == quiet and len(fires()) == nf + 2
-    # not with the lease held
+    # not with the lease held: a lead is running then, and is measured as one (cold M6b R1-1)
     room("say", "1", "architect", "DECISION-4: one more", check=True, ROOM_SESSION="arch")
     backdate(lambda c: "DECISION-4" in c["body"], 45)
     room("lease", "take", check=True)
-    assert watchdog().stdout.strip() == quiet and len(fires()) == nf + 2
+    r = watchdog()
+    assert "quiet: progress " in r.stdout and "start" not in r.stdout and len(fires()) == nf + 2, out(r)
     # a decision older than the newest lead message is answered
     room("say", "1", "lead", "ACK DECISION-4", "--no-buzz", check=True)
     room("lease", "release", check=True)
@@ -873,6 +874,55 @@ def t_no_start_after_a_state_unreadable_alarm():
     finally:
         put_state_branch_back(tip)
         drop_mission()
+    age_watchdog()
+
+
+def t_waiting_for_owner_with_the_lease_held():
+    # cold M6b R1-1: a lead that parks releases the lease, so a held lease at a waiting step means a lead joined and
+    # hasn't moved on. The watchdog measures from its LEAD ONLINE, then alarms and starts a takeover
+    online()
+    age_watchdog()
+    room("say", "1", "lead", "ESCALATION-6: which font?", "--no-buzz", check=True)
+    set_state("waiting_for_owner=yes", "step=waiting for owner: spec 11", hours=5)  # parked five hours ago
+    room("lease", "release", check=True)
+    room("say", "1", "architect", "DECISION-6: serif", check=True, ROOM_SESSION="arch")
+    room("say", "1", "architect", "LEAD-STARTED: https://claude.ai/code/b (plain join line, started by architect)",
+         check=True, ROOM_SESSION="arch")
+    # the started lead joins, then stops before it moves the step on
+    room("lease", "take", check=True, ROOM_SESSION="L2")
+    room("say", "1", "lead", "LEAD ONLINE", "--no-buzz", check=True, ROOM_SESSION="L2")
+    joined = comments()[-1]["id"]
+    before = counts()
+    r = watchdog()  # no false alarm right after it joined
+    assert r.returncode == 0 and "note: step is waiting for owner: spec 11, but L2 holds the lease, so it counts as " \
+        "running" in r.stdout, out(r)
+    assert re.search(rf"^quiet: progress \d+s ago \(LEAD ONLINE #{joined} at \S+\), under 3h00m$", r.stdout, re.M), out(r)
+    assert counts() == before
+    backdate(lambda c: c["id"] == joined, 200)
+    r = watchdog()
+    assert r.returncode == 0 and f"alarm: no progress for 3h20m (LEAD ONLINE #{joined} at " in r.stdout, out(r)
+    alarm, started = comments()[-2:]
+    assert text_of(alarm).startswith("LEAD-SILENT: no progress since ") and "(step waiting for owner: spec 11, " \
+        "mission M1)" in text_of(alarm), text_of(alarm)
+    assert text_of(started).endswith("(takeover join line, started by watchdog)"), text_of(started)
+    assert [request(x)["body"] for x in fires()[before[0]:]] == [{"text": JOIN.format(n=1, v="main") + TAKEOVER}]
+    # a lead that parks but dies before releasing the lease: the waiting_for_owner flag doesn't mute it either
+    age_watchdog()
+    backdate(lambda c: c["id"] == joined, 360)
+    room("state", "set", "waiting_for_owner=yes", "step=waiting for owner: spec 12", check=True, ROOM_SESSION="L2",
+         **ago(4)[1])
+    nf = len(fires())
+    r = watchdog()
+    assert r.returncode == 0 and "alarm: no progress for 4h" in r.stdout and "started: https://claude.ai/code/" in \
+        r.stdout, out(r)
+    assert len(fires()) == nf + 1 and text_of(comments()[-1]).endswith("(takeover join line, started by watchdog)")
+    # with the lease released, the waiting step stays quiet as before
+    age_watchdog()
+    room("lease", "release", check=True, ROOM_SESSION="L2")
+    room("say", "1", "lead", "LEAD ONLINE", "--no-buzz", check=True)
+    assert watchdog().stdout.strip() == "quiet: step is waiting for owner: spec 12"
+    room("lease", "take", check=True)
+    set_state("step=build 11")
     age_watchdog()
 
 

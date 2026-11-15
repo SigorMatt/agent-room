@@ -2793,7 +2793,12 @@ def quiet_reason(a, values, playbook):
             print(f"note: status is {status_of(values)}, but {holder} still holds the lease, so it counts as running")
     step = values.get("step") or "none"
     if step.strip().lower().startswith(WAITING_FOR_OWNER):
-        return "waiting", f"step is {step}"
+        holder, _ = lease_of(values)
+        if holder == "none":
+            return "waiting", f"step is {step}"
+        # cold M6b R1-1: a lead that parks releases the lease, so a held one means a lead joined (maybe after the
+        # decision) and hasn't moved on yet: it counts as running, measured from its LEAD ONLINE too
+        print(f"note: step is {step}, but {holder} holds the lease, so it counts as running")
     if room and room[0] != a.room:
         return "room", (f"room {a.room} is not the current room ({room[1]} records room {room[0]}); this watchdog is "
                         "left from an earlier phase: delete it")
@@ -3096,7 +3101,15 @@ def cmd_watchdog(a):
     if not found:
         return unreadable_state_alarm(a, path, f"{PLAYBOOK_DIR}/MISSIONS.md has no step in its history")
     progress, what = max(found)
-    if (values.get("waiting_for_owner") or "").strip().lower() == "yes":
+    stall = progress  # which stall this is, for one alarm and the starts per stall
+    joined_at_wait = step.strip().lower().startswith(WAITING_FOR_OWNER) and lease_of(values)[0] != "none"
+    if joined_at_wait:
+        # cold M6b R1-1: measured from the later of the progress and the newest lead LEAD ONLINE, so a lead that has
+        # just joined gets no alarm; the waiting_for_owner flag, set when the last lead parked, doesn't mute it
+        online = newest_lead_online(a)
+        if online and online[0] > progress:
+            progress, what = online[0], f"LEAD ONLINE #{online[1]}"
+    if (values.get("waiting_for_owner") or "").strip().lower() == "yes" and not joined_at_wait:
         # it mutes only while nothing has progressed since the commit that set it; after that it is stale
         flag = last_change(path, lambda k: k == "waiting_for_owner")
         if flag is None or progress <= flag[1]:
@@ -3109,17 +3122,28 @@ def cmd_watchdog(a):
         print(f"quiet: progress {span(now - progress)} ago ({what} at {iso(progress)}), "
               f"under {span(a.silent_after)}")
         return 0
-    seen = alarms_since(a, progress)  # one alarm per stall
+    seen = alarms_since(a, stall)  # one alarm per stall
     if seen:
         print(f"quiet: LEAD-SILENT #{seen[0]['id']} at {seen[0]['at']} already reports this stall")
-    elif len(alarms_since(a, progress, failed=True)) >= ALARM_CAP:
+    elif len(alarms_since(a, stall, failed=True)) >= ALARM_CAP:
         # finding P: while buzzes fail, the first alarm and two retries, then quiet
         print(f"quiet: {ALARM_CAP} alarms already posted for this stall")
     else:
         print(f"alarm: no progress for {span(now - progress)} ({what} at {iso(progress)})")
         alarm(a, f"LEAD-SILENT: no progress since {iso(progress)} (step {step}, mission {mission})")
-    start_after_alarm(a, progress, takeover=lease_of(values)[0] != "none")
+    start_after_alarm(a, stall, takeover=lease_of(values)[0] != "none")
     return 0
+
+
+def newest_lead_online(a):
+    """(time, comment ID) of room N's newest trusted lead LEAD ONLINE, or None."""
+    best = None
+    for m in map(parse, comments(a.room)):
+        t = parse_time(m["at"])
+        if m["role"] == "lead" and trusted(m) and message_kind(m["text"]) == "LEAD ONLINE" and t is not None and \
+                (best is None or m["id"] > best[1]):
+            best = (t, m["id"])
+    return best
 
 
 def pinned_version(path=None):
