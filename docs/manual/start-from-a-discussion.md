@@ -48,4 +48,3 @@ You already discussed the project in an ordinary Claude chat, outside its Claude
   ```text
   check the state branch for DIGEST.md
   ```
-

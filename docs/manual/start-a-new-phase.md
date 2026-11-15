@@ -36,4 +36,3 @@ After the `DONE` buzz, when you want the project to do more. The playbook gets a
   ```text
   check the room N
   ```
-
