@@ -138,7 +138,7 @@ Record before acting: `python3 room.py intent N "<intent>"` before posting `PLAN
 
 ### 5.1 Spec
 
-1. Take the first mission in `MISSIONS.md` whose status is `planned`, and set it to `in progress`. Branch off `main` and push:
+1. A mission marked `in progress` in `MISSIONS.md` comes first: an earlier lead started it. Resume it with `git switch <branch>`, keep its spec under "Current mission", and do only what is missing. Otherwise take the first mission whose status is `planned`, and set it to `in progress`. Branch off `main` and push (also for a resumed mission whose branch isn't on the remote):
    ```bash
    git fetch -q origin main
    git switch -c mission/M<k>-<slug> origin/main
