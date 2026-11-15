@@ -484,7 +484,7 @@ def t_watchdog_quiet_while_waiting_for_owner():
     for value in ("yes", "YES"):
         set_state("step=gate", f"waiting_for_owner={value}", hours=5)
         r = watchdog()
-        assert r.stdout.strip() == "quiet: waiting_for_owner is yes", out(r)
+        assert r.stdout.strip().startswith("quiet: waiting_for_owner is yes (set at "), out(r)
     assert len(alarms()) == n
     set_state("waiting_for_owner=no", hours=5)
     r = watchdog()
@@ -511,6 +511,36 @@ def t_waiting_for_owner_does_not_outlive_the_wait():
     assert "alarm: no progress for 5h" in r.stdout, out(r)
     room("lease", "release", check=True, ROOM_SESSION="L2")
     room("lease", "take", check=True)
+
+
+def t_waiting_for_owner_mutes_only_until_progress():
+    # cold M4 S1-1: merge's pr write ends the wait, and any progress after the flag was set makes it stale
+    age_alarms()
+    set_state("step=gate", hours=7)
+    set_state("waiting_for_owner=yes", hours=7)  # MERGE-HOLD posted; then DECISION approves it
+    set_state("intent=merge PR #12 at " + "b" * 40, hours=6)
+    set_state("intent=none", "pr=merged:12", hours=6)  # merge's writes; the lead ends right after
+    assert block()["waiting_for_owner"] == "no", "the pr write ends the wait"
+    r = watchdog()
+    assert "alarm: no progress for 6h" in r.stdout, out(r)
+    age_alarms()
+    set_state("step=build 3", "pr=none", hours=9)
+    set_state("waiting_for_owner=yes", hours=8.5)  # ESCALATION posted; DECISION answers in place
+    push_mission(7)
+    push_mission(5)  # the lead keeps building at the same step, pushes, and dies an hour later
+    assert block()["waiting_for_owner"] == "yes"
+    r = watchdog()
+    assert "note: waiting_for_owner is yes, but mission/M1-greet pushed at" in r.stdout and "so it is stale" in \
+        r.stdout and "alarm: no progress for 5h" in r.stdout, out(r)
+    age_alarms()
+    set_state("waiting_for_owner=no", hours=4.5)
+    set_state("waiting_for_owner=yes", hours=4)  # set after the last progress: it mutes
+    r = watchdog()
+    assert r.stdout.strip().startswith("quiet: waiting_for_owner is yes (set at ") and \
+        r.stdout.strip().endswith(", no progress since)"), out(r)
+    set_state("waiting_for_owner=no", hours=4)
+    g("push", "-q", "origin", "--delete", MISSION_BRANCH)
+    g("checkout", "-q", "-B", "main", "origin/main")
 
 
 def t_watchdog_quiet_for_another_room():

@@ -1016,11 +1016,11 @@ def change_state(a, msg, fn, need_lease=True):
     if need_lease:
         require_lease(values, session_id(a))
     updates = fn(values)
-    if "step" in updates and updates["step"] != values.get("step") and "waiting_for_owner" not in updates and \
-            (values.get("waiting_for_owner") or "no").strip().lower() != "no":
-        # the wait is over once the step moves, unless this write says otherwise: a stale flag mutes the watchdog
+    moved = [k for k in ("step", "pr") if k in updates and updates[k] != values.get(k)]
+    if moved and "waiting_for_owner" not in updates and (values.get("waiting_for_owner") or "no").strip().lower() != "no":
+        # the wait is over once the step or the pr moves (merge records pr), unless this write says otherwise
         updates = {**updates, "waiting_for_owner": "no"}
-        print("[waiting_for_owner set back to no: the step moved]", file=sys.stderr)
+        print(f"[waiting_for_owner set back to no: the {' and the '.join(moved)} moved]", file=sys.stderr)
     if note:
         print(f"[{note}; this write restores it]", file=sys.stderr)
     with open(f, "w") as fh:
@@ -2356,8 +2356,6 @@ def quiet_reason(a, values, playbook):
             return f"status is {status_of(values)} and the lease is released"
         # written, but the lease is still held: the lead may have died before its post and release
         print(f"note: status is {status_of(values)}, but {holder} still holds the lease, so it counts as running")
-    if (values.get("waiting_for_owner") or "").strip().lower() == "yes":
-        return "waiting_for_owner is yes"
     step = values.get("step") or "none"
     if step.strip().lower().startswith(WAITING_FOR_OWNER):
         return f"step is {step}"
@@ -2534,6 +2532,14 @@ def cmd_watchdog(a):
     if not found:
         return unreadable_state_alarm(a, path, f"{PLAYBOOK_DIR}/MISSIONS.md has no step in its history")
     progress, what = max(found)
+    if (values.get("waiting_for_owner") or "").strip().lower() == "yes":
+        # it mutes only while nothing has progressed since the commit that set it; after that it is stale
+        flag = last_change(path, lambda k: k == "waiting_for_owner")
+        if flag is None or progress <= flag[1]:
+            print("quiet: waiting_for_owner is yes" + (f" (set at {iso(flag[1])}, no progress since)" if flag else ""))
+            return 0
+        print(f"note: waiting_for_owner is yes, but {what} at {iso(progress)} came after it was set at "
+              f"{iso(flag[1])}, so it is stale")
     now = time.time()
     if now - progress < a.silent_after:
         print(f"quiet: progress {span(now - progress)} ago ({what} at {iso(progress)}), "
