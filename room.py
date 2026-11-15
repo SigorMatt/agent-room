@@ -2510,8 +2510,12 @@ def unreadable_state_alarm(a, path, reason):
 def cmd_watchdog(a):
     try:
         path, values, note = pushed_state()  # fetched and read from git objects: the watchdog never writes state
-    except StateError as e:  # no state branch, or no way to read it
-        return unreadable_state_alarm(a, None, str(e))
+    except StateError as e:
+        # only a state branch that ls-remote doesn't list is no state; any other failure (a fetch that broke on
+        # the network) exits 1 without posting, and the next run tries again
+        if STATE_BRANCH in remote_heads():
+            raise StateError(f"can't read {STATE_BRANCH} ({e}); no alarm: the next run tries again")
+        return unreadable_state_alarm(a, None, f"{STATE_BRANCH} doesn't exist in {REPO}")
     if not values:
         return unreadable_state_alarm(a, path, note)
     if note:  # the pushed block is damaged: the last valid one stands in

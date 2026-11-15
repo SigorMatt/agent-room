@@ -595,12 +595,12 @@ def t_watchdog_alarms_when_there_is_no_state():
         r = watchdog(ROOM_NTFY_TOPIC=None)
         assert r.returncode == 0 and "alarm: state unreadable (" in r.stdout, out(r)
         text = text_of(alarms()[-1])
-        assert re.fullmatch(r"LEAD-SILENT: state unreadable \(.*couldn't find remote ref .*\) \(buzz failed: "
-                            r"ROOM_NTFY_TOPIC is not set\)", text), text
+        assert text == ("LEAD-SILENT: state unreadable (agent-room/state doesn't exist in SigorMatt/pet) (buzz "
+                        "failed: ROOM_NTFY_TOPIC is not set)"), text
         # its buzz failed, so the next run, here another session with no state worktree yet, tries again
         fresh = dict(cwd=tmp, ROOM_STATE_DIR=os.path.join(tmp, "state", "W2"), ROOM_STATE_REMOTE=PET)
         r = watchdog(**fresh)
-        assert "alarm: state unreadable (agent-room/state doesn't exist in SigorMatt/pet yet)" in r.stdout, out(r)
+        assert "alarm: state unreadable (agent-room/state doesn't exist in SigorMatt/pet)" in r.stdout, out(r)
         assert text_of(alarms()[-1]).endswith(" (buzz sent)") and ROOM not in text_of(alarms()[-1]), "no local paths"
         assert len(alarms()) == n + 2 and len(buzzes()) == nb + 1
         for _ in range(2):  # one alarm per stall, however long it lasts
@@ -611,6 +611,38 @@ def t_watchdog_alarms_when_there_is_no_state():
     finally:
         g("--git-dir", PET, "update-ref", "refs/heads/agent-room/state", tip)
     assert block()["step"] == "build 10"
+
+
+FLAKY_GIT = os.path.join(tmp, "flaky-bin")  # a git whose fetch fails, as a connection dropped through the proxy would
+os.makedirs(FLAKY_GIT)
+with open(os.path.join(FLAKY_GIT, "git"), "w") as f:
+    f.write(f'#!/bin/sh\nif [ "$1" = fetch ]; then\n'
+            '  echo "error: RPC failed; curl 56 Recv failure: Connection reset by peer" >&2; exit 128\nfi\n'
+            f'exec "{shutil.which("git")}" "$@"\n')
+os.chmod(os.path.join(FLAKY_GIT, "git"), 0o755)
+
+
+def t_watchdog_retries_a_transient_failure():
+    # cold M4 S1-2: a fetch that fails on the network is no missing state: exit 1, post nothing, retry next run
+    age_alarms()
+    flaky = dict(PATH=FLAKY_GIT + os.pathsep + ENV["PATH"])
+    push_mission(4)
+    set_state("step=cold round 3", hours=0.5)  # a healthy lead
+    n, nb = len(alarms()), len(buzzes())
+    r = watchdog(**flaky)
+    assert r.returncode == 1 and "no alarm: the next run tries again" in r.stderr and "RPC failed" in r.stderr, out(r)
+    set_state("status=paused", hours=5)
+    room("lease", "release", check=True)
+    assert watchdog(**flaky).returncode == 1, "nor on a paused phase"
+    room("lease", "take", check=True)
+    assert len(alarms()) == n and len(buzzes()) == nb
+    # so when the lead really stalls, the next run alarms: no false alarm took that place
+    t = set_state("step=cold round 4", hours=3.5)
+    r = watchdog()
+    assert "alarm: no progress for 3h" in r.stdout and len(alarms()) == n + 1, out(r)
+    assert text_of(alarms()[-1]).startswith(f"LEAD-SILENT: no progress since {iso(t)}")
+    g("push", "-q", "origin", "--delete", MISSION_BRANCH)
+    g("checkout", "-q", "-B", "main", "origin/main")
 
 
 # --- join-line
