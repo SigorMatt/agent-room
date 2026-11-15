@@ -310,6 +310,15 @@ At the end of a mission, or early at a step boundary when your context gets heav
    ```bash
    python3 room.py handoff N --step <step> --cursor <ID>
    ```
+
+   | Exit | Do |
+   | --- | --- |
+   | 0 | Step 5 |
+   | 1, saying `HANDOFF is posted` | Only the release failed. Run `python3 room.py lease release`, once more if it fails, then step 5 |
+   | 1, otherwise | Nothing was posted. Fix what it names (such as uncommitted state edits), and run `handoff` again |
+   | 3 | The state branch kept moving and nothing was posted: run `handoff` again |
+   | 5 | Stand down |
+
 5. Start the successor through the project's lead task. It posts `LEAD-STARTED` itself:
    ```bash
    python3 room.py start-lead N lead
@@ -317,7 +326,9 @@ At the end of a mission, or early at a step boundary when your context gets heav
 
    | Exit | Do |
    | --- | --- |
-   | 0, or 3 (a lead is running or starting) | End |
+   | 0 | End |
+   | 3, saying the lease is held by this session | Your release didn't go through. Run `python3 room.py lease release`, then `start-lead` again |
+   | 3, otherwise (a lead is running or starting) | End |
    | 1 | Run it once more; if it fails again, as for 6 |
    | 6 | Post the line below (it buzzes), with the reason `start-lead` printed, then end |
 
