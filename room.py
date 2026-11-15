@@ -1804,11 +1804,24 @@ def row_files(cell):
     return out
 
 
-def judge(root, head, label, cell, top, file_cell, ledger, reported=None, room=None, finding=None):
+def target_problem(target, mission, phase):
+    """Why a deferral TARGET isn't later than MISSION (M<k>) or the current PHASE, or None."""
+    m = re.fullmatch(r"M(\d+)", target)
+    if m:
+        return None if int(m.group(1)) > int(mission[1:]) else f"which is not a mission after {mission}"
+    p = int(re.fullmatch(r"phase (\d+) backlog", target).group(1))
+    if phase is None:
+        return "but MISSIONS.md records no current phase to compare with"
+    return None if p > phase else f"which is not a phase after the current phase {phase}"
+
+
+def judge(root, head, label, cell, top, file_cell, ledger, reported=None, room=None, finding=None, mission=None,
+          phase=None):
     """What is wrong with one dispositions row: [(text, hold reason or None)]. REPORTED is the commit the
     finding was reported against: a cold report's covers:, or the first Qodo fetch showing the title open.
     ROOM (a RoomLog) answers whether an owner decision on a top-severity row is really Matthew's. LEDGER is
-    ledger_entries(); FINDING names the finding for a deferral's ledger row (see ledger_problems)."""
+    ledger_entries(); FINDING names the finding for a deferral's ledger row (see ledger_problems). A deferral
+    targets a mission after MISSION or a phase after PHASE."""
     form, m = parse_disposition(cell)
     if form is None:
         return [(f"{label} is undecided" + (f" ('{cell}')" if cell.strip() else ""), 2)]
@@ -1820,6 +1833,10 @@ def judge(root, head, label, cell, top, file_cell, ledger, reported=None, room=N
         n, what = m.group(2).rsplit("-", 1)[1], finding[2]
         return [(f"{label} cites {m.group(2)}, but {room.where()} has no trusted {m.group(2)} answering the lead's "
                  f"earlier ESCALATION-{n} or MERGE-HOLD-{n} about {what}", 1)]
+    if form == "deferred" and mission:
+        late = target_problem(m.group(2), mission, phase)
+        if late:
+            return [(f"{label}: deferred to {m.group(2)}, {late}", None)]
     if form == "deferred" and m.group(1) not in ledger:
         return [(f"{label}: {m.group(1)} is not in {PLAYBOOK_DIR}/LEDGER.md on {STATE_BRANCH}", None)]
     if form == "deferred" and finding:
@@ -1846,7 +1863,7 @@ def judge(root, head, label, cell, top, file_cell, ledger, reported=None, room=N
     return []
 
 
-def check_dispositions(g, root, head, rec, ledger_text, room):
+def check_dispositions(g, root, head, rec, ledger_text, room, phase=None):
     reasons, ledger = [], ledger_entries(ledger_text)
     # cold: a row for every finding ID of every report
     want, reported = {}, {}
@@ -1872,7 +1889,7 @@ def check_dispositions(g, root, head, rec, ledger_text, room):
             n_cold += 1
             top = TOP_COLD in (want.get(fid), row.get("severity", "").strip("` ").lower())
             reasons += judge(root, head, f"cold {fid}", row["disposition"], top, row.get("file", ""), ledger,
-                             reported.get(fid), room, ("cold", rec["mission"], fid))
+                             reported.get(fid), room, ("cold", rec["mission"], fid), rec["mission"], phase)
         missing = [fid for fid in want if fid not in seen]
         if rows is not None and missing:
             reasons.append((f"{rec['cold_path']} has no row for {', '.join(missing)}", None))
@@ -1907,7 +1924,8 @@ def check_dispositions(g, root, head, rec, ledger_text, room):
             top = TOP_QODO in ((t.get("severity") or "").lower(), row.get("severity", "").strip("` ").lower())
             label = f"Qodo #{row['#'].strip() or '?'} \"{' '.join(row['finding'].split())}\""
             reasons += judge(root, head, label, row["disposition"], top, row.get("file", ""), ledger, t.get("first"),
-                             room, ("qodo", rec["pr"], t.get("title") or " ".join(row["finding"].split())))
+                             room, ("qodo", rec["pr"], t.get("title") or " ".join(row["finding"].split())),
+                             rec["mission"], phase)
         if mode == "on" and q is None:
             reasons.append((f"{path} says qodo: on, but no Code Review comment is archived for this PR", None))
         elif mode == "on":
@@ -2204,7 +2222,11 @@ def run_gate(a, expect_sha=None):
     room = RoomLog(playbook, missions)
     rec = review_records(root, sha, mission, a.pr)
     check_coverage(g, root, sha, rec)                         # 3
-    check_dispositions(g, root, sha, rec, ledger, room)       # 4
+    try:
+        phase = int(read_block(missions or "").get("phase", ""))
+    except (StateError, ValueError):
+        phase = None
+    check_dispositions(g, root, sha, rec, ledger, room, phase)  # 4
     check_checks(g, root, sha)                                # 5
     check_sensitive(g, root, sha, playbook, a, room)          # 6
     return g.verdict(sha), sha

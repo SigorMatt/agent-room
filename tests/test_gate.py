@@ -313,7 +313,10 @@ def setup():
                                           "| L-3 | qodo PR #12 | Greeting text is hard-coded | next phase | "
                                           "phase 2 backlog | open |\n"
                                           "| L-4 | cold M3 R1-6 | a finding | later | M4 | fixed in abc1234 |\n"
-                                          "| L-5 | cold M2 R1-5 | a finding | later | M4 | open |\n")
+                                          "| L-5 | cold M2 R1-5 | a finding | later | M4 | open |\n"
+                                          "| L-6 | cold M3 R1-2 | a finding | now | M3 | open |\n"
+                                          "| L-7 | cold M3 R1-3 | a finding | before | M2 | open |\n"
+                                          "| L-8 | cold M3 R1-4 | a finding | this phase | phase 1 backlog | open |\n")
     g("fetch", "-q", "origin")
     g("checkout", "-q", "-B", "main", "origin/main")
     commit("app, lib and tests", {"app.py": "def greet(name):\n    return name\n", "lib/util.py": "X = 1\n",
@@ -792,6 +795,23 @@ def t_qodo_fix_bound_is_the_first_fetch_showing_it_open():  # cold M3 R2-3
            records([(QODO_FINDINGS, c1), (resolved, c2)], rows))
     publish()
     failed(gate(), "dispositions", f'Qodo #1 "{crash}": fixed in {c1[:7]}, which the review that found it had already seen')
+
+
+def t_deferral_targets_a_later_mission_or_phase():  # cold M3 R2-12
+    assert R.target_problem("M4", "M3", 1) is None and R.target_problem("phase 2 backlog", "M3", 1) is None
+    assert R.target_problem("M10", "M9", 1) is None and R.target_problem("M9", "M10", 1)
+    assert "no current phase" in R.target_problem("phase 2 backlog", "M3", None)
+    found = [("R1-1", "high", "app.py:2")] + [(f"R1-{i}", "low", "app.py:1") for i in (2, 3, 4)]
+    mission(findings1=found,
+            cold_rows=lambda s: [("R1-1", "high", "app.py", f"fixed in {s['c2'][:7]}"),
+                                 ("R1-2", "low", "app.py", "deferred: L-6 to M3"),
+                                 ("R1-3", "low", "app.py", "deferred: L-7 to M2"),
+                                 ("R1-4", "low", "app.py", "deferred: L-8 to phase 1 backlog")])
+    r = gate()
+    failed(r, "dispositions", "cold R1-2: deferred to M3, which is not a mission after M3",
+           "cold R1-3: deferred to M2, which is not a mission after M3",
+           "cold R1-4: deferred to phase 1 backlog, which is not a phase after the current phase 1")
+    assert verdict(r) == "gate: FAIL hold reasons none; fix first: dispositions", out(r)
 
 def t_disposition_failures():
     g("checkout", "-q", "-B", "side", "origin/main")
