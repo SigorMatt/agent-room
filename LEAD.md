@@ -209,7 +209,7 @@ Up to two rounds on the mission branch, before the PR. Code changed after the la
    ```
 8. Choose the next step:
    - Code changed after round 1: round 2, `step="cold round 2"`.
-   - Code changed after round 2 or a scoped review: a scoped review, `step="scoped <s>"` (`s` = 1, 2, …). It doesn't count as a round, and its `high` findings go to Matthew.
+   - Code changed after round 2 or a scoped review: a scoped review, `step="scoped <s>"` (`s` = 1, 2, …), keeping any `for <step>`. It doesn't count as a round, and its `high` findings go to Matthew.
    - Nothing changed since the last review, and no PR yet (`pr` is `none`): the PR, `step=PR`. After round 2, first defer what is still undecided, or make it an owner decision. Each ledger item of the mission must be fixed or deferred again.
    - Nothing changed, and the PR exists: back to the step that sent you here, named in the step `scoped <s> for <step>` (`Qodo round <r>` or `gate`). Never open a second PR.
    ```bash
@@ -268,7 +268,7 @@ This follows `~/agent-room/docs/QODO-REVIEW.md` ([`docs/QODO-REVIEW.md`](docs/QO
    | 6 | `gate: FAIL hold reasons …` | Fix what is yours (a missing row; uncovered code needs a scoped review, `step="scoped <s> for gate"`; a failing check gets one builder attempt). Hold for what stands |
    | 5 | lease lost | Stand down |
 
-   A `FAIL` the records can't fix is a pipeline fault: its line says `the records can't fix this`, as for "Qodo comment did not parse". Never edit records to get past it. Escalate it (section 8), quoting the line, then record `waiting_for_owner=yes step="waiting for owner: gate"` and do nothing else on that PR.
+   A `FAIL` the records can't fix is a pipeline fault: its line says `the records can't fix this`, as for "Qodo comment did not parse". Never edit records to get past it. Escalate it (section 8), quoting the line, then run `python3 room.py state set waiting_for_owner=yes step="waiting for owner: gate"` and do nothing else on that PR.
 
 3. Merge:
    ```bash
