@@ -127,6 +127,20 @@ def edit_state(name, fn, hours=None, **env):
     return text
 
 
+def push_edit(name, fn, hours=None):
+    """Edit a playbook file on the state branch from another clone, as a hand edit on GitHub would (room.py's own
+    state commit refuses to break the machine block)."""
+    other = tempfile.mkdtemp(dir=tmp, prefix="edit-")
+    g("clone", "-q", "--branch", "agent-room/state", PET, other, cwd=tmp)
+    path = os.path.join(other, "docs", "playbook", name)
+    with open(path) as f:
+        text = fn(f.read())
+    with open(path, "w") as f:
+        f.write(text)
+    g("-C", other, "commit", "-qam", f"hand edit of {name}", **(ago(hours)[1] if hours is not None else {}))
+    g("-C", other, "push", "-q", "origin", "HEAD:agent-room/state")
+
+
 def gh_cfg(**cfg):
     with open(GH_CFG, "w") as f:
         json.dump(cfg, f)
@@ -554,6 +568,49 @@ def t_watchdog_without_a_checkout():
     assert state_sha() == before
     r = watchdog(**kw)
     assert "already reports this stall" in r.stdout, out(r)
+
+
+def t_watchdog_reads_the_last_valid_block():
+    # cold M4 R2-5: with the pushed block damaged by a hand edit, the last valid one stands in, and breaking it is
+    # no progress
+    age_alarms()
+    t = set_state("step=build 9", hours=6)
+    push_edit("MISSIONS.md", lambda s: s.replace("```agent-room-state\n", "``` agent-room-state\n", 1), hours=5)
+    r = watchdog()
+    assert r.returncode == 0 and "note: docs/playbook/MISSIONS.md has no valid agent-room-state block" in r.stdout \
+        and "its last valid block" in r.stdout, out(r)
+    assert "alarm: no progress for 6h" in r.stdout, out(r)
+    assert text_of(alarms()[-1]).startswith(f"LEAD-SILENT: no progress since {iso(t)} (step build 9, mission M1)")
+    set_state("step=build 10", hours=5)  # the holder's next write restores the block
+    assert block()["step"] == "build 10"
+
+
+def t_watchdog_alarms_when_there_is_no_state():
+    # cold M4 R2-5: no state branch at all is a stuck pipeline too: an alarm that buzzes, deduped like the others
+    age_alarms()
+    tip = state_sha()
+    g("--git-dir", PET, "update-ref", "-d", "refs/heads/agent-room/state")
+    try:
+        n, nb = len(alarms()), len(buzzes())
+        r = watchdog(ROOM_NTFY_TOPIC=None)
+        assert r.returncode == 0 and "alarm: state unreadable (" in r.stdout, out(r)
+        text = text_of(alarms()[-1])
+        assert re.fullmatch(r"LEAD-SILENT: state unreadable \(.*couldn't find remote ref .*\) \(buzz failed: "
+                            r"ROOM_NTFY_TOPIC is not set\)", text), text
+        # its buzz failed, so the next run, here another session with no state worktree yet, tries again
+        fresh = dict(cwd=tmp, ROOM_STATE_DIR=os.path.join(tmp, "state", "W2"), ROOM_STATE_REMOTE=PET)
+        r = watchdog(**fresh)
+        assert "alarm: state unreadable (agent-room/state doesn't exist in SigorMatt/pet yet)" in r.stdout, out(r)
+        assert text_of(alarms()[-1]).endswith(" (buzz sent)") and ROOM not in text_of(alarms()[-1]), "no local paths"
+        assert len(alarms()) == n + 2 and len(buzzes()) == nb + 1
+        for _ in range(2):  # one alarm per stall, however long it lasts
+            r = watchdog(**fresh)
+            assert r.returncode == 0 and "already reports this stall" in r.stdout, out(r)
+            age_alarms()
+        assert len(alarms()) == n + 2
+    finally:
+        g("--git-dir", PET, "update-ref", "refs/heads/agent-room/state", tip)
+    assert block()["step"] == "build 10"
 
 
 # --- join-line

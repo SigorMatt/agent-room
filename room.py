@@ -2381,7 +2381,8 @@ def shallow_cut(path, sha):
 def last_change(path, counts=lambda key: key in PROGRESS_KEYS):
     """(sha, committer time) of the newest commit on the fetched state branch whose MISSIONS.md changes a key
     of the machine block for which counts(key) holds (the commit that adds the block counts), or None. By
-    default only step and pr count. Deepens a shallow clone as far as needed."""
+    default only step and pr count. A commit whose block doesn't parse changes nothing: it is skipped, so
+    breaking the block is no progress. Deepens a shallow clone as far as needed."""
     rel = f"{PLAYBOOK_DIR}/MISSIONS.md"
 
     def value(sha):
@@ -2391,20 +2392,23 @@ def last_change(path, counts=lambda key: key in PROGRESS_KEYS):
             return None
     newer = None
     for _ in range(50):
-        newer = None  # (sha, time, value) of the commit after the one being read
+        newer, oldest = None, None  # newer: (sha, time, value) of the valid commit after the one being read
         for entry in git_out("log", "--topo-order", "--format=%H %ct", STATE_REF, "--", rel, cwd=path).splitlines():
             sha, ct = entry.split()
+            oldest = sha
             v = value(sha)
+            if v is None:
+                continue
             if newer and v != newer[2]:
                 return newer[0], int(newer[1])
             newer = (sha, ct, v)
-        if newer is None or not shallow_cut(path, newer[0]):
+        if oldest is None or not shallow_cut(path, oldest):
             break
         before = git_out("rev-list", "--count", STATE_REF, cwd=path)
         git("fetch", "-q", "--deepen=200", "origin", f"+refs/heads/{STATE_BRANCH}:{STATE_REF}", cwd=path)
         if git_out("rev-list", "--count", STATE_REF, cwd=path) == before:
             break
-    return (newer[0], int(newer[1])) if newer and newer[2] is not None else None
+    return (newer[0], int(newer[1])) if newer else None
 
 
 def mission_push():
@@ -2440,8 +2444,72 @@ def mission_merge():
     return best
 
 
+def outside_progress():
+    """[(time, what)] of the progress outside the state branch: the newest mission push and mission PR merge."""
+    found = []
+    push = mission_push()
+    if push:
+        found.append((push[1], f"{push[0]} pushed"))
+    merge = mission_merge()
+    if merge:
+        found.append((merge[1], f"PR #{merge[0]} merged"))
+    return found
+
+
+def alarms_since(a, progress):
+    """The room's trusted watchdog LEAD-SILENTs newer than PROGRESS (all, if None) whose buzz didn't fail, oldest
+    first. An alarm whose buzz failed doesn't count, so it is tried again."""
+    out = []
+    for m in map(parse, comments(a.room, iso(progress) if progress is not None else None)):
+        t = parse_time(m["at"])
+        if m["role"] == "watchdog" and trusted(m) and message_kind(m["text"]) == "LEAD-SILENT" and t and \
+                (progress is None or t > progress) and not re.search(r"\(buzz failed\b", m["text"]):
+            out.append(m)
+    return out
+
+
+def alarm(a, text):
+    """Buzz first (click: the room), then post TEXT saying how the buzz went, with no buzz of its own."""
+    err = buzz_message(a.room, "watchdog", "LEAD-SILENT", {})
+    print("[buzz sent]" if err is None else f"[buzz failed: {err}]")
+    say(a.room, "watchdog", f"{text} " + ("(buzz sent)" if err is None else f"(buzz failed: {err})"), a, buzz=False)
+
+
+def unreadable_state_alarm(a, path, reason):
+    """No machine block anywhere, or no state branch: no lead can write state either, so the pipeline is stuck.
+    The same DURATION and one alarm per stall apply, measured from the last state-branch commit, if any."""
+    reason = re.sub(r"[:;] (?:the architect runs|the lead runs|run) '.*$", "", reason.replace(ME, "room.py"))[:300]
+    found = outside_progress()
+    if path:
+        t = git("log", "-1", "--format=%ct", STATE_REF, cwd=path, check=False).stdout.strip()
+        if t.isdigit():
+            found.append((int(t), f"{STATE_BRANCH} commit"))
+    progress, what = max(found) if found else (None, None)
+    now = time.time()
+    if progress is not None and now - progress < a.silent_after:
+        print(f"quiet: state unreadable ({reason}), but progress {span(now - progress)} ago ({what} at "
+              f"{iso(progress)}), under {span(a.silent_after)}")
+        return 0
+    seen = alarms_since(a, progress)
+    if progress is None:  # no time to measure the stall from: the newest alarm must already say this
+        seen = seen[-1:] if seen and "LEAD-SILENT: state unreadable" in seen[-1]["text"] else []
+    if seen:
+        print(f"quiet: LEAD-SILENT #{seen[-1]['id']} at {seen[-1]['at']} already reports this stall")
+        return 0
+    print(f"alarm: state unreadable ({reason})")
+    alarm(a, f"LEAD-SILENT: state unreadable ({reason})")
+    return 0
+
+
 def cmd_watchdog(a):
-    path, values = recorded_state()  # fetched and read from git objects: the watchdog never writes state
+    try:
+        path, values, note = pushed_state()  # fetched and read from git objects: the watchdog never writes state
+    except StateError as e:  # no state branch, or no way to read it
+        return unreadable_state_alarm(a, None, str(e))
+    if not values:
+        return unreadable_state_alarm(a, path, note)
+    if note:  # the pushed block is damaged: the last valid one stands in
+        print(f"note: {note}")
     step, mission = values.get("step") or "none", values.get("mission") or "none"
     why = quiet_reason(a, values, pushed_text(path, "PLAYBOOK.md"))
     if why:
@@ -2449,37 +2517,24 @@ def cmd_watchdog(a):
         return 0
     # progress, not chatter (v1): a step or pr change, a mission branch push, a mission PR's merge. Lease takes,
     # handoffs at the same step, intents, the counter and the cursor don't count, so a lead in a loop alarms
-    found = []
+    found = outside_progress()
     change = last_change(path)
     if change:
         found.append((change[1], f"step or pr change {change[0][:12]}"))
-    push = mission_push()
-    if push:
-        found.append((push[1], f"{push[0]} pushed"))
-    merge = mission_merge()
-    if merge:
-        found.append((merge[1], f"PR #{merge[0]} merged"))
     if not found:
-        raise StateError(f"no progress to measure: {PLAYBOOK_DIR}/MISSIONS.md has no machine block in its history")
+        return unreadable_state_alarm(a, path, f"{PLAYBOOK_DIR}/MISSIONS.md has no step in its history")
     progress, what = max(found)
     now = time.time()
     if now - progress < a.silent_after:
         print(f"quiet: progress {span(now - progress)} ago ({what} at {iso(progress)}), "
               f"under {span(a.silent_after)}")
         return 0
-    for m in map(parse, comments(a.room, iso(progress))):  # one alarm per stall, unless its buzz failed
-        t = parse_time(m["at"])
-        if m["role"] == "watchdog" and trusted(m) and message_kind(m["text"]) == "LEAD-SILENT" and t and \
-                t > progress and not re.search(r"\(buzz failed\b", m["text"]):
-            print(f"quiet: LEAD-SILENT #{m['id']} at {m['at']} already reports this stall")
-            return 0
+    seen = alarms_since(a, progress)  # one alarm per stall
+    if seen:
+        print(f"quiet: LEAD-SILENT #{seen[0]['id']} at {seen[0]['at']} already reports this stall")
+        return 0
     print(f"alarm: no progress for {span(now - progress)} ({what} at {iso(progress)})")
-    # buzz first (click: the room), then post saying how it went: an alarm whose buzz failed doesn't count above,
-    # so the next run tries again
-    err = buzz_message(a.room, "watchdog", "LEAD-SILENT", {})
-    print("[buzz sent]" if err is None else f"[buzz failed: {err}]")
-    say(a.room, "watchdog", f"LEAD-SILENT: no progress since {iso(progress)} (step {step}, mission {mission}) " +
-        ("(buzz sent)" if err is None else f"(buzz failed: {err})"), a, buzz=False)
+    alarm(a, f"LEAD-SILENT: no progress since {iso(progress)} (step {step}, mission {mission})")
     return 0
 
 
