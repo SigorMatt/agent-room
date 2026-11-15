@@ -20,6 +20,8 @@ To find where something lives, and who changes it.
    | The `agent-room` skill | Each Claude account | You, rarely |
    | A Claude Project per project | Claude app | You |
    | The `agent-room` cloud environment | claude.ai/code | You |
+   | The lead task, one per project, and its token | claude.ai/code/routines, and the environment's variables | You, once per project ([Set up the lead task](set-up-the-lead-task.md)) |
+   | The watchdog, one per phase | Scheduled tasks | The architect: created at kickoff, deleted at `DONE` |
    | ntfy subscription | Your phone | You |
    | The project's code | Its repo, `main` | Merged mission pull requests only |
    | The design and pipeline state | Its repo, branch `agent-room/state` | The architect and the lead, directly |
@@ -28,7 +30,7 @@ To find where something lives, and who changes it.
 
    | File | Owner | Holds |
    | --- | --- | --- |
-   | `PLAYBOOK.md` | Architect | Version pin, repo, room, test command; phases; items and criteria; merge-hold list; environment needs; lead's discretion; Phase 0 known debt |
+   | `PLAYBOOK.md` | Architect | Version pin, repo, room, the watchdog's and the lead task's IDs, test command; phases; items and criteria; merge-hold list; environment needs; lead's discretion; Phase 0 known debt |
    | `DESIGN.md` | Architect | Goals, architecture, interfaces, data; the decision log `D-n` |
    | `HANDOFF.md` | Architect | The last architect session's note |
    | `DIGEST.md`, `SURVEY.md` | Architect | From starting with a discussion, or a discussion plus code |

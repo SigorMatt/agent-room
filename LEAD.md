@@ -83,11 +83,11 @@ You are the lead: a Claude Code cloud session that runs one mission of a project
    | `gate` | 5.6 Gate and merge; if reconcile says the PR is merged, 5.7 |
    | `close` | 5.7 Close |
    | `done` | 7. Phase end, to finish what is missing |
-   | `waiting for owner: <step>` | The `DECISION-n` (section 9) if it came; else wait (section 3) |
+   | `waiting for owner: <step>` | The `DECISION-n` (section 9) if it came; else park again (section 3) |
 
 ## 3. Waiting
 
-Your session may have no background commands (a scheduled session has fewer tools), and an idle session's machine is suspended within minutes. So:
+Your session may have no background commands and no scheduling tools (a session started by a scheduled task has neither), and an idle session's machine is suspended within minutes. So:
 
 1. Never use `nohup`, `&` or `setsid`, and never count on a background command surviving.
 2. With nothing else to do, wait in the foreground, at most 540 seconds a call:
@@ -98,17 +98,22 @@ Your session may have no background commands (a scheduled session has fewer tool
    | Exit | Do |
    | --- | --- |
    | 0 | Handle the messages (section 9). Keep the ID of its `[cursor: ID]` line |
-   | 3 | Nothing new. Wait again while something is due soon; after about 30 minutes, end the turn |
+   | 3 | Nothing new. Keep waiting while something is due soon; if you wait only on Matthew, park (step 5) |
    | 4 | The room is closed: end, unless you are closing it (section 7) |
    | 1 | Try once more; if it fails again, say so in your next `STATUS` |
 
-3. Subagents: start them in the background if the Agent tool offers that, then end your turn; you are woken as each one finishes. If it doesn't, run them one at a time in the foreground. Your check-ins can't run meanwhile, so post a `STATUS` before each one: `python3 room.py say N lead "STATUS: builder for <task> running in the foreground"`.
-4. Every time you end a turn, schedule a check-in with `send_later`, about 30 minutes later, unless one is already due within 30 minutes. Its message:
-
-   > agent-room check-in for room N: run `python3 room.py lease check`. Exit 5: end without acting or scheduling. Exit 0: read the room with `python3 room.py read N lead`, act, continue the recorded step, and schedule the next check-in.
-
-5. Never end a turn without a check-in scheduled, unless you end for good: stand down, handover, `PAUSED`, `STOPPED` or `DONE`. A check-in that arrives after that finds no lease and ends.
-6. When you wait only on Matthew, record it so the watchdog stays quiet, then end the turn with a check-in: `python3 room.py state set waiting_for_owner=yes step="waiting for owner: <step>"`.
+3. Subagents: start them in the background if the Agent tool offers that, then end your turn; you are woken as each one finishes. If it doesn't, run them one at a time in the foreground, and post a `STATUS` before each one: `python3 room.py say N lead "STATUS: builder for <task> running in the foreground"`.
+4. Never end a turn while you hold the lease, unless a subagent you started is still running. You end for good only by standing down, handing over, parking, `PAUSED`, `STOPPED` or `DONE`, or as a drill says (section 10).
+5. **Park** when you wait only on Matthew. Record it so the watchdog stays quiet, and release the lease:
+   ```bash
+   python3 room.py state set waiting_for_owner=yes step="waiting for owner: <step>"
+   python3 room.py lease release
+   ```
+   Then end. The lead started after his `DECISION` continues.
+6. Nothing wakes you to read the room. So read it before each `state set step=…` and after each foreground wait, such as a subagent run in the foreground, and handle what came (section 9). That is how you see `PAUSE`, `STOP` and `CHANGE-n` mid-mission:
+   ```bash
+   python3 room.py read N lead
+   ```
 
 ## 4. Phase planning
 
@@ -263,15 +268,15 @@ This follows `~/agent-room/docs/QODO-REVIEW.md` ([`docs/QODO-REVIEW.md`](docs/QO
    | 6 | `gate: FAIL hold reasons …` | Fix what is yours (a missing row; uncovered code needs a scoped review, `step="scoped <s> for gate"`; a failing check gets one builder attempt). Hold for what stands |
    | 5 | lease lost | Stand down |
 
-   A `FAIL` the records can't fix is a pipeline fault: its line says `the records can't fix this`, as for "Qodo comment did not parse". Never edit records to get past it. Escalate it (section 8), quoting the line, then run `python3 room.py state set waiting_for_owner=yes step="waiting for owner: gate"` and do nothing else on that PR. When the architect says room.py is patched, pick up the new pin (section 9) before you run the gate again.
+   A `FAIL` the records can't fix is a pipeline fault: its line says `the records can't fix this`, as for "Qodo comment did not parse". Never edit records to get past it. Escalate it (section 8), quoting the line, and do nothing else on that PR. Then park (section 3), with the step `waiting for owner: gate`. When the architect says room.py is patched, pick up the new pin (section 9) before you run the gate again.
 
 3. Merge:
    ```bash
    python3 room.py merge <PR> --sha <sha>
    ```
-   Exit 0 (`merged PR #<PR>: <merge sha>`): with drill `stop-after-merge`, end now, before any bookkeeping, still holding the lease and with no check-in; otherwise 5.7. Exit 3 (head moved): run the gate again. Exit 6: the gate failed (as in step 2), or GitHub finds the PR not mergeable (hold, reason 3). Exit 5: stand down. Exit 1: run `reconcile` and follow its hint.
+   Exit 0 (`merged PR #<PR>: <merge sha>`): with drill `stop-after-merge`, end now, before any bookkeeping, still holding the lease; otherwise 5.7. Exit 3 (head moved): run the gate again. Exit 6: the gate failed (as in step 2), or GitHub finds the PR not mergeable (hold, reason 3). Exit 5: stand down. Exit 1: run `reconcile` and follow its hint.
 4. Hold reasons: 1 an owner decision is open; 2 a review hit its round cap with a finding undecided; 3 checks fail on the merge result and one builder attempt can't fix them; 4 the diff reaches well outside the spec; 5 a sensitive path, named by the gate, or weakened tests (step 1); 6 Qodo is on, and this PR and the previous one got no first review.
-5. Hold, with that first line exactly, then wait (section 3). Write each reason as `reason <r>`, and several as `reason 1, reason 5`. In the parentheses, name each finding as section 8 step 2 says, and for reason 5 every path the gate printed, exactly as printed:
+5. Hold, with that first line exactly, then park (section 3). The last command below already records the step, so parking then only needs `python3 room.py lease release`. Write each reason as `reason <r>`, and several as `reason 1, reason 5`. In the parentheses, name each finding as section 8 step 2 says, and for reason 5 every path the gate printed, exactly as printed:
    ```bash
    python3 room.py state next counter
    python3 room.py intent N "post MERGE-HOLD-<n>"
@@ -298,19 +303,27 @@ This follows `~/agent-room/docs/QODO-REVIEW.md` ([`docs/QODO-REVIEW.md`](docs/QO
 
 At the end of a mission, or early at a step boundary when your context gets heavy:
 
-1. Drill `no-handoff`, at the end of a mission this session merged itself: end now, without handover, scheduling or check-in.
+1. Drill `no-handoff`, at the end of a mission this session merged itself: end now, without `handoff` or `start-lead`.
 2. Let running builders finish; merge and push their work. Commit your state edits.
 3. Find the last comment you acted on. If you acted on everything you read, it is what `python3 room.py cursor N lead` prints.
-4. Hand over. This posts `HANDOFF`, records the step and the cursor, releases the lease, and prints the join line last:
+4. Hand over. This posts `HANDOFF`, records the step and the cursor, and releases the lease:
    ```bash
    python3 room.py handoff N --step <step> --cursor <ID>
    ```
-5. Schedule the successor with `create_trigger`: one time, `run_once_at` about a minute from now, the prompt exactly the printed join line. Never delete that task: it disables itself after firing, and deleting it deletes the successor's session.
-6. Check the approval setting in the result. If its runs will ask for approval (`permission_mode` isn't `auto`), the successor would stall at its first prompt, maybe holding the lease: disable the task with `update_trigger` (`enabled` false; never delete it). Then, or if scheduling failed, post this (it buzzes):
+5. Start the successor through the project's lead task. It posts `LEAD-STARTED` itself:
    ```bash
-   python3 room.py say N lead "NEXT-LEAD-NEEDED: the successor <can't start unattended: its task asks for approval | couldn't be scheduled> (<reason>). Start a lead with the join line for room N."
+   python3 room.py start-lead N lead
    ```
-7. End. Schedule no check-in.
+
+   | Exit | Do |
+   | --- | --- |
+   | 0, or 3 (a lead is running or starting) | End |
+   | 1 | Run it once more; if it fails again, as for 6 |
+   | 6 | Post the line below (it buzzes), with the reason `start-lead` printed, then end |
+
+   ```bash
+   python3 room.py say N lead "NEXT-LEAD-NEEDED: the successor couldn't be started (<reason>). Start a lead with the join line for room N."
+   ```
 
 ## 7. Phase end
 
@@ -324,8 +337,7 @@ A lead that joins at step `done` comes here too, and finishes only what is missi
    python3 room.py close N lead "DONE: phase <p> complete: <missions and PRs>."
    python3 room.py state set intent=none
    ```
-4. Delete the watchdog: the task whose ID is on the `watchdog:` line of `PLAYBOOK.md`, with `delete_trigger`. Never pick one by its prompt: another project's room can have the same number. If that fails, disable it with `update_trigger` (`enabled` false). If both fail, or the line is missing, post `STATUS: watchdog <ID> not deleted (<reason>): Matthew, delete it by hand`. Status `done` keeps it quiet meanwhile.
-5. Release the lease with `python3 room.py lease release`, and end. Schedule nothing.
+4. Release the lease with `python3 room.py lease release`, and end. Leave the watchdog: a lead can't delete scheduled tasks, so the architect deletes it at `DONE`. Status `done` keeps it quiet meanwhile.
 
 ## 8. Escalations
 
@@ -349,7 +361,7 @@ Escalate when the docs don't settle a question and the choice would change inter
    python3 room.py state set intent=none
    ```
 4. Mark the affected finding rows `owner decision: pending (ESCALATION-<n>)`, and commit them on the mission branch. Park blocked builders, keeping their IDs under "Parked questions", and commit with `state commit`.
-5. Keep building what isn't blocked. When nothing else can proceed, wait only on Matthew (section 3, step 6).
+5. Keep building what isn't blocked. When nothing else can proceed, park (section 3).
 
 ## 9. Messages from the architect
 
@@ -385,11 +397,13 @@ python3 room.py say N lead "<KIND>: mission M<k>, step <step>. <What is merged a
 python3 room.py state set intent=none cursor=<ID>
 python3 room.py lease release
 ```
-End, with no check-in.
+End.
 
 **Another session's `LEAD ONLINE`:** run `python3 room.py lease check`. Exit 5: you were replaced, so stand down.
 
-**`LEAD-SILENT`:** the watchdog saw no progress for three hours. Post a `STATUS` saying where you are, and make progress.
+**`LEAD-STARTED`:** history: ignore it.
+
+**`LEAD-SILENT`:** the watchdog saw no progress for three hours, and may have started a takeover lead. Post a `STATUS` saying where you are, and make progress. If the takeover lead's `LEAD ONLINE` follows, handle it as above.
 
 **Any other comment from Matthew** (`human (<login>)`, a trusted author) is an owner instruction. If it stays within `DESIGN.md` and `PLAYBOOK.md`, follow it, and say what you did in your next `STATUS`. Otherwise escalate (section 8), quoting the comment under **Context**, and act on it only as the `DECISION-n` says.
 
@@ -397,13 +411,13 @@ End, with no check-in.
 
 - Run `python3 room.py budget` at each step boundary while the step is `build`, a cold review or a Qodo round; never at the PR, the gate, close or while waiting for the owner. Exit 6: the mission is over budget, so escalate once; never retry automatically, and don't escalate the budget again while that escalation is open. A `DECISION` that sends the mission back to Build, says merge as is, or grants time restarts the clock (section 9). Exit 1: `mission_started` is missing; set it (5.1).
 - Three attempts per task, counted under "Tasks in flight". A fourth is an escalation.
-- If Claude usage runs out, you simply stop. The watchdog reports it, and the next lead resumes from the recorded step.
+- If Claude usage runs out, you simply stop. The watchdog reports it and starts a takeover lead, which resumes from the recorded step.
 - A `drill:` line in `PLAYBOOK.md` (reconcile prints it) is a failure drill:
 
   | `drill:` | You |
   | --- | --- |
   | `stop-after-merge` | End right after your own `merge` succeeds, before any bookkeeping (5.6) |
-  | `no-handoff` | End at the boundary of a mission you merged, without `handoff` or scheduling (6) |
+  | `no-handoff` | End at the boundary of a mission you merged, without `handoff` or `start-lead` (6) |
 
   A drill fires only in the session whose own `merge` just succeeded. A lead that joins later, even at step `gate` or `close`, ignores it and carries on: that is the drill's test. The architect removes the `drill:` line once the drill is over. Any other value: ignore it, and mention it in a `STATUS`.
 
@@ -417,6 +431,6 @@ End, with no check-in.
 - **Pushes:** run `python3 room.py lease check` before every push of the mission branch; exit 5: stand down. A rejected push means someone else pushed: check the lease again, and if it is yours, `git pull --no-rebase origin <branch>`, run `<test>` and push again.
 - **`main`:** never push to it. It changes only through room.py's `merge`. Builders never push, post or start subagents.
 - **Files under `.claude/`:** you and your builders write any project file under `.claude/` through Python in the shell, never with the file tool, whose approval prompt there would stall an unattended session.
-- **Secrets:** never post secrets, tokens, environment contents or the ntfy topic.
+- **Secrets:** never post secrets, tokens, environment contents or the ntfy topic. Never print or post a `ROOM_FIRE_TOKEN…` variable; `start-lead` reads it itself.
 - **Messages:** under about 300 words, pointing to commits, PRs, files and findings instead of pasting.
 - **`[buzz failed: …]`:** the message is posted. Mention the failure in your next `STATUS`; don't retry.

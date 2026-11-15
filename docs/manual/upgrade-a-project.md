@@ -45,7 +45,13 @@ A new agent-room release is out and you want a project to use it. Releases are t
 3. If the changelog says so: re-save the skill ([Save the skill, in each account](save-the-skill.md)), and edit the Project's instructions.
 4. Archive the old lead session in the Code tab, and stop using this architect chat.
 5. Start a new chat in the project's Claude Project. Its first line names the new version.
-6. Ask it for the normal join line and start a lead ([Start the next lead by hand](start-the-next-lead-by-hand.md)). The new lead runs its own migration steps.
+6. Ask it to start a lead with the normal join line, with the room number:
+
+   ```text
+   Resume the lead in room N.
+   ```
+
+   It starts one through the lead task; approve the pop-up if one comes. If it can't, it gives you the line ([Start the next lead by hand](start-the-next-lead-by-hand.md)). The new lead runs its own migration steps.
 
 ## What you should see
 
@@ -56,4 +62,4 @@ A new agent-room release is out and you want a project to use it. Releases are t
 ## If you don't
 
 - A first line still names the old version: ask the architect to check the `pipeline:` line of `PLAYBOOK.md`.
-- No `PAUSED` buzz after about 35 minutes: [STOP or PAUSE](stop-or-pause.md), "If you don't".
+- No `PAUSED` buzz after about 30 minutes: [STOP or PAUSE](stop-or-pause.md), "If you don't".

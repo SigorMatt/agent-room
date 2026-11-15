@@ -39,7 +39,7 @@ To pause or stop the build, or to give the lead an instruction, straight from Gi
 
 ## What you should see
 
-The lead sees your comment at its next check-in, within about 30 minutes, and answers:
+The lead sees your comment when it finishes its current step (one helper can take a while), and answers:
 
 - `PAUSE` or `STOP`: a `PAUSED` or `STOPPED` buzz. Neither gets an ACK.
 - An instruction it follows: a `STATUS` in the room saying what it did. A `STATUS` doesn't buzz.
@@ -47,10 +47,12 @@ The lead sees your comment at its next check-in, within about 30 minutes, and an
 
 ## If you don't
 
-- No answer after about 35 minutes: open the lead's session in the Code tab and send it
+- No answer after about 30 minutes: send the architect
 
   ```text
   check the room
   ```
 
+  It tells you where the lead is.
 - A handover was under way (the last lead message is `HANDOFF`): the next lead reads your comment when it joins.
+- The lead was waiting for your decision: it had ended, so no lead is running to read your comment. Ask the architect to start one ([Start the next lead by hand](start-the-next-lead-by-hand.md)).
