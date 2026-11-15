@@ -272,6 +272,7 @@ Explain each buzz in plain terms, in a few lines:
    DECISION-n: <the answer, in one to three lines>.
    Mission: <continue | merge as is | back to Build, extra budget <rounds> | drop the mission and re-plan>.
    Findings: <one per finding: ID, owner decision or won't fix>. Omit the line if none.
+   Time: more time granted. Omit the line unless the mission is over its budget and should continue; "back to Build" restarts the clock anyway.
    Docs: DESIGN.md D-<k> at <short sha>.
    ```
 
