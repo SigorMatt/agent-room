@@ -2029,10 +2029,12 @@ class RoomLog:
             self._messages = [m for m in map(parse, comments(self.number)) if trusted(m)] if self.number else []
         return self._messages
 
+    def decisions(self, kind):
+        """The trusted messages of KIND (DECISION-n) from the architect, or untagged from Matthew, oldest first."""
+        return [m for m in self.messages() if m["role"] in ("architect", "human") and message_kind(m["text"]) == kind]
+
     def decision(self, kind):
-        """The trusted message of KIND (DECISION-n) from the architect, or untagged from Matthew."""
-        return next((m for m in self.messages()
-                     if m["role"] in ("architect", "human") and message_kind(m["text"]) == kind), None)
+        return next(iter(self.decisions(kind)), None)
 
     def holds(self, kind):
         """The lead's trusted messages of KIND (MERGE-HOLD-n)."""
@@ -2040,10 +2042,12 @@ class RoomLog:
 
 
 def hold_problems(text, pr, paths):
-    """What a MERGE-HOLD message lacks for a reason-5 hold of PR's PATHS: [] when it names them all."""
+    """What a MERGE-HOLD message lacks for a reason-5 hold of PR's PATHS: [] when it names them all. A path
+    is named as a whole token, backticked or set off by whitespace, commas or parentheses."""
     out = [] if re.search(rf"PR #{pr}(?!\d)", text) else [f"PR #{pr}"]
     out += [] if re.search(r"\breason 5\b", text, re.I) else ["reason 5"]
-    return out + [p for p in paths if p not in text]
+    tokens = set(re.findall(r"`([^`]+)`", text)) | set(re.split(r"[\s,()]+", text))
+    return out + [p for p in paths if p not in tokens]
 
 
 def check_sensitive(g, root, head, playbook, a, room):
@@ -2066,29 +2070,27 @@ def check_sensitive(g, root, head, playbook, a, room):
         g.ok("sensitive paths", f"{len(changes)} changed path(s), none on the merge-hold list")
         return
     held, paths = "; ".join(why for _, why in hits), [p for p, _ in hits]
-    form = f"MERGE-HOLD-<n>: PR #{a.pr}, reason 5 (sensitive paths): {', '.join(paths)}"
     if a.allow_hold != "5":
-        g.fail("sensitive paths", [(f"on the merge-hold list: {held} (hold with {form})", 5)])
+        g.fail("sensitive paths", [(f"on the merge-hold list: {held}", 5)])
         return
-    # the decision must answer this PR's hold: the lead's MERGE-HOLD-n (same n) for reason 5 and these paths
+    # the decision must answer this PR's hold: the lead's MERGE-HOLD-n (same n) for reason 5 and these
+    # paths, posted before it
     n = a.decision.rsplit("-", 1)[1]
-    decision = room.decision(a.decision)
     holds = room.holds(f"MERGE-HOLD-{n}")
     lacking = [hold_problems(m["text"], a.pr, paths) for m in holds]
-    if decision and holds and [] in lacking:
-        hold = holds[lacking.index([])]
+    hold = holds[lacking.index([])] if [] in lacking else None
+    decision = next((d for d in room.decisions(a.decision) if hold and d["id"] > hold["id"]), None)
+    if decision:
         g.ok("sensitive paths", f"{held}: allowed by {a.decision} (comment #{decision['id']}), answering "
                                 f"MERGE-HOLD-{n} (comment #{hold['id']})")
         return
-    why = []
-    if not decision:
-        why.append(f"no trusted {a.decision} from the architect or Matthew")
-    if not holds:
-        why.append(f"no trusted MERGE-HOLD-{n} from the lead")
-    elif [] not in lacking:
-        why.append(f"MERGE-HOLD-{n} doesn't name {', '.join(min(lacking, key=len))}")
-    g.fail("sensitive paths", [(f"{held}; --allow-hold 5 --decision {a.decision} needs {a.decision} to answer "
-                                f"{form.replace('<n>', n)}, but {room.where()} has {'; '.join(why)}", 5)])
+    if hold:
+        missing = f"no trusted {a.decision} from the architect or Matthew after MERGE-HOLD-{n} (comment #{hold['id']})"
+    elif holds:
+        missing = f"no MERGE-HOLD-{n} for this hold: the lead's doesn't name {', '.join(min(lacking, key=len))}"
+    else:
+        missing = f"no trusted MERGE-HOLD-{n} from the lead"
+    g.fail("sensitive paths", [(f"{held}; --allow-hold 5 --decision {a.decision}: {room.where()} has {missing}", 5)])
 
 
 # --- gate and merge commands
