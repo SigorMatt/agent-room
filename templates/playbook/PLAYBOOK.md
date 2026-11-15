@@ -22,11 +22,14 @@ Goal: <one sentence>. Items: P1-1. Mission budget: 8 hours.
 
 ## Merge-hold list
 
-A PR touching any of these areas is held for Matthew (`MERGE-HOLD-n`). Edit the patterns per project: `*` stays within one path segment, `**/` matches any number of directories, including none. Holding too much is cheaper than missing a change.
+A PR touching any of these areas is held for Matthew (`MERGE-HOLD-n`). Edit the patterns per project: `*` stays within one path segment, `**/` matches any number of directories, including none, and matching ignores case. Holding too much is cheaper than missing a change.
+
+<!-- Architect: this default list is broad on purpose; trim it to the project's layout with Matthew. -->
 
 - CI and workflow files: `.github/workflows/**`, `.github/actions/**`
-- Authentication, cryptography or secrets handling: `**/*auth*`, `**/*auth*/**`,
-  `**/*crypto*`, `**/*crypto*/**`, `**/*secret*`, `**/*secret*/**`, `**/*password*`, `**/*token*`
+- Authentication, cryptography or secrets handling: `**/*auth*`, `**/*auth*/**`, `**/*security*`,
+  `**/*security*/**`, `**/*account*`, `**/*crypto*`, `**/*crypto*/**`, `**/*secret*`, `**/*secret*/**`,
+  `**/*password*`, `**/*token*`, `**/*credentials*`, `**/.env*`, `**/*.key`, `**/*.pem`, `**/*.keystore`, `**/*.p12`
 - New dependencies: `**/requirements*.txt`, `**/requirements/*.txt`, `**/pyproject.toml`, `**/setup.py`,
   `**/setup.cfg`, `**/Pipfile`, `**/environment.yml`, `**/package.json`, `**/package-lock.json`, `**/*.lock`,
   `**/go.mod`, `**/Cargo.toml`, `**/Gemfile*`, `**/*.gemspec`, `**/pom.xml`, `**/build.gradle*`, `**/*.csproj`

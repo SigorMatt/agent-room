@@ -1805,8 +1805,9 @@ def ledger_problems(entry, finding, target):
 
 
 def glob_regex(glob):
-    """A merge-hold glob as a regex on the whole path: '*' within a segment, '**' across segments, and
-    '**/' any number of whole directories, none included (`**/go.mod` matches go.mod and lib/go.mod)."""
+    """A merge-hold glob as a regex on the whole path, ignoring case: '*' within a segment, '**' across
+    segments, and '**/' any number of whole directories, none included (`**/go.mod` matches go.mod and
+    lib/go.mod). Case is ignored so that AuthContext.tsx is held like auth.py."""
     out, i = [], 0
     while i < len(glob):
         if glob.startswith("**/", i):
@@ -1824,7 +1825,7 @@ def glob_regex(glob):
         else:
             out.append(re.escape(glob[i]))
             i += 1
-    return re.compile("".join(out))
+    return re.compile("".join(out), re.IGNORECASE)
 
 
 def merge_hold_rules(playbook):

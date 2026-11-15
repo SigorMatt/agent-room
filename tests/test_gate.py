@@ -465,7 +465,7 @@ def t_globs_and_merge_hold_list():
     assert rx("**/test_*").fullmatch("test_a.py") and rx("**/test_*").fullmatch("x/y/test_a.py")
     assert rx("a?c").fullmatch("abc") and not rx("a?c").fullmatch("a/c") and not rx("a.c").fullmatch("abc")
     rules = R.merge_hold_rules(open(os.path.join(TEMPLATES, "PLAYBOOK.md")).read())
-    assert len(rules) == 40, rules
+    assert len(rules) == 49, rules
     assert {label for label, _, deleted, _ in rules if deleted} == {"Deleted or weakened tests"}
     assert ("CI and workflow files", ".github/workflows/**") in [(r[0], r[1]) for r in rules]
     assert R.merge_hold_rules("# Playbook\n\n## Phases\n") is None
@@ -521,6 +521,27 @@ def t_template_covers_common_layouts():  # cold M3 R2-7
                  "tests/conftest.py"):
         assert held(rules, path, "D") == "Deleted or weakened tests", path
     assert held(rules, "spec/models/user_spec.rb") is None and held(rules, "src/app.py") is None
+
+
+def t_template_holds_camel_case_auth_and_secret_files():  # cold M3 S1-1
+    assert R.glob_regex("**/*auth*").fullmatch("src/context/AuthContext.tsx")
+    assert R.glob_regex("**/TESTS/**").fullmatch("pkg/tests/a.py")
+    rules = R.merge_hold_rules(open(os.path.join(TEMPLATES, "PLAYBOOK.md")).read())
+    auth = "Authentication, cryptography or secrets handling"
+    for path in ("src/context/AuthContext.tsx", "src/hooks/useAuth.ts", "src/main/java/com/pet/security/SecurityConfig.java",
+                 "src/main/java/com/pet/security/JwtTokenProvider.java", "src/main/java/com/pet/user/PasswordEncoderConfig.java",
+                 "src/services/AuthService.ts", "Controllers/AccountController.cs", "app/security.py", ".env.production",
+                 "config/master.key", "config/credentials.yml.enc", "certs/server.pem", "android/app/release.keystore",
+                 "ios/Certs/dist.p12"):
+        assert held(rules, path) == auth, path
+    s = mission(extra={"src/context/AuthContext.tsx": "export const A = 1\n", "src/hooks/useAuth.ts": "export {}\n",
+                       "src/main/java/com/pet/security/SecurityConfig.java": "class S {}\n",
+                       "src/main/java/com/pet/security/JwtTokenProvider.java": "class J {}\n",
+                       "src/main/java/com/pet/user/PasswordEncoderConfig.java": "class P {}\n"})
+    r = gate()
+    failed(r, "sensitive paths", "src/context/AuthContext.tsx (`**/*auth*`", "src/hooks/useAuth.ts",
+           "SecurityConfig.java (`**/*security*`", "JwtTokenProvider.java", "PasswordEncoderConfig.java (`**/*password*`")
+    assert verdict(r) == "gate: FAIL hold reasons 5", out(r)
 
 def t_wrapped_merge_hold_bullet():  # cold M3 R1-11
     playbook = ("## Merge-hold list\n\nHeld for Matthew.\n\n"
