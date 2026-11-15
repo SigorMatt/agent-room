@@ -31,6 +31,14 @@ The design doesn't settle a question. Meanwhile the lead keeps building whatever
 3. The architect records your decision in `DESIGN.md`, then posts `DECISION-n` in the room, saying how the mission continues.
 4. Wait for the lead's `ACK DECISION-n` ("What you should see").
 
+If the escalation is a **pipeline fault** (the quoted line says "the records can't fix this"), agent-room itself needs a fix. Report it ([Report a pipeline problem](report-a-pipeline-problem.md)); the mission waits. When the patched release is out, tell the architect, with its version:
+
+```text
+Bump the pin to <version>. It's a patch release for the pipeline fault.
+```
+
+It bumps the pin and posts a `DECISION-n` telling the lead to re-download and run the gate again.
+
 ### `MERGE-HOLD-n`: a pull request is ready but held
 
 The message reads `MERGE-HOLD-n: PR #<number>, reason <r> (…)`. One hold can name several reasons, as `reason 1, reason 5`; your decision covers each. The reasons are on [Merge-hold list](merge-hold-list.md).

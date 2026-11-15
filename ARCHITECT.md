@@ -264,7 +264,7 @@ Explain each buzz in plain terms, in a few lines:
    | 5 | The PR touches a merge-hold area; the message names the paths |
    | 6 | Qodo is on, but this PR and the previous one got no first review |
 
-3. Decide with Matthew. Say how the mission continues: continue, merge as is, back to Build with an extra budget (default one cold round and two Qodo rounds), or drop the mission and re-plan. Back to Build also restarts the mission's clock, so its hours budget counts from the decision.
+3. Decide with Matthew. Say how the mission continues: continue, merge as is, back to Build with an extra budget (default one cold round and two Qodo rounds), or drop the mission and re-plan. Back to Build also restarts the mission's clock, so its hours budget counts from the decision; after a long hold, "continue" and "merge as is" give it more time too.
    - **Reason 3** (failing checks) has no "merge as is": the gate fails again on the same checks. The options are back to Build with an extra budget; Matthew fixes or relaxes the check, and the mission continues, so the lead re-runs the gate; or drop the mission.
 4. Record it in `DESIGN.md` as `D-n`, and change `PLAYBOOK.md` if items change. Commit (section 4).
 5. Write the message to `~/agent-room-tools/msg.md`, under about 300 words. `n` is the number of the message you answer:
@@ -273,7 +273,7 @@ Explain each buzz in plain terms, in a few lines:
    DECISION-n: <the answer, in one to three lines>.
    Mission: <continue | merge as is | back to Build, extra budget <rounds> | drop the mission and re-plan>.
    Findings: <one per finding: ID, owner decision or won't fix>. Omit the line if none.
-   Time: more time granted. Omit the line unless the mission is over its budget and should continue; "back to Build" restarts the clock anyway.
+   Time: more time granted. Usually omit it: "continue", "merge as is" and "back to Build" already give the mission more time, even after a long hold.
    Docs: DESIGN.md D-<k> at <short sha>.
    ```
 
@@ -286,6 +286,12 @@ Explain each buzz in plain terms, in a few lines:
 7. Check for the `ACK` (9.6).
 
 A "merge as is" for reason 5 lets the lead merge citing your `DECISION-n`, so name the hold in it.
+
+**A pipeline fault** (an `ESCALATION-n` quoting a gate line that says `the records can't fix this`) needs a fix in agent-room itself:
+
+1. Ask Matthew for a patched release ([Report a pipeline problem](docs/manual/report-a-pipeline-problem.md)). The mission waits meanwhile.
+2. When it is out, bump the pin (section 11, patch).
+3. Post `DECISION-n: pin bumped to <version>: re-download and retry the gate.`, with `Mission: continue`. The lead re-downloads at the new pin, then runs the gate again.
 
 ### 9.3 `CHANGE-n`
 
@@ -391,7 +397,7 @@ Releases are immutable tags. Read `CHANGELOG.md` at the new tag first: its kind 
 1. Set `pipeline: <new version>` in `PLAYBOOK.md`. Commit.
 2. Update the watchdog task's prompt to the new version (`update_trigger`).
 3. Download `room.py` again at the new version.
-4. Tell Matthew the next mission's lead picks it up.
+4. Tell Matthew the next mission's lead picks it up. If a mission waits on this fix (a pipeline fault, 9.2), post its `DECISION-n` now instead: the running lead re-downloads.
 
 **Minor or major,** the single procedure:
 

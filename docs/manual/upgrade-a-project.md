@@ -26,7 +26,7 @@ A new agent-room release is out and you want a project to use it. Releases are t
    Bump the pin to <version>. It's a patch release.
    ```
 
-2. The architect updates the playbook's `pipeline:` line and the watchdog task. The next mission's lead picks it up.
+2. The architect updates the playbook's `pipeline:` line and the watchdog task. The next mission's lead picks it up. A mission held by a pipeline fault picks it up at once: the architect's `DECISION` tells its lead to re-download.
 
 ### Minor or major: the full procedure
 
