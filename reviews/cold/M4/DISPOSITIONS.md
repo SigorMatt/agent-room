@@ -18,3 +18,11 @@
 | R1-14 | low | room.py | A re-recorded post intent is satisfied by an older post | fixed in 696504f | The new intent records a new comment ID; regression test |
 | R1-15 | low | room.py | Budget parsing falls back to 8 hours on common variants | fixed in 145bbe3 | Emphasis, h/hr/hrs/hour(s) and decimals accepted; regression test |
 | B-2 | low | room.py | Deferred from cold M2 S1-3, S1-4, S1-5: stale state worktrees | fixed in c1027f5 | A marker in the worktree's git dir decides what may be rebuilt, whatever the current directory; HEAD and uncommitted work saved on `refs/agent-room/broken-<stamp>` first; regression tests; the four repros |
+| R2-1 | medium | room.py | A stale `waiting_for_owner: yes` mutes the watchdog for good | fixed in 28f33f6 | Reset by `lease take` and by any write that moves the step; regression test |
+| R2-2 | medium | room.py | The watchdog takes the room from the block before PLAYBOOK.md | fixed in f473194 | One helper, PLAYBOOK.md first, shared with the gate; regression test |
+| R2-3 | medium | room.py | Lease takes, handoffs and intents count as progress, so a looping lead never alarms | fixed in 2f0617c | Progress is a step or pr change, a mission push or a mission PR merge; the loop drill alarms; regression test |
+| R2-4 | low | room.py | A status written before a lead died silences the watchdog | fixed in 14b62d3 | Quiet only once the lease is released; regression test |
+| R2-5 | low | room.py | An unreadable block makes the watchdog exit without alarming | fixed in 198663a | Reads the last valid block; no state at all alarms "state unreadable"; regression test |
+| R2-6 | low | room.py | Any later lead message counts as the closing note | fixed in 74c9545 | Only a trusted lead DONE or STOPPED after `closed_at`; regression test |
+| R2-7 | low | room.py | `intent N` accepts another room | fixed in dd9525a | Refuses a room that isn't current; records the room; regression test |
+| R2-8 | low | room.py | A moved-aside worktree's `.git` points at the rebuilt one | fixed in 47668cb | The moved copy loses its `.git` link; regression test |
