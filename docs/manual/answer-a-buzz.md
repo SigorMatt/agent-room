@@ -88,7 +88,7 @@ The watchdog saw nothing move. A lead died, got stuck or ran out of Claude usage
    ```
 
    Only if no copy exists does the architect recreate it from scratch, and tell the next lead to rebuild its records from the merged pull requests and the room. The watchdog starts no lead after this alarm. Then go on.
-2. The architect tells you where the build stopped. Then it checks that the takeover lead's `LEAD ONLINE` comes, within about 15 minutes of the alarm. It checks back itself, or asks you to send it this then:
+2. The architect tells you where the build stopped. Then it checks that the takeover lead's `LEAD ONLINE` comes. That usually takes about 15 minutes, but the architect gives it about 30, so it doesn't start a second lead while the first is still starting. It checks back itself, or asks you to send it this then:
 
    ```text
    check the room

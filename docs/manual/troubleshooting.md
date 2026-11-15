@@ -26,7 +26,7 @@ Something looks wrong, and the page you were following doesn't cover it.
    | No ACK when the architect said to expect it, after a `DECISION` or `CHANGE` | [Answer a buzz](answer-a-buzz.md), "If you don't" |
    | No `PAUSED` or `STOPPED` buzz about 30 minutes after asking | Send the architect the check line (below the table) ([STOP or PAUSE](stop-or-pause.md), "If you don't") |
    | No `LEAD ONLINE` 10 minutes after starting a lead | Check the session's repository and environment; send the architect the check line (below the table) |
-   | A `LEAD-STARTED` with no `LEAD ONLINE` after it, 15 minutes on | That lead didn't join. Send the architect the check line (below the table); it starts another |
+   | A `LEAD-STARTED` with no `LEAD ONLINE` after it, 30 minutes on | That lead didn't join. Send the architect the check line (below the table); it starts another. Not sooner: a lead can be slow to start, and a second one would push it out |
    | `NEXT-LEAD-NEEDED` saying `not configured` or `token rejected` | The lead task's token variable is missing, misspelt or old: [Set up the lead task](set-up-the-lead-task.md), "If you don't". Then answer the buzz |
    | A new lead says another lead holds the lease, and ends | If the architect found the old lead gone, use the takeover line it gives you; otherwise a lead is already running ([Start the next lead by hand](start-the-next-lead-by-hand.md)) |
    | A lead started with **Run now** ends at once, saying nothing | The line wasn't pasted whole: the lead task accepts only an exact join line. Copy it again from the architect |
