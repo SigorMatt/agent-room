@@ -19,6 +19,8 @@ in Claude chat and cloud sessions, or `gh auth login` on your own machine.
   room.py state init|init-lead|path|sync|commit|get|set|next   the playbook on agent-room/state
   room.py lease take|release|check   the lead lease (exit 3: stand down; 5: not the holder)
   room.py preflight --role architect|lead [--fix]              check repo, state branch, environment
+  room.py gate  PR [--mission M<k>] [--allow-hold 5 --decision DECISION-<n>]   the merge gate
+  room.py merge PR --sha SHA [--allow-hold 5 --decision DECISION-<n>]        gate, then merge naming SHA
 
 Every room command takes --repo OWNER/NAME. Without it: $ROOM_REPO, else the
 GitHub remote of the current checkout. --session SID names this participant;
@@ -38,6 +40,10 @@ never the content.
 wait exits 0 with new messages (its last line is [cursor: ID]), 3 on timeout
 (re-arm it), 4 if the room is closed.
 
+gate prints one line per check and a verdict: exit 0 PASS, 3 WAIT (checks pending),
+5 lease lost, 6 FAIL with the hold reasons. merge exits 3 if the head moved (re-run
+the gate) and 6 if GitHub finds the PR not mergeable.
+
 Environment:
   ROOM_REPO         default repo for rooms
   ROOM_SESSION      this participant's session ID (see --session)
@@ -50,6 +56,8 @@ Environment:
   ROOM_NTFY_TOKEN   optional ntfy access token (only raises limits on a paid ntfy.sh tier)
 """
 import argparse
+import calendar
+import html
 import json
 import os
 import re
@@ -1550,6 +1558,1064 @@ def add_buzz_flags(s):
                    help="no phone notification, even if the kind buzzes")
 
 
+# --- review records, merge gate and merge
+#
+# Review records travel with the code on the mission branch, under reviews/. Only the record files
+# below are exempt from the coverage rule (deferral B-1): anything else under reviews/ is a change
+# that needs a review like any other. Formats: docs/design/m3-reviews-gate.md, "Review records".
+#
+#   gate PR [--mission M<k>] [--allow-hold 5 --decision DECISION-<n>]
+#   merge PR --sha SHA [--mission M<k>] [--allow-hold 5 --decision DECISION-<n>]
+#
+# Exit codes: 0 pass (or merged), 3 wait (checks pending, or the head moved), 5 lease lost,
+# 6 fail (hold reasons) or not mergeable, 1 errors.
+
+EXIT_WAIT, EXIT_FAIL = 3, 6
+REVIEW_EXEMPT = tuple(re.compile(p) for p in (
+    r"reviews/cold/M\d+/round-\d+\.md",  # rounds 1 and 2, plus any extra round a DECISION grants
+    r"reviews/cold/M\d+/scoped-\d+\.md",
+    r"reviews/cold/M\d+/DISPOSITIONS\.md",
+    r"reviews/qodo/PR-\d+/DISPOSITIONS\.md",
+    r"reviews/qodo/PR-\d+/\d+/(?:issue-comment|review|review-comment)-\d+\.(?:md|json)",
+))
+SHA40 = re.compile(r"[0-9a-f]{40}")
+COLD_SEVERITIES = ("high", "medium", "low")
+TOP_COLD, TOP_QODO = "high", "action required"
+BLANK = ("", "-", "—", "n/a", "none")  # cells that name nothing
+DISPOSITIONS = (  # the disposition grammar shared by both tables; anything else is undecided
+    ("fixed", re.compile(r"fixed in ([0-9a-fA-F]{7,40})")),
+    ("dismissed", re.compile(r"dismissed:\s*(\S.*)")),
+    ("deferred", re.compile(r"deferred:\s*(L-\d+) to (M\d+|phase \d+ backlog)")),
+    ("pending", re.compile(r"owner decision:\s*pending \((ESCALATION-\d+)\)")),
+    ("owner", re.compile(r"owner decision:\s*(\S.*?),\s*Matthew \((DECISION-\d+)\)")),
+)
+
+# Copied unchanged from qodo_review.py, the appendix of docs/QODO-REVIEW.md, so that room.py reads an
+# archived Code Review comment exactly as the tool does (tests/test_gate.py checks they still match).
+_HEADING = re.compile(r"<h\d>([^<]*)</h\d>")
+_FINDING = re.compile(r"<summary>[ \t]*(\d+)\.[ \t]+([^\n]*?)[ \t]*</summary>")
+_SEVERITY = re.compile(r'<img src="https://img\.shields\.io/badge/[^"]*"[^>]*alt="([^"]+)"')
+_REVIEWED = re.compile(r"<!--\s*https://[^\s]+/commit/([0-9a-f]{40})\s*-->")
+_RESOLVED_MARK = re.compile(r"✓\s*Resolved")
+_CATEGORY = re.compile(r"<code>\s*([^<]*?\(\d+\))\s*</code>")
+_COUNT = re.compile(r"\((\d+)\)\s*$")
+_STRUCK = re.compile(r"<s>|<del>|<strike>|~~|✓\s*Resolved")
+
+
+def plain(title):
+    """A finding title without markup, code spans or the resolved mark: qodo_review.py's plain()
+    (with its text_of()), copied from docs/QODO-REVIEW.md."""
+    text = re.sub(r"<code>.*?</code>", "", title)
+    text = html.unescape(re.sub(r"<[^>]+>", "", text)).replace("~~", "")
+    text = _RESOLVED_MARK.sub("", text)
+    return " ".join(text.replace("\\", "").split())
+
+
+def title_key(title):
+    """How finding titles are compared, the same way on both sides: entities unescaped, backticks dropped,
+    whitespace and case folded. A table cell is compared as written: no <…> is stripped from it, since
+    the tool prints titles such as "Use <path> placeholders" as plain text."""
+    return " ".join(html.unescape(title).replace("`", "").split()).casefold()
+
+
+SEVERITY_RANK = {"action required": 3, "remediation recommended": 2, "informational": 1}
+
+
+def stricter(a, b):
+    """The stricter of two Qodo severities (labels it doesn't know rank lowest)."""
+    return a if SEVERITY_RANK.get((a or "").lower(), 0) >= SEVERITY_RANK.get((b or "").lower(), 0) else b
+
+
+def mask_code(text):
+    """TEXT with every character inside code blanked, keeping positions: <pre>…</pre>, <code>…</code> and
+    fenced blocks, also when quoted with '>'. A severity badge quoted from the PR's code in a finding's
+    excerpt is not Qodo's. qodo_review.py has the same weakness (it reads every badge), so the severity
+    the tool prints after such a quote can be wrong; the gate reads the severity itself."""
+    def blank(s):
+        return re.sub(r"[^\n]", " ", s)
+
+    out, fenced = [], False
+    for line in text.splitlines(keepends=True):
+        fence = re.match(r"[> \t]*(```|~~~)", line)
+        out.append(blank(line) if fenced or fence else line)
+        if fence:
+            fenced = not fenced
+    return re.sub(r"<pre>.*?</pre>|<code>.*?</code>", lambda m: blank(m.group(0)), "".join(out), flags=re.S)
+
+
+def header_total(text):
+    """qodo_review.py's header_total(): the open findings the header counts, or None without counts."""
+    counts = [int(m.group(1)) for label in _CATEGORY.findall(text.split("<details", 1)[0])
+              for m in [_COUNT.search(label.strip())] if m]
+    return sum(counts) if counts else None
+
+
+def is_code_review(text):
+    """qodo_review.py's is_code_review(): the comment's first heading names the Code Review."""
+    m = _HEADING.search(text)
+    return "Code Review" in (m.group(1) if m else (text.strip().splitlines() or [""])[0])
+
+
+def qodo_findings(text):
+    """[{number, title, key, severity}] of a Code Review comment, severity from the last badge above
+    each finding, not counting badges inside code."""
+    badges = [(m.start(), m.group(1)) for m in _SEVERITY.finditer(mask_code(text))]
+    out = []
+    for m in _FINDING.finditer(text):
+        severity = None
+        for position, label in badges:
+            if position < m.start():
+                severity = label
+        title = plain(m.group(2).strip())
+        out.append({"number": m.group(1), "title": title, "key": title_key(title), "severity": severity,
+                    "resolved": bool(_STRUCK.search(m.group(2)))})
+    return out
+
+
+def qodo_titles(fetches):
+    """{title key: {title, severity, first}} over every archived fetch: the strictest severity any finding
+    of that title had, and the reviewed commit of the first fetch that shows it open (None when no fetch
+    does: then a fix has no lower bound but the PR's own commits)."""
+    out = {}
+    for f in fetches:
+        for x in f["findings"]:
+            t = out.setdefault(x["key"], {"title": x["title"], "severity": x["severity"], "first": None})
+            t["severity"] = stricter(x["severity"], t["severity"])
+            if not x["resolved"] and t["first"] is None:
+                t["first"] = f["reviewed"]
+    return out
+
+
+def exempt(path):
+    """A review record that the coverage rule exempts: the whole path matches one of REVIEW_EXEMPT."""
+    return any(p.fullmatch(path) for p in REVIEW_EXEMPT)
+
+
+def parse_disposition(cell):
+    """(form, match) for a disposition cell, or (None, None) when it is undecided."""
+    text = " ".join(cell.replace("`", "").split())
+    for form, rx in DISPOSITIONS:
+        m = rx.fullmatch(text)
+        if m:
+            return form, m
+    return None, None
+
+
+def md_cells(line):
+    """The cells of a markdown table row, or None for a line that isn't one."""
+    s = line.strip()
+    if not s.startswith("|"):
+        return None
+    s = s[1:]
+    if s.endswith("|") and not s.endswith("\\|"):
+        s = s[:-1]
+    return [c.strip().replace("\\|", "|") for c in re.split(r"(?<!\\)\|", s)]
+
+
+def md_tables(text):
+    """[(lowercased header cells, [row cells])] of every markdown table in text. Blank lines inside a
+    table don't end it (so no row after one is lost); after blank lines, a table line starts a new
+    table only when a separator row follows it."""
+    def separator(cells):
+        return cells is not None and all(re.fullmatch(r":?-+:?", c) for c in cells)
+
+    lines = text.splitlines()
+    out, rows, sep, gap = [], None, False, False
+    for i, line in enumerate(lines):
+        if not line.strip():
+            gap = rows is not None
+            continue
+        cells = md_cells(line)
+        if cells is None:
+            rows, gap = None, False
+            continue
+        header_next = not separator(cells) and separator(md_cells(lines[i + 1]) if i + 1 < len(lines) else None)
+        if rows is None or (gap and header_next):
+            rows, sep = [], False
+            out.append(([c.lower() for c in cells], rows))
+        elif not sep and not rows and separator(cells):
+            sep = True
+        else:
+            rows.append(cells)
+        gap = False
+    return out
+
+
+def find_table(text, required, optional=()):
+    """Rows, as {column: cell}, of the first table whose header has every REQUIRED column; None if none.
+    A column is named by its header cell or a prefix of it ('finding' for 'finding (title as…)')."""
+    for header, rows in md_tables(text or ""):
+        idx = {}
+        for col in (*required, *optional):
+            i = next((j for j, h in enumerate(header) if h == col), None)
+            i = next((j for j, h in enumerate(header) if h.startswith(col)), None) if i is None else i
+            if i is not None:
+                idx[col] = i
+        if all(c in idx for c in required):
+            return [{c: (r[i] if i < len(r) else "") for c, i in idx.items()} for r in rows]
+    return None
+
+
+def machine_lines(text):
+    """The `key: value` lines that open a record, up to its first table or ## heading."""
+    values = {}
+    for line in text.splitlines():
+        if line.startswith("## ") or line.lstrip().startswith("|"):
+            break
+        key, sep, value = line.partition(":")
+        if sep and re.fullmatch(r"[a-z][a-z -]*", key.strip()):
+            values[key.strip()] = re.sub(r"\s+#.*$", "", value).strip()
+    return values
+
+
+def ledger_entries(text):
+    """{L-n: {id, source, finding, target, status}} from LEDGER.md's table, the first row of each ID."""
+    out = {}
+    for row in find_table(text or "", ("id", "source", "target", "status"), ("finding",)) or []:
+        lid = row["id"].strip("` ")
+        if re.fullmatch(r"L-\d+", lid):
+            out.setdefault(lid, row)
+    return out
+
+
+def folded(text):
+    return " ".join(text.replace("`", "").split()).lower()
+
+
+def ledger_problems(entry, finding, target):
+    """Why ledger ENTRY doesn't record this deferral: [] when its status is open, its target is TARGET
+    and its source names FINDING: ("cold", M<k>, ID) or ("qodo", PR number, title)."""
+    out = []
+    if folded(entry["status"]) != "open":
+        out.append(f"its status is '{entry['status']}', not open")
+    if folded(entry["target"]) != folded(target):
+        out.append(f"its target is '{entry['target']}', not {target}")
+    kind, where, what = finding
+    source = entry["source"]
+    if kind == "cold":
+        named = all(re.search(rf"(?<![\w-]){re.escape(x)}(?![\w-])", source) for x in (where, what))
+        expected = f"cold {where} {what}"
+    else:
+        named = bool(re.search(rf"PR #{where}(?!\d)", source)) and \
+            any(title_key(what) in title_key(cell) for cell in (source, entry.get("finding", "")))
+        expected = f"qodo PR #{where} and the title"
+    if not named:
+        out.append(f"its source '{source}' doesn't name {expected}")
+    return out
+
+
+def glob_regex(glob):
+    """A merge-hold glob as a regex on the whole path, ignoring case: '*' within a segment, '**' across
+    segments, and '**/' any number of whole directories, none included (`**/go.mod` matches go.mod and
+    lib/go.mod). Case is ignored so that AuthContext.tsx is held like auth.py."""
+    out, i = [], 0
+    while i < len(glob):
+        if glob.startswith("**/", i):
+            out.append("(?:.*/)?")
+            i += 3
+        elif glob.startswith("**", i):
+            out.append(".*")
+            i += 2
+        elif glob[i] == "*":
+            out.append("[^/]*")
+            i += 1
+        elif glob[i] == "?":
+            out.append("[^/]")
+            i += 1
+        else:
+            out.append(re.escape(glob[i]))
+            i += 1
+    return re.compile("".join(out), re.IGNORECASE)
+
+
+def merge_hold_rules(playbook):
+    """[(label, glob, deleted_only, regex)] from the "## Merge-hold list" section of PLAYBOOK.md, one
+    bullet per area (- <label>: `glob`, `glob`), whose globs may go on over indented continuation lines.
+    None when the section is missing. A label containing "deleted" matches only deleted paths."""
+    m = re.search(r"^##[ \t]+Merge-hold list[^\n]*\n(.*?)(?=^##[ \t]|\Z)", playbook or "", re.M | re.S | re.I)
+    if not m:
+        return None
+    rules, label = [], None
+    for line in m.group(1).splitlines():
+        b = re.match(r"\s*[-*+][ \t]+(.*)", line)
+        if b:
+            label = b.group(1).split("`", 1)[0].strip().rstrip(":").strip()
+            text = b.group(1)
+        elif label is not None and re.match(r"[ \t]+\S", line):
+            text = line  # an indented continuation line of the same bullet
+        else:
+            if line.strip():
+                label = None  # unindented text ends the bullet; a blank line doesn't
+            continue
+        for glob in re.findall(r"`([^`]+)`", text):
+            rules.append((label, glob.strip(), "deleted" in label.lower(), glob_regex(glob.strip())))
+    return rules
+
+
+# --- reading the mission branch
+
+def project_root():
+    """The top of the project checkout the gate runs in; an error when this isn't a checkout of REPO."""
+    here = repo_from_checkout()
+    r = git("rev-parse", "--show-toplevel", check=False)
+    if not here or here.lower() != REPO.lower() or r.returncode != 0:
+        raise StateError(f"run this inside a checkout of {REPO}")
+    return r.stdout.strip()
+
+
+def blob(root, rev, path):
+    r = git("show", f"{rev}:{path}", cwd=root, check=False)
+    return r.stdout if r.returncode == 0 else None
+
+
+def zsplit(out):
+    return [p for p in out.split("\0") if p]
+
+
+def resolve_commit(root, rev):
+    r = git("rev-parse", "--verify", "-q", f"{rev}^{{commit}}", cwd=root, check=False)
+    return r.stdout.strip() if r.returncode == 0 else None
+
+
+def commit_files(root, sha):
+    """The paths a commit changed against its first parent (every path, for a root commit), so that a
+    lead's merge of a builder branch touches what the merge brought in, not what the other side did."""
+    parents = git_out("rev-list", "--parents", "-n", "1", sha, cwd=root).split()[1:]
+    if parents:
+        return set(zsplit(git("diff", "--name-only", "--no-renames", "-z", parents[0], sha, cwd=root).stdout))
+    return set(zsplit(git("diff-tree", "--no-commit-id", "--name-only", "-r", "--root", "-z", sha, cwd=root).stdout))
+
+
+def parse_cold_report(path, kind, number, text):
+    """A cold report: the commit it covers, its findings {ID: severity} and what's wrong with it."""
+    covers = machine_lines(text).get("covers", "").lower()
+    prefix = ("R" if kind == "round" else "S") + str(number)
+    rows = find_table(text, ("id", "severity"))
+    findings, errors = {}, []
+    if rows is None:
+        errors.append(f"{path} has no findings table (| ID | severity | …)")
+    for row in rows or []:
+        fid = row["id"].strip("` ")
+        if fid.lower() in BLANK:
+            continue
+        sev = row["severity"].strip("` ").lower()
+        if not re.fullmatch(rf"{prefix}-\d+", fid):
+            errors.append(f"{path}: finding ID {fid} is not {prefix}-<n>")
+        if sev not in COLD_SEVERITIES:
+            errors.append(f"{path}: {fid} has severity '{row['severity']}', not high, medium or low")
+        if fid in findings:
+            errors.append(f"{path}: {fid} appears twice")
+        findings[fid] = sev
+    return {"path": path, "covers": covers if SHA40.fullmatch(covers) else None, "findings": findings,
+            "errors": errors}
+
+
+def review_records(root, sha, mission, pr):
+    """The mission's cold records and the PR's Qodo records, as committed at sha."""
+    paths = zsplit(git("ls-tree", "-r", "--name-only", "-z", sha, "--", "reviews", cwd=root).stdout)
+    cold, fetches, dirs = [], {}, set()
+    for p in sorted(paths):
+        m = re.fullmatch(rf"reviews/cold/{re.escape(mission)}/(round|scoped)-(\d+)\.md", p)
+        if m:
+            cold.append(parse_cold_report(p, m.group(1), int(m.group(2)), blob(root, sha, p) or ""))
+        m = re.fullmatch(rf"reviews/qodo/PR-{pr}/(\d+)/.+", p)
+        if m:
+            dirs.add(int(m.group(1)))  # every archived fetch directory, with a Code Review comment or not
+        m = re.fullmatch(rf"reviews/qodo/PR-{pr}/(\d+)/issue-comment-(\d+)\.md", p)
+        if m:
+            fetches.setdefault(int(m.group(1)), []).append((int(m.group(2)), p))
+    archived = []  # every fetch holding a Code Review comment (its newest, if several), oldest first
+    for k in sorted(fetches):
+        reviews = [(cid, p, text) for cid, p in fetches[k]
+                   for text in [blob(root, sha, p) or ""] if is_code_review(text)]
+        if reviews:
+            _, p, text = max(reviews)
+            hits = _REVIEWED.findall(text)
+            archived.append({"fetch": k, "path": p, "reviewed": hits[-1] if hits else None,
+                             "findings": qodo_findings(text), "header": header_total(text)})
+    qodo_text = blob(root, sha, f"reviews/qodo/PR-{pr}/DISPOSITIONS.md")
+    return {"mission": mission, "pr": pr, "cold": cold, "qodo": archived[-1] if archived else None,
+            "qodo_fetches": archived, "qodo_dirs": sorted(dirs),
+            "cold_path": f"reviews/cold/{mission}/DISPOSITIONS.md",
+            "cold_dispositions": blob(root, sha, f"reviews/cold/{mission}/DISPOSITIONS.md"),
+            "qodo_path": f"reviews/qodo/PR-{pr}/DISPOSITIONS.md",
+            "qodo_dispositions": qodo_text,
+            "qodo_mode": machine_lines(qodo_text).get("qodo") if qodo_text is not None else None}
+
+
+class Gate:
+    """The gate's check lines, and the verdict they add up to."""
+
+    def __init__(self):
+        self.holds, self.fixes, self.waits = set(), [], []
+
+    def ok(self, name, text):
+        print(f"✓ {name}: {text}", flush=True)
+
+    def wait(self, name, text):
+        print(f"… {name}: {text}", flush=True)
+        self.waits.append(f"{name}: {text}")
+
+    def fail(self, name, reasons):
+        """reasons: [(text, hold reason or None)]. None: the lead fixes it; it is no reason to hold."""
+        print(f"✗ {name}: {'; '.join(t for t, _ in reasons)}", flush=True)
+        self.holds |= {h for _, h in reasons if h}
+        if any(h is None for _, h in reasons):
+            self.fixes.append(name)
+
+    def verdict(self, head):
+        if self.holds or self.fixes:
+            line = "gate: FAIL hold reasons " + (", ".join(str(h) for h in sorted(self.holds)) or "none")
+            print(line + (f"; fix first: {', '.join(self.fixes)}" if self.fixes else ""))
+            return EXIT_FAIL
+        if self.waits:
+            print("gate: WAIT " + "; ".join(self.waits))
+            return EXIT_WAIT
+        print(f"gate: PASS {head}")
+        return 0
+
+
+# --- the checks
+
+def check_coverage(g, root, head, rec):
+    covered, errors = [], []
+    for r in rec["cold"]:
+        if r["covers"]:
+            covered.append((r["covers"], r["path"]))
+        else:
+            errors.append(f"{r['path']}: 'covers:' must name the reviewed commit's 40-hex sha")
+    q = rec["qodo"]  # Qodo's review covers code only when its findings are decided: qodo: on
+    if q and rec["qodo_mode"] == "on" and q["reviewed"]:
+        covered.append((q["reviewed"], f"Qodo fetch {q['fetch']}"))
+    elif q and rec["qodo_mode"] == "on":
+        errors.append(f"{q['path']}: no reviewed-commit marker in the Code Review comment")
+    best = None  # (commit, source, uncovered paths, commits since) of the review closest to covering HEAD
+    for commit, source in covered:
+        if is_ancestor(root, commit, head):
+            changed = zsplit(git("diff", "--name-only", "--no-renames", "-z", commit, head, cwd=root).stdout)
+            uncovered = [p for p in changed if not exempt(p)]
+            since = int(git_out("rev-list", "--count", f"{commit}..{head}", cwd=root))
+            if best is None or (len(uncovered), since) < (len(best[2]), best[3]):
+                best = (commit, source, uncovered, since)
+    if not covered:
+        errors.append("no recorded review: no cold report of this mission and no archived Qodo review of this PR")
+    elif best is None:
+        errors.append("no recorded review covers a commit of this branch: " +
+                      ", ".join(f"{s} covers {c[:12]}" for c, s in covered))
+    elif best[2]:
+        errors.append(f"changed since the closest review ({best[1]}, {best[0][:12]}): {', '.join(best[2])}; "
+                      "a scoped cold review must cover them")
+    if errors:
+        g.fail("coverage", [(e, None) for e in errors])
+    else:
+        note = "it is HEAD" if best[0] == head else "only review records changed since"
+        g.ok("coverage", f"{best[1]} covers {best[0][:12]}; {note}")
+
+
+def row_files(cell):
+    """The paths named in a table's file cell, line numbers dropped."""
+    out = []
+    for item in re.split(r"[,\s]+", cell.replace("`", "")):
+        item = re.sub(r":\d+(?:-\d+)?$", "", item.strip())
+        if item.lower() not in BLANK:
+            out.append(item)
+    return out
+
+
+def same_commit(line, sha):
+    """Whether a record's commit LINE names SHA: backticks stripped, a hex prefix of 7 or more characters,
+    any text after it ignored (`95eebe4…` (fetch 3))."""
+    m = re.match(r"([0-9a-f]{7,40})(?![0-9a-z])", line.replace("`", "").strip().lower())
+    return bool(m and sha and sha.startswith(m.group(1)))
+
+
+def target_problem(target, mission, phase):
+    """Why a deferral TARGET isn't later than MISSION (M<k>) or the current PHASE, or None."""
+    m = re.fullmatch(r"M(\d+)", target)
+    if m:
+        return None if int(m.group(1)) > int(mission[1:]) else f"which is not a mission after {mission}"
+    p = int(re.fullmatch(r"phase (\d+) backlog", target).group(1))
+    if phase is None:
+        return "but MISSIONS.md records no current phase to compare with"
+    return None if p > phase else f"which is not a phase after the current phase {phase}"
+
+
+def judge(root, head, label, cell, top, file_cell, ledger, reported=None, room=None, finding=None, mission=None,
+          phase=None):
+    """What is wrong with one dispositions row: [(text, hold reason or None)]. REPORTED is the commit the
+    finding was reported against: a cold report's covers:, or the first Qodo fetch showing the title open.
+    ROOM (a RoomLog) answers whether an owner decision on a top-severity row is really Matthew's. LEDGER is
+    ledger_entries(); FINDING names the finding for a deferral's ledger row (see ledger_problems). A deferral
+    targets a mission after MISSION or a phase after PHASE."""
+    form, m = parse_disposition(cell)
+    if form is None:
+        return [(f"{label} is undecided" + (f" ('{cell}')" if cell.strip() else ""), 2)]
+    if form == "pending":
+        return [(f"{label} waits on an open owner decision ({m.group(1)})", 1)]
+    if top and form in ("dismissed", "deferred"):
+        return [(f"{label} is top severity, so only a fix or an owner decision closes it, not '{form}'", 1)]
+    owner_check = top and form == "owner" and room is not None and finding
+    answer, edited = room.answers(m.group(2), finding) if owner_check else (None, False)
+    if owner_check and not answer:
+        n, what = m.group(2).rsplit("-", 1)[1], finding[2]
+        if edited:
+            return [(f"{label} cites {m.group(2)}, but the lead's ESCALATION-{n} or MERGE-HOLD-{n} about {what} was "
+                     f"edited after {m.group(2)}: post a new escalation or hold", 1)]
+        return [(f"{label} cites {m.group(2)}, but {room.where()} has no trusted {m.group(2)} answering the lead's "
+                 f"earlier ESCALATION-{n} or MERGE-HOLD-{n} about {what}", 1)]
+    if form == "deferred" and mission:
+        late = target_problem(m.group(2), mission, phase)
+        if late:
+            return [(f"{label}: deferred to {m.group(2)}, {late}", None)]
+    if form == "deferred" and m.group(1) not in ledger:
+        return [(f"{label}: {m.group(1)} is not in {PLAYBOOK_DIR}/LEDGER.md on {STATE_BRANCH}", None)]
+    if form == "deferred" and finding:
+        lacking = ledger_problems(ledger[m.group(1)], finding, m.group(2))
+        if lacking:
+            return [(f"{label}: ledger {m.group(1)} doesn't record this deferral: {', '.join(lacking)}", None)]
+    if form == "fixed":
+        short = m.group(1).lower()
+        full = resolve_commit(root, short)
+        if not full:
+            return [(f"{label}: fixed in {short}: no such commit", None)]
+        if not is_ancestor(root, full, head):
+            return [(f"{label}: fixed in {short}, which is not an ancestor of HEAD", None)]
+        if is_ancestor(root, full, "refs/remotes/origin/main"):
+            return [(f"{label}: fixed in {short}, which is already on main", None)]
+        if reported and is_ancestor(root, full, reported):
+            return [(f"{label}: fixed in {short}, which the review that found it had already seen "
+                     f"({reported[:12]})", None)]
+        files = row_files(file_cell)
+        touched = commit_files(root, full) if files else set()
+        if files and not any(f in touched or (f.endswith("/") and any(t.startswith(f) for t in touched))
+                             for f in files):
+            return [(f"{label}: fixed in {short}, which doesn't touch {', '.join(files)}", None)]
+    return []
+
+
+def check_dispositions(g, root, head, rec, ledger_text, room, phase=None):
+    reasons, ledger = [], ledger_entries(ledger_text)
+    # cold: a row for every finding ID of every report
+    want, reported = {}, {}
+    for r in rec["cold"]:
+        reasons += [(e, None) for e in r["errors"]]
+        want.update(r["findings"])
+        reported.update({fid: r["covers"] for fid in r["findings"]})
+    n_cold = n_qodo = 0
+    if rec["cold_dispositions"] is None:
+        reasons.append((f"{rec['cold_path']} is missing", None))
+    else:
+        rows = find_table(rec["cold_dispositions"], ("id", "disposition"), ("severity", "file"))
+        if rows is None:
+            reasons.append((f"{rec['cold_path']} has no | ID | … | disposition | table", None))
+        seen = set()
+        for row in rows or []:
+            fid = row["id"].strip("` ")
+            if fid.lower() in BLANK:
+                continue
+            if fid in seen:
+                reasons.append((f"{rec['cold_path']}: {fid} has two rows", None))
+            seen.add(fid)
+            n_cold += 1
+            top = TOP_COLD in (want.get(fid), row.get("severity", "").strip("` ").lower())
+            reasons += judge(root, head, f"cold {fid}", row["disposition"], top, row.get("file", ""), ledger,
+                             reported.get(fid), room, ("cold", rec["mission"], fid), rec["mission"], phase)
+        missing = [fid for fid in want if fid not in seen]
+        if rows is not None and missing:
+            reasons.append((f"{rec['cold_path']} has no row for {', '.join(missing)}", None))
+    # Qodo: with QODO_REVIEW=on the file exists; with qodo: on, a row for every finding of the latest archive
+    switch = os.environ.get("QODO_REVIEW", "").strip()
+    if switch not in ("on", "off"):
+        reasons.append((f"QODO_REVIEW must be on or off, not {switch!r}", None))
+    text, path, q = rec["qodo_dispositions"], rec["qodo_path"], rec["qodo"]
+    if rec["qodo_fetches"] and rec["qodo_mode"] != "on":  # an archived review is never ignored
+        fetched = ", ".join(str(f["fetch"]) for f in rec["qodo_fetches"])
+        reasons.append((f"Qodo's review of this PR is archived (fetches {fetched}), so {path} must exist and "
+                        f"say qodo: on" + (f", not {rec['qodo_mode']}" if rec["qodo_mode"] else ""), None))
+    elif text is None and switch == "on":
+        reasons.append((f"{path} is missing (QODO_REVIEW=on)", None))
+    if text is not None:
+        lines = machine_lines(text)
+        mode = lines.get("qodo")
+        if mode not in ("on", "off", "no first review"):
+            reasons.append((f"{path}: its 'qodo:' line must be on, off or no first review", None))
+        rows = find_table(text, ("#", "finding", "disposition"), ("severity", "file"))
+        if rows is None and mode == "on":
+            reasons.append((f"{path} has no | # | … | finding | … | disposition | table", None))
+        titles = qodo_titles(rec["qodo_fetches"])  # every finding of every fetch, absent now or not
+        seen = set()
+        for row in rows or []:
+            key = title_key(row["finding"])
+            if not key and not row["disposition"].strip():
+                continue
+            if key in seen:  # exactly one disposition per finding
+                reasons.append((f"{path}: two rows for: {' '.join(row['finding'].split())}", None))
+            seen.add(key)
+            n_qodo += 1
+            t = titles.get(key) or {}
+            top = TOP_QODO in ((t.get("severity") or "").lower(), row.get("severity", "").strip("` ").lower())
+            label = f"Qodo #{row['#'].strip() or '?'} \"{' '.join(row['finding'].split())}\""
+            reasons += judge(root, head, label, row["disposition"], top, row.get("file", ""), ledger, t.get("first"),
+                             room, ("qodo", rec["pr"], t.get("title") or " ".join(row["finding"].split())),
+                             rec["mission"], phase)
+        if mode == "on" and q is None:
+            reasons.append((f"{path} says qodo: on, but no Code Review comment is archived for this PR", None))
+        elif mode == "on":
+            missing = [t["title"] for key, t in titles.items() if key not in seen]
+            if missing:
+                fetched = ", ".join(str(f["fetch"]) for f in rec["qodo_fetches"])
+                reasons.append((f"{path} has no row for: {'; '.join(missing)} (archived fetches {fetched})", None))
+            # the archive is whole: fetches 1..k as the tool numbers them, as the table says it was built from
+            dirs = rec["qodo_dirs"]
+            if dirs != list(range(1, len(dirs) + 1)):
+                reasons.append((f"reviews/qodo/PR-{rec['pr']}/ holds fetches {', '.join(map(str, dirs))}, not 1 to "
+                                f"{len(dirs)}: restore the missing fetch", None))
+            listed = [int(x) for x in re.findall(r"\d+", lines.get("fetches", ""))]
+            if listed != dirs:
+                reasons.append((f"{path} says fetches: {lines.get('fetches') or '(none)'}, but the archived fetches "
+                                f"are {', '.join(map(str, dirs))}", None))
+            if not same_commit(lines.get("reviewed", ""), q["reviewed"]):
+                reasons.append((f"{path} says reviewed: {lines.get('reviewed') or '(none)'}, but the last fetch "
+                                f"reviewed {q['reviewed'] or '(no marker)'}", None))
+    # QODO-REVIEW rule 5: the header's open count must agree with the open findings that parse; and every
+    # finding has a severity. Either failure means Qodo's format moved: the fix is a patch to room.py's
+    # parser, not a change to the records
+    patch = "the records can't fix this: room.py's Qodo parser needs a patch"
+    for f in rec["qodo_fetches"]:
+        open_ = sum(1 for x in f["findings"] if not x["resolved"])
+        if f["header"] is None or f["header"] != open_:
+            counted = "no header counts" if f["header"] is None else f"the header counts {f['header']} open"
+            reasons.append((f"Qodo comment did not parse: read it ({f['path']}: {counted}, {open_} parsed open; "
+                            f"{patch})", None))
+        unrated = [f"#{x['number']} \"{x['title']}\"" for x in f["findings"]
+                   if (x["severity"] or "").lower() not in SEVERITY_RANK]
+        if unrated:
+            reasons.append((f"severity did not parse: read the comment ({f['path']}: {', '.join(unrated)}; {patch})",
+                            None))
+    if reasons:
+        g.fail("dispositions", reasons)
+    else:
+        g.ok("dispositions", f"{n_cold} cold and {n_qodo} Qodo row(s), every finding decided")
+
+
+def required_contexts():
+    """({(context, app id or None)} required on main, or None, error text). A check that names its app
+    (app_id in classic protection, integration_id in rulesets; -1 or none: any app) is satisfied only by
+    a check run from that app; a name required without one by any run or status of that name."""
+    req = set()
+
+    def add(context, app):
+        if context:
+            req.add((context, app if isinstance(app, int) and app >= 0 else None))
+
+    status, prot = gh_try(f"repos/{REPO}/branches/main/protection")
+    if status == 200 and isinstance(prot, dict):
+        rsc = prot.get("required_status_checks") or {}
+        for context in rsc.get("contexts") or []:
+            add(context, None)
+        for c in rsc.get("checks") or []:
+            add(c.get("context"), c.get("app_id"))
+    elif not unprotected(status, prot):
+        return None, f"can't read main's protection: {prot}"
+    status, rules = gh_try(f"repos/{REPO}/rules/branches/main")
+    if status == 200 and isinstance(rules, list):
+        for rule in rules:
+            if rule.get("type") == "required_status_checks":
+                for c in (rule.get("parameters") or {}).get("required_status_checks") or []:
+                    add(c.get("context"), c.get("integration_id"))
+    elif status != 200 and not unprotected(status, rules):
+        return None, f"can't read main's rules: {rules}"
+    # classic protection lists every check under contexts too: a name bound to an app keeps only that binding
+    bound = {c for c, app in req if app is not None}
+    return {(c, app) for c, app in req if app is not None or c not in bound}, None
+
+
+def gh_pages(path, key):
+    out, page = [], 1
+    while True:
+        batch = (gh(f"{path}{'&' if '?' in path else '?'}per_page=100&page={page}") or {}).get(key) or []
+        out += batch
+        if len(batch) < 100:
+            return out
+        page += 1
+
+
+CHECKS_GRACE = 600  # seconds a new HEAD with workflows may have no runs before "no checks ran" passes
+LATE_LIMIT = 3600  # seconds a required context may stay unreported while other checks are pending
+WORKFLOW = glob_regex(".github/workflows/*.y*ml")
+
+
+def check_checks(g, root, head, pr_updated=None):
+    required, err = required_contexts()
+    if err:
+        g.fail("checks", [(err, None)])
+        return
+    rank = {"ok": 0, "pending": 1, "failed": 2}
+    # filter=latest already drops superseded re-runs; two workflows may each have a job of the same
+    # name, so runs are told apart by check suite as well as by name
+    runs = {}
+    for run in gh_pages(f"repos/{REPO}/commits/{head}/check-runs?filter=latest", "check_runs"):
+        key = ((run.get("check_suite") or {}).get("id"), run.get("name"))
+        if run.get("name") and run.get("id", 0) >= runs.get(key, {}).get("id", 0):
+            runs[key] = run
+    results = [(name, "pending" if run.get("status") != "completed" else
+                "ok" if run.get("conclusion") in ("success", "neutral", "skipped") else "failed",
+                (run.get("app") or {}).get("id"))
+               for (_, name), run in runs.items()]
+    statuses = {}
+    for s in gh_pages(f"repos/{REPO}/commits/{head}/status", "statuses"):
+        if s.get("context"):  # a context reported twice counts at its worst
+            v = {"success": "ok", "pending": "pending"}.get(s.get("state"), "failed")
+            statuses[s["context"]] = max(statuses.get(s["context"], v), v, key=rank.get)
+    results += [(context, v, None) for context, v in statuses.items()]  # a status names no app
+    failed = sorted({c for c, v, _ in results if v == "failed"})
+    missing = sorted(context + (f" (from app {app})" if app is not None else "") for context, app in required
+                     if not any(c == context and (app is None or a == app) for c, _, a in results))
+    pending = sorted({c for c, v, _ in results if v == "pending"})
+    if failed:
+        g.fail("checks", [(t, 3) for t in (f"failed: {', '.join(failed)}",
+                                            f"required but missing: {', '.join(missing)}" if missing else None) if t])
+        return
+    # with workflows in HEAD, Actions may not have created its runs yet; other apps' results don't tell.
+    # Wait from the later of HEAD's commit and the PR's last update (a push of an older commit moves the PR)
+    workflows = [p for p in zsplit(git("ls-tree", "-r", "--name-only", "-z", head, "--", ".github/workflows",
+                                       cwd=root).stdout) if WORKFLOW.fullmatch(p)]
+    no_actions = bool(workflows) and not any((r.get("app") or {}).get("slug") == "github-actions"
+                                             for r in runs.values())
+    changed = int(git_out("log", "-1", "--format=%ct", head, cwd=root))
+    try:
+        changed = max(changed, calendar.timegm(time.strptime(pr_updated or "", "%Y-%m-%dT%H:%M:%SZ")))
+    except ValueError:
+        pass
+    age = int(time.time()) - changed  # since the later of HEAD's commit and the PR's last update
+    if no_actions:
+        if age < CHECKS_GRACE:
+            g.wait("checks", f"no GitHub Actions runs for HEAD yet, though it has {len(workflows)} workflow(s); "
+                             f"last change {max(age, 0)}s ago (waiting up to {CHECKS_GRACE // 60} minutes)")
+            return
+    if pending and missing and age >= LATE_LIMIT:  # late for an hour: it isn't coming
+        g.fail("checks", [(f"required but missing: {', '.join(missing)}, still not reported {LATE_LIMIT // 60} minutes "
+                           f"after the last change (pending: {', '.join(pending)})", 3)])
+    elif pending:  # a required context that hasn't reported may be late while others still run
+        g.wait("checks", f"pending: {', '.join(pending)}" + (f"; not reported yet: {', '.join(missing)}" if missing else ""))
+    elif missing:
+        g.fail("checks", [(f"required but missing: {', '.join(missing)}", 3)])
+    elif not results:
+        g.ok("checks", "no checks ran for HEAD" if workflows else "no checks configured")
+    else:
+        g.ok("checks", f"{len(results)} passed" + (f" (required: {', '.join(sorted({c for c, _ in required}))})" if required else "")
+             + ("; no GitHub Actions runs for HEAD" if no_actions else ""))
+
+
+def room_number(playbook, missions):
+    m = re.search(r"^room:[ \t]*(\d+)", playbook or "", re.M)
+    if m and int(m.group(1)) > 0:
+        return int(m.group(1))
+    try:
+        n = int(read_block(missions or "").get("room", "0"))
+    except (StateError, ValueError):
+        return None
+    return n if n > 0 else None
+
+
+class RoomLog:
+    """The room's trusted messages, read once, and only when a check needs them."""
+
+    def __init__(self, playbook, missions):
+        self.number = room_number(playbook, missions)
+        self._messages = None
+
+    def where(self):
+        return f"room {self.number}" if self.number else "the room (none is recorded in PLAYBOOK.md or MISSIONS.md)"
+
+    def messages(self):
+        """Trusted messages, each with "edited": its updated_at (an edit keeps the comment's id)."""
+        if self._messages is None:
+            self._messages = [dict(m, edited=c.get("updated_at") or m["at"])
+                              for c in (comments(self.number) if self.number else [])
+                              for m in [parse(c)] if trusted(m)]
+        return self._messages
+
+    def decisions(self, kind):
+        """The trusted messages of KIND (DECISION-n) from the architect, or untagged from Matthew, oldest first."""
+        return [m for m in self.messages() if m["role"] in ("architect", "human") and message_kind(m["text"]) == kind]
+
+    @staticmethod
+    def before(ask, decision):
+        """Whether ASK (a hold or escalation) stood as it is now when DECISION was posted: posted before it
+        and not edited since."""
+        return ask["id"] < decision["id"] and ask["edited"] <= decision["at"]
+
+    def answers(self, decision, finding):
+        """(the trusted DECISION-n that answers the lead's earlier ESCALATION-n or MERGE-HOLD-n naming FINDING,
+        or None; whether such a message exists but was edited after the decision). FINDING is ("cold", M<k>,
+        ID) or ("qodo", PR, title). A message names it by its cold ID, by the full Qodo title, or by the
+        dispositions file the finding sits in, as v1's "point to files instead of pasting" asks."""
+        n = decision.rsplit("-", 1)[1]
+        kind, where, what = finding
+        record = f"reviews/cold/{where}/DISPOSITIONS.md" if kind == "cold" else f"reviews/qodo/PR-{where}/DISPOSITIONS.md"
+
+        def names(text):
+            if record in message_tokens(text):
+                return True
+            if kind == "cold":
+                return re.search(rf"(?<![\w-]){re.escape(what)}(?![\w-])", text)
+            return re.search(rf"(?<!\w){re.escape(title_key(what))}(?!\w)", title_key(text))
+
+        asks = [m for m in self.messages() if m["role"] == "lead" and names(m["text"])
+                and message_kind(m["text"]) in (f"ESCALATION-{n}", f"MERGE-HOLD-{n}")]
+        decisions = self.decisions(decision)
+        answer = next((d for d in decisions if any(self.before(e, d) for e in asks)), None)
+        edited = answer is None and any(e["id"] < d["id"] for e in asks for d in decisions)
+        return answer, edited
+
+    def holds(self, kind):
+        """The lead's trusted messages of KIND (MERGE-HOLD-n)."""
+        return [m for m in self.messages() if m["role"] == "lead" and message_kind(m["text"]) == kind]
+
+
+def message_tokens(text):
+    """The whole tokens of a room message, for naming paths: backticked text, and the words split on
+    whitespace and commas with quotes, trailing '.', ',', ';', ':' and unbalanced parentheses dropped, so
+    that src/app/(auth)/page.tsx and "(see app/auth.py)." both name their path."""
+    out = set(re.findall(r"`([^`]+)`", text))
+    for tok in re.split(r"[\s,]+", text):
+        while True:
+            before = tok
+            tok = tok.strip("\"'`").rstrip(".,;:")
+            if tok.endswith(")") and tok.count(")") > tok.count("("):
+                tok = tok[:-1]
+            if tok.startswith("(") and tok.count("(") > tok.count(")"):
+                tok = tok[1:]
+            if tok == before:
+                break
+        out.add(tok)
+        if tok.startswith("(") and tok.endswith(")"):
+            out.add(tok[1:-1])
+    return out
+
+
+def hold_problems(text, pr, paths):
+    """What a MERGE-HOLD message lacks for a reason-5 hold of PR's PATHS: [] when it names them all, each
+    as a whole token (message_tokens)."""
+    out = [] if re.search(rf"PR #{pr}(?!\d)", text) else [f"PR #{pr}"]
+    out += [] if re.search(r"\breason 5\b", text, re.I) else ["reason 5"]
+    tokens = message_tokens(text)
+    return out + [p for p in paths if p not in tokens]
+
+
+def check_sensitive(g, root, head, playbook, a, room):
+    rules = merge_hold_rules(playbook)
+    if not rules:
+        g.fail("sensitive paths", [(f"{PLAYBOOK_DIR}/PLAYBOOK.md on {STATE_BRANCH} has no merge-hold " +
+                                    ("list" if rules is None else "globs") + "; the gate never runs without it",
+                                    None)])
+        return
+    never = [glob for _, glob, _, _ in rules if glob.startswith("/") or glob.endswith("/")]
+    if never:  # gitignore or CODEOWNERS style: a changed path never starts or ends with '/'
+        g.fail("sensitive paths", [(f"glob can never match: {glob}", None) for glob in never])
+        return
+    out = zsplit(git("diff", "--name-status", "--no-renames", "-z", f"refs/remotes/origin/main...{head}",
+                     cwd=root).stdout)
+    changes = list(zip(out[0::2], out[1::2]))
+    hits = []  # (path, why)
+    for status, path in changes:
+        for label, glob, deleted_only, rx in rules:
+            if (status == "D" or not deleted_only) and rx.fullmatch(path):
+                hits.append((path, f"{path} ({'deleted; ' if status == 'D' else ''}`{glob}`, {label})"))
+                break
+    if not hits:
+        g.ok("sensitive paths", f"{len(changes)} changed path(s), none on the merge-hold list")
+        return
+    held, paths = "; ".join(why for _, why in hits), [p for p, _ in hits]
+    if a.allow_hold != "5":
+        g.fail("sensitive paths", [(f"on the merge-hold list: {held}", 5)])
+        return
+    # the decision must answer this PR's hold: the lead's MERGE-HOLD-n (same n) for reason 5 and these
+    # paths, posted before it and not edited since (an edit keeps the comment's id)
+    n = a.decision.rsplit("-", 1)[1]
+    holds = room.holds(f"MERGE-HOLD-{n}")
+    lacking = [hold_problems(m["text"], a.pr, paths) for m in holds]
+    whole = [h for h, problems in zip(holds, lacking) if not problems]
+    decisions = room.decisions(a.decision)
+    pair = next(((h, d) for h in whole for d in decisions if room.before(h, d)), None)
+    if pair:
+        g.ok("sensitive paths", f"{held}: allowed by {a.decision} (comment #{pair[1]['id']}), answering "
+                                f"MERGE-HOLD-{n} (comment #{pair[0]['id']})")
+        return
+    edited = next((h for h in whole for d in decisions if h["id"] < d["id"]), None)
+    hold = whole[0] if whole else None
+    if edited:
+        missing = f"MERGE-HOLD-{n} (comment #{edited['id']}) edited after {a.decision}: post a new hold"
+    elif hold:
+        missing = f"no trusted {a.decision} from the architect or Matthew after MERGE-HOLD-{n} (comment #{hold['id']})"
+    elif holds:  # safe to show the form: a decision must still come after a new hold
+        missing = (f"no MERGE-HOLD-{n} for this hold: the lead's doesn't name {', '.join(min(lacking, key=len))} "
+                   f"(the form: MERGE-HOLD-<n>: PR #{a.pr}, reason 5 (sensitive paths): {', '.join(paths)})")
+    else:
+        missing = f"no trusted MERGE-HOLD-{n} from the lead"
+    g.fail("sensitive paths", [(f"{held}; --allow-hold 5 --decision {a.decision}: {room.where()} has {missing}", 5)])
+
+
+# --- gate and merge commands
+
+def run_gate(a, expect_sha=None):
+    """The gate's checks, one line each, then the verdict. Returns (exit code, the PR's head sha or None)."""
+    try:
+        sys.stdout.reconfigure(errors="backslashreplace")
+    except AttributeError:
+        pass
+    if bool(a.allow_hold) != bool(a.decision):
+        raise StateError("--allow-hold 5 and --decision DECISION-<n> go together")
+    root = project_root()
+    g = Gate()
+
+    # 1. the PR, and its head fetched from origin
+    pr = gh(f"repos/{REPO}/pulls/{a.pr}") or {}
+    head = pr.get("head") or {}
+    ref, sha = head.get("ref") or "", (head.get("sha") or "").lower()
+    problems = []
+    if pr.get("state") != "open":
+        problems.append("is merged" if pr.get("merged") else f"is {pr.get('state')}, not open")
+    if (pr.get("base") or {}).get("ref") != "main":
+        problems.append(f"has base {(pr.get('base') or {}).get('ref')}, not main")
+    head_repo = (head.get("repo") or {}).get("full_name") or ""
+    if head_repo.lower() != REPO.lower():
+        problems.append(f"has its head in {head_repo or 'an unknown repo'}, not {REPO}")
+    m = re.fullmatch(r"mission/(M\d+)(?:-.+)?", ref)  # the mission is the token right after mission/
+    if not m:
+        problems.append(f"has head {ref or '?'}, not a mission/M<k>-… branch")
+    elif a.mission and a.mission != m.group(1):
+        problems.append(f"has head {ref}, whose mission is {m.group(1)}, not --mission {a.mission}")
+    if not SHA40.fullmatch(sha):
+        problems.append("has no head sha")
+    if problems:
+        g.fail("PR", [(f"PR #{a.pr} " + ", ".join(problems), None)])
+        return g.verdict(None), None
+    mission = m.group(1)
+    if expect_sha and sha != expect_sha:
+        print(f"✗ PR: PR #{a.pr} head is {sha}, not {expect_sha}")
+        print("head moved: re-run gate")
+        return EXIT_WAIT, sha
+    git("fetch", "-q", "origin", f"+refs/heads/{ref}:refs/remotes/origin/{ref}",
+        "+refs/heads/main:refs/remotes/origin/main", cwd=root)
+    fetched = git_out("rev-parse", f"refs/remotes/origin/{ref}", cwd=root)
+    if fetched != sha:
+        g.fail("PR", [(f"origin's {ref} is at {fetched}, the PR's head at {sha}: it moved; run the gate again",
+                       None)])
+        return g.verdict(None), None
+    g.ok("PR", f"PR #{a.pr} is open into main from {ref} at {sha} (mission {mission})")
+
+    # 2. the lease
+    sid = session_id(a)
+    holder, gen, _ = lease_holder()
+    if holder != sid:
+        print(f"✗ lease: held by {holder} (generation {gen}), not this session ({sid})")
+        print("gate: lease lost")
+        return EXIT_LEASE, sha
+    g.ok("lease", f"held by this session ({sid}, generation {gen})")
+    state = ensure_worktree()  # lease_holder just fetched it; read the pushed state, not local edits
+    playbook, ledger, missions = (blob(state, STATE_REF, f"{PLAYBOOK_DIR}/{n}")
+                                  for n in ("PLAYBOOK.md", "LEDGER.md", "MISSIONS.md"))
+
+    room = RoomLog(playbook, missions)
+    rec = review_records(root, sha, mission, a.pr)
+    check_coverage(g, root, sha, rec)                         # 3
+    try:
+        phase = int(read_block(missions or "").get("phase", ""))
+    except (StateError, ValueError):
+        phase = None
+    check_dispositions(g, root, sha, rec, ledger, room, phase)  # 4
+    check_checks(g, root, sha, pr.get("updated_at"))          # 5
+    check_sensitive(g, root, sha, playbook, a, room)          # 6
+    return g.verdict(sha), sha
+
+
+def cmd_gate(a):
+    return run_gate(a)[0]
+
+
+def http_status(err):
+    m = re.search(r"HTTP (\d{3})", str(err))
+    return int(m.group(1)) if m else 0
+
+
+def cmd_merge(a):
+    code, _ = run_gate(a, expect_sha=a.sha)
+    if code:
+        return code
+    # change_state re-reads the lease right before the merge, in the same write as the intent (exit 5 if lost)
+    change_state(a, f"merge: intent PR #{a.pr} at {a.sha[:12]}", lambda v: {"intent": f"merge PR #{a.pr} at {a.sha}"})
+
+    def clear(why):
+        try:
+            change_state(a, f"merge: PR #{a.pr} not merged ({why})", lambda v: {"intent": "none"})
+        except (StateError, StateMoved, StateExit) as e:
+            print(f"[intent not cleared: {e or 'the state branch moved'}]", file=sys.stderr)
+
+    try:
+        res = gh(f"repos/{REPO}/pulls/{a.pr}/merge", "PUT", {"sha": a.sha, "merge_method": "merge"}) or {}
+    except GhError as e:
+        status = http_status(e)
+        if status == 409:
+            clear("head moved")
+            print("head moved: re-run gate")
+            return EXIT_WAIT
+        if status == 405:
+            clear("not mergeable")
+            print(f"not mergeable: {e}")
+            return EXIT_FAIL
+        print(f"merge failed: {e}; intent left recorded for reconciliation", file=sys.stderr)
+        return 1
+    merged = res.get("sha") or "?"
+    try:
+        change_state(a, f"merge: PR #{a.pr} merged as {merged[:12]}", lambda v: {"intent": "none", "pr": f"merged:{a.pr}"})
+    except (StateError, StateMoved, StateExit) as e:  # merged all the same: the intent stays for reconciliation
+        print(f"merged PR #{a.pr}: {merged}; state not updated ({e or 'the state branch moved'}): reconcile")
+        return 1
+    print(f"merged PR #{a.pr}: {merged}")
+    return 0
+
+
+def mission_arg(s):
+    if not re.fullmatch(r"M\d+", s):
+        raise argparse.ArgumentTypeError("--mission takes M<k>, e.g. M3")
+    return s
+
+
+def decision_arg(s):
+    if not re.fullmatch(r"DECISION-\d+", s):
+        raise argparse.ArgumentTypeError("--decision takes DECISION-<n>")
+    return s
+
+
+def sha_arg(s):
+    if not SHA40.fullmatch(s.lower()):
+        raise argparse.ArgumentTypeError("--sha takes the full 40-hex head commit the gate checked")
+    return s.lower()
+
+
+def add_gate_commands(sub, common):
+    """argparse wiring for gate and merge."""
+    for name, fn, help in (
+            ("gate", cmd_gate, "the merge gate: PR, lease, coverage, dispositions, checks, sensitive paths "
+                               "(exit 0 pass, 3 wait, 5 lease lost, 6 fail)"),
+            ("merge", cmd_merge, "run the gate, record the intent, merge naming the head sha "
+                                 "(exit 3: head moved, 6: held or not mergeable)")):
+        s = sub.add_parser(name, parents=[common], help=help, description=help)
+        s.set_defaults(fn=state_command(fn))
+        s.add_argument("pr", type=int)
+        if name == "merge":
+            s.add_argument("--sha", type=sha_arg, required=True, help="the head commit the gate checked")
+        s.add_argument("--mission", type=mission_arg, help="M<k>: must be the mission of the head branch mission/M<k>-…")
+        s.add_argument("--allow-hold", choices=("5",), help="let a sensitive-path match pass, with --decision")
+        s.add_argument("--decision", type=decision_arg,
+                       help="the DECISION-<n> in the room that answers the lead's MERGE-HOLD-<n> for this PR")
+
+
+# --- end of review records, merge gate and merge
+
+
 def from_arg(s):
     if s != "none" and not s.isdigit():
         raise argparse.ArgumentTypeError("--from takes a comment ID, or none for the room's start")
@@ -1589,6 +2655,7 @@ def main():
     add_buzz_flags(s)
     sub.add_parser("ping").set_defaults(fn=cmd_ping, repo=None)
     add_state_commands(sub, common)  # M2-B: state, lease, preflight
+    add_gate_commands(sub, common)   # M3: gate, merge
 
     a = p.parse_args()
     SESSION_OPT = getattr(a, "session", None)
