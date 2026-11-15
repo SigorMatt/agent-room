@@ -27,3 +27,6 @@
 | S1-3 | low | room.py | A stale worktree with local work is moved aside silently and loses its commits | deferred: B-2 to M4 | BUILD-STATE.md, "Deferred to later milestones" |
 | S1-4 | low | room.py | From outside the checkout, a misconfigured state dir naming the project checkout is moved aside | deferred: B-2 to M4 | BUILD-STATE.md, "Deferred to later milestones" |
 | S1-5 | low | room.py | From inside a stale state worktree, R2-2 is still unfixed | deferred: B-2 to M4 | BUILD-STATE.md, "Deferred to later milestones" |
+| S2-1 | medium | room.py | A quoted `lease_session:` line decides the holder once the fence breaks | fixed in 8cd9599 | Line scanning removed; the lease is the last block that parses in the branch history; regression test |
+| S2-2 | medium | room.py | A takeover can't get through a broken block | fixed in 8cd9599 | `lease take --takeover` starts from the last valid block and repairs it; regression test |
+| S2-3 | medium | room.py | A holder commit can drop or break the block | fixed in 8cd9599 | Commits changing MISSIONS.md must keep a valid block with the current lease, for everyone; regression test |
