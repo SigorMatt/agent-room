@@ -26,3 +26,8 @@
 | R2-6 | low | room.py | Any later lead message counts as the closing note | fixed in 74c9545 | Only a trusted lead DONE or STOPPED after `closed_at`; regression test |
 | R2-7 | low | room.py | `intent N` accepts another room | fixed in dd9525a | Refuses a room that isn't current; records the room; regression test |
 | R2-8 | low | room.py | A moved-aside worktree's `.git` points at the rebuilt one | fixed in 47668cb | The moved copy loses its `.git` link; regression test |
+| S1-1 | medium | room.py | A stale `waiting_for_owner` flag mutes the watchdog after later progress | fixed in 7f20d6d | Quiet only while nothing progressed since the flag was set; a pr change resets it; regression test |
+| S1-2 | medium | room.py | A transient fetch failure raises a false "state unreadable" alarm | fixed in 5c810b6 | Exits 1 without posting; the alarm needs no state branch or no valid block; regression test |
+| S1-3 | medium | room.py | A leftover `close room` intent tells the next phase to close its new room | fixed in 5189b34 | The intent records its room; regression test |
+| S1-4 | low | room.py | A new phase's watchdog is muted by the previous phase's status | fixed in aca6ce2 | Pre-start rule: quiet until a lead joins, one alarm after 12h; another room's status never silences; regression test |
+| S1-5 | low | room.py | Missing state before the first lead joins alarms overnight | fixed in aca6ce2 | Same pre-start rule; regression test |
