@@ -867,7 +867,7 @@ def t_qodo_counts_must_agree():  # cold M3 R1-7
     publish()
     r = gate()
     failed(r, "dispositions", f"Qodo comment did not parse: read it (reviews/qodo/PR-{PR}/1/issue-comment-7001.md: "
-                              "the header counts 2 open, 0 parsed open)")
+                              "the header counts 2 open, 0 parsed open; the records can't fix this: room.py's Qodo parser needs a patch)")
     no_counts = qodo_comment(QODO_FINDINGS, c1).replace("<code>🐞 Bugs (2)</code>  <code>📘 Rule violations (0)</code>", "")
     assert R.header_total(no_counts) is None
     commit("records: no header counts", {f"reviews/qodo/PR-{PR}/1/issue-comment-7001.md": no_counts})
@@ -896,6 +896,49 @@ def t_an_archived_qodo_review_needs_qodo_on():  # cold M3 R1-6
     r = gate(QODO_REVIEW="off")
     failed(r, "coverage", f"changed since the closest review (reviews/cold/M3/round-1.md, {c1[:12]}): app.py")
     failed(r, "dispositions", "so reviews/qodo/PR-12/DISPOSITIONS.md must exist and say qodo: on")
+
+
+def t_qodo_archive_must_be_whole():  # cold M3 R2-5
+    s = mission()
+    qpath = f"reviews/qodo/PR-{PR}/DISPOSITIONS.md"
+    rows = default_qodo_rows(s)
+    start(base=s["head"])
+    commit("review: qodo fetch 2, table not updated", dict(qodo_archive(2, QODO_FINDINGS, s["c2"]),
+                                                          **{qpath: qodo_dispositions(rows, reviewed=s["c1"])}))
+    publish()
+    r = gate()
+    failed(r, "dispositions", f"{qpath} says fetches: 1, but the archived fetches are 1, 2",
+           f"{qpath} says reviewed: {s['c1']}, but the last fetch reviewed {s['c2']}")
+    assert verdict(r) == "gate: FAIL hold reasons none; fix first: dispositions", out(r)
+    commit("review: table for fetches 1 and 2", {qpath: qodo_dispositions(rows, reviewed=s["c2"], fetches="1, 2")})
+    publish()
+    assert gate().returncode == 0
+    # deleting a fetch would delete its findings: the archive must run 1..k
+    commit("review: drop fetch 1", {p: None for p in qodo_archive(1, QODO_FINDINGS, s["c1"])})
+    publish()
+    r = gate()
+    failed(r, "dispositions", f"reviews/qodo/PR-{PR}/ holds fetches 2, not 1 to 1: restore the missing fetch",
+           f"{qpath} says fetches: 1, 2, but the archived fetches are 2")
+
+
+def t_qodo_severity_must_parse():  # cold M3 R2-9
+    start()
+    c1 = commit("feat", {"app.py": APP1})
+    files = qodo_archive(1, QODO_FINDINGS, c1)
+    comment = f"reviews/qodo/PR-{PR}/1/issue-comment-7001.md"
+    files[comment] = re.sub(r'<img src="https://img\.shields\.io/badge/[^\n]*\n', "", files[comment])
+    assert [f["severity"] for f in R.qodo_findings(files[comment])] == [None, None]
+    files.update({"reviews/cold/M3/DISPOSITIONS.md": cold_dispositions([]),
+                  f"reviews/qodo/PR-{PR}/DISPOSITIONS.md": qodo_dispositions(
+                      [("1", "Remediation recommended", "Crash when the name is missing", "app.py",
+                        "dismissed: callers always pass a name"),
+                       ("2", "Informational", "Greeting text is hard-coded", "app.py", "dismissed: by design")],
+                      reviewed=c1)})
+    commit("records", files)
+    publish()
+    r = gate()
+    failed(r, "dispositions", f'severity did not parse: read the comment ({comment}: #1 "Crash when the name is missing", '
+                              '#2 "Greeting text is hard-coded"; the records can\'t fix this')
 
 def t_qodo_dispositions():
     mission(qodo="off", qodo_file=False)

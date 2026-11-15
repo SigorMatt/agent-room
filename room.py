@@ -1695,11 +1695,14 @@ def parse_cold_report(path, kind, number, text):
 def review_records(root, sha, mission, pr):
     """The mission's cold records and the PR's Qodo records, as committed at sha."""
     paths = zsplit(git("ls-tree", "-r", "--name-only", "-z", sha, "--", "reviews", cwd=root).stdout)
-    cold, fetches = [], {}
+    cold, fetches, dirs = [], {}, set()
     for p in sorted(paths):
         m = re.fullmatch(rf"reviews/cold/{re.escape(mission)}/(round|scoped)-(\d+)\.md", p)
         if m:
             cold.append(parse_cold_report(p, m.group(1), int(m.group(2)), blob(root, sha, p) or ""))
+        m = re.fullmatch(rf"reviews/qodo/PR-{pr}/(\d+)/.+", p)
+        if m:
+            dirs.add(int(m.group(1)))  # every archived fetch directory, with a Code Review comment or not
         m = re.fullmatch(rf"reviews/qodo/PR-{pr}/(\d+)/issue-comment-(\d+)\.md", p)
         if m:
             fetches.setdefault(int(m.group(1)), []).append((int(m.group(2)), p))
@@ -1714,7 +1717,7 @@ def review_records(root, sha, mission, pr):
                              "findings": qodo_findings(text), "header": header_total(text)})
     qodo_text = blob(root, sha, f"reviews/qodo/PR-{pr}/DISPOSITIONS.md")
     return {"mission": mission, "pr": pr, "cold": cold, "qodo": archived[-1] if archived else None,
-            "qodo_fetches": archived,
+            "qodo_fetches": archived, "qodo_dirs": sorted(dirs),
             "cold_path": f"reviews/cold/{mission}/DISPOSITIONS.md",
             "cold_dispositions": blob(root, sha, f"reviews/cold/{mission}/DISPOSITIONS.md"),
             "qodo_path": f"reviews/qodo/PR-{pr}/DISPOSITIONS.md",
@@ -1883,7 +1886,8 @@ def check_dispositions(g, root, head, rec, ledger_text, room):
     elif text is None and switch == "on":
         reasons.append((f"{path} is missing (QODO_REVIEW=on)", None))
     if text is not None:
-        mode = machine_lines(text).get("qodo")
+        lines = machine_lines(text)
+        mode = lines.get("qodo")
         if mode not in ("on", "off", "no first review"):
             reasons.append((f"{path}: its 'qodo:' line must be on, off or no first review", None))
         rows = find_table(text, ("#", "finding", "disposition"), ("severity", "file"))
@@ -1909,12 +1913,32 @@ def check_dispositions(g, root, head, rec, ledger_text, room):
             if missing:
                 fetched = ", ".join(str(f["fetch"]) for f in rec["qodo_fetches"])
                 reasons.append((f"{path} has no row for: {'; '.join(missing)} (archived fetches {fetched})", None))
-    # QODO-REVIEW rule 5: the header's open count must agree with the open findings that parse
+            # the archive is whole: fetches 1..k as the tool numbers them, as the table says it was built from
+            dirs = rec["qodo_dirs"]
+            if dirs != list(range(1, len(dirs) + 1)):
+                reasons.append((f"reviews/qodo/PR-{rec['pr']}/ holds fetches {', '.join(map(str, dirs))}, not 1 to "
+                                f"{len(dirs)}: restore the missing fetch", None))
+            listed = [int(x) for x in re.findall(r"\d+", lines.get("fetches", ""))]
+            if listed != dirs:
+                reasons.append((f"{path} says fetches: {lines.get('fetches') or '(none)'}, but the archived fetches "
+                                f"are {', '.join(map(str, dirs))}", None))
+            if lines.get("reviewed", "").lower() != (q["reviewed"] or ""):
+                reasons.append((f"{path} says reviewed: {lines.get('reviewed') or '(none)'}, but the last fetch "
+                                f"reviewed {q['reviewed'] or '(no marker)'}", None))
+    # QODO-REVIEW rule 5: the header's open count must agree with the open findings that parse; and every
+    # finding has a severity. Either failure means Qodo's format moved: the fix is a patch to room.py's
+    # parser, not a change to the records
+    patch = "the records can't fix this: room.py's Qodo parser needs a patch"
     for f in rec["qodo_fetches"]:
         open_ = sum(1 for x in f["findings"] if not x["resolved"])
         if f["header"] is None or f["header"] != open_:
             counted = "no header counts" if f["header"] is None else f"the header counts {f['header']} open"
-            reasons.append((f"Qodo comment did not parse: read it ({f['path']}: {counted}, {open_} parsed open)",
+            reasons.append((f"Qodo comment did not parse: read it ({f['path']}: {counted}, {open_} parsed open; "
+                            f"{patch})", None))
+        unrated = [f"#{x['number']} \"{x['title']}\"" for x in f["findings"]
+                   if (x["severity"] or "").lower() not in SEVERITY_RANK]
+        if unrated:
+            reasons.append((f"severity did not parse: read the comment ({f['path']}: {', '.join(unrated)}; {patch})",
                             None))
     if reasons:
         g.fail("dispositions", reasons)
