@@ -2216,6 +2216,7 @@ def gh_pages(path, key):
 
 
 CHECKS_GRACE = 600  # seconds a new HEAD with workflows may have no runs before "no checks ran" passes
+LATE_LIMIT = 3600  # seconds a required context may stay unreported while other checks are pending
 WORKFLOW = glob_regex(".github/workflows/*.y*ml")
 
 
@@ -2255,18 +2256,21 @@ def check_checks(g, root, head, pr_updated=None):
                                        cwd=root).stdout) if WORKFLOW.fullmatch(p)]
     no_actions = bool(workflows) and not any((r.get("app") or {}).get("slug") == "github-actions"
                                              for r in runs.values())
+    changed = int(git_out("log", "-1", "--format=%ct", head, cwd=root))
+    try:
+        changed = max(changed, calendar.timegm(time.strptime(pr_updated or "", "%Y-%m-%dT%H:%M:%SZ")))
+    except ValueError:
+        pass
+    age = int(time.time()) - changed  # since the later of HEAD's commit and the PR's last update
     if no_actions:
-        changed = int(git_out("log", "-1", "--format=%ct", head, cwd=root))
-        try:
-            changed = max(changed, calendar.timegm(time.strptime(pr_updated or "", "%Y-%m-%dT%H:%M:%SZ")))
-        except ValueError:
-            pass
-        age = int(time.time()) - changed
         if age < CHECKS_GRACE:
             g.wait("checks", f"no GitHub Actions runs for HEAD yet, though it has {len(workflows)} workflow(s); "
                              f"last change {max(age, 0)}s ago (waiting up to {CHECKS_GRACE // 60} minutes)")
             return
-    if pending:  # a required context that hasn't reported may be late while others still run
+    if pending and missing and age >= LATE_LIMIT:  # late for an hour: it isn't coming
+        g.fail("checks", [(f"required but missing: {', '.join(missing)}, still not reported {LATE_LIMIT // 60} minutes "
+                           f"after the last change (pending: {', '.join(pending)})", 3)])
+    elif pending:  # a required context that hasn't reported may be late while others still run
         g.wait("checks", f"pending: {', '.join(pending)}" + (f"; not reported yet: {', '.join(missing)}" if missing else ""))
     elif missing:
         g.fail("checks", [(f"required but missing: {', '.join(missing)}", 3)])

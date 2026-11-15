@@ -1122,6 +1122,38 @@ def t_checks():
 
 
 
+
+def t_late_required_context_holds_after_an_hour():  # cold M3 S1-5
+    def run(name, status):
+        return {"id": 1, "name": name, "status": status, "conclusion": None, "check_suite": {"id": 1},
+                "app": {"slug": "github-actions"}}
+
+    gh_cfg(protection={"required_status_checks": {"contexts": ["ci"]}})
+    try:
+        s = mission()
+        day_ago = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - 86400))
+        set_pr(s["head"], updated_at=day_ago)
+        gh_cfg(check_runs={s["head"]: [run("deploy-preview", "waiting")]})
+        r = gate()
+        assert r.returncode == 3 and "pending: deploy-preview; not reported yet: ci" in line(r, "checks"), \
+            "HEAD's commit is new, so it still waits\n" + out(r)
+        old = f"@{int(time.time()) - 86400} +0000"
+        EXTRA_GIT_ENV.update(GIT_AUTHOR_DATE=old, GIT_COMMITTER_DATE=old)
+        try:
+            s = mission()
+        finally:
+            EXTRA_GIT_ENV.clear()
+        set_pr(s["head"], updated_at=day_ago)
+        gh_cfg(check_runs={s["head"]: [run("deploy-preview", "waiting")]})
+        r = gate()
+        failed(r, "checks", "required but missing: ci, still not reported 60 minutes after the last change "
+                            "(pending: deploy-preview)")
+        assert verdict(r) == "gate: FAIL hold reasons 3", out(r)
+        set_pr(s["head"], updated_at=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()))
+        assert gate().returncode == 3, "a fresh PR update restarts the wait"
+    finally:
+        gh_reset()
+
 def t_checks_wait_while_new_head_has_workflows_but_no_runs():  # cold M3 R1-10
     assert R.WORKFLOW.fullmatch(".github/workflows/ci.yml") and R.WORKFLOW.fullmatch(".github/workflows/x.yaml")
     assert not R.WORKFLOW.fullmatch(".github/workflows/sub/ci.yml") and not R.WORKFLOW.fullmatch(".github/ci.yml")
