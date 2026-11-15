@@ -2054,8 +2054,13 @@ def judge(root, head, label, cell, top, file_cell, ledger, reported=None, room=N
         return [(f"{label} waits on an open owner decision ({m.group(1)})", 1)]
     if top and form in ("dismissed", "deferred"):
         return [(f"{label} is top severity, so only a fix or an owner decision closes it, not '{form}'", 1)]
-    if top and form == "owner" and room is not None and finding and not room.answers(m.group(2), finding):
+    owner_check = top and form == "owner" and room is not None and finding
+    answer, edited = room.answers(m.group(2), finding) if owner_check else (None, False)
+    if owner_check and not answer:
         n, what = m.group(2).rsplit("-", 1)[1], finding[2]
+        if edited:
+            return [(f"{label} cites {m.group(2)}, but the lead's ESCALATION-{n} or MERGE-HOLD-{n} about {what} was "
+                     f"edited after {m.group(2)}: post a new escalation or hold", 1)]
         return [(f"{label} cites {m.group(2)}, but {room.where()} has no trusted {m.group(2)} answering the lead's "
                  f"earlier ESCALATION-{n} or MERGE-HOLD-{n} about {what}", 1)]
     if form == "deferred" and mission:
@@ -2324,8 +2329,11 @@ class RoomLog:
         return f"room {self.number}" if self.number else "the room (none is recorded in PLAYBOOK.md or MISSIONS.md)"
 
     def messages(self):
+        """Trusted messages, each with "edited": its updated_at (an edit keeps the comment's id)."""
         if self._messages is None:
-            self._messages = [m for m in map(parse, comments(self.number)) if trusted(m)] if self.number else []
+            self._messages = [dict(m, edited=c.get("updated_at") or m["at"])
+                              for c in (comments(self.number) if self.number else [])
+                              for m in [parse(c)] if trusted(m)]
         return self._messages
 
     def decisions(self, kind):
@@ -2335,10 +2343,17 @@ class RoomLog:
     def decision(self, kind):
         return next(iter(self.decisions(kind)), None)
 
+    @staticmethod
+    def before(ask, decision):
+        """Whether ASK (a hold or escalation) stood as it is now when DECISION was posted: posted before it
+        and not edited since."""
+        return ask["id"] < decision["id"] and ask["edited"] <= decision["at"]
+
     def answers(self, decision, finding):
-        """The trusted DECISION-n that answers the lead's earlier ESCALATION-n or MERGE-HOLD-n naming FINDING:
-        ("cold", M<k>, ID) or ("qodo", PR, title). A message names it by its cold ID, by the full Qodo title,
-        or by the dispositions file the finding sits in, as v1's "point to files instead of pasting" asks."""
+        """(the trusted DECISION-n that answers the lead's earlier ESCALATION-n or MERGE-HOLD-n naming FINDING,
+        or None; whether such a message exists but was edited after the decision). FINDING is ("cold", M<k>,
+        ID) or ("qodo", PR, title). A message names it by its cold ID, by the full Qodo title, or by the
+        dispositions file the finding sits in, as v1's "point to files instead of pasting" asks."""
         n = decision.rsplit("-", 1)[1]
         kind, where, what = finding
         record = f"reviews/cold/{where}/DISPOSITIONS.md" if kind == "cold" else f"reviews/qodo/PR-{where}/DISPOSITIONS.md"
@@ -2350,9 +2365,12 @@ class RoomLog:
                 return re.search(rf"(?<![\w-]){re.escape(what)}(?![\w-])", text)
             return re.search(rf"(?<!\w){re.escape(title_key(what))}(?!\w)", title_key(text))
 
-        asks = [m["id"] for m in self.messages() if m["role"] == "lead" and names(m["text"])
+        asks = [m for m in self.messages() if m["role"] == "lead" and names(m["text"])
                 and message_kind(m["text"]) in (f"ESCALATION-{n}", f"MERGE-HOLD-{n}")]
-        return next((d for d in self.decisions(decision) if asks and min(asks) < d["id"]), None)
+        decisions = self.decisions(decision)
+        answer = next((d for d in decisions if any(self.before(e, d) for e in asks)), None)
+        edited = answer is None and any(e["id"] < d["id"] for e in asks for d in decisions)
+        return answer, edited
 
     def holds(self, kind):
         """The lead's trusted messages of KIND (MERGE-HOLD-n)."""
@@ -2417,17 +2435,22 @@ def check_sensitive(g, root, head, playbook, a, room):
         g.fail("sensitive paths", [(f"on the merge-hold list: {held}", 5)])
         return
     # the decision must answer this PR's hold: the lead's MERGE-HOLD-n (same n) for reason 5 and these
-    # paths, posted before it
+    # paths, posted before it and not edited since (an edit keeps the comment's id)
     n = a.decision.rsplit("-", 1)[1]
     holds = room.holds(f"MERGE-HOLD-{n}")
     lacking = [hold_problems(m["text"], a.pr, paths) for m in holds]
-    hold = holds[lacking.index([])] if [] in lacking else None
-    decision = next((d for d in room.decisions(a.decision) if hold and d["id"] > hold["id"]), None)
-    if decision:
-        g.ok("sensitive paths", f"{held}: allowed by {a.decision} (comment #{decision['id']}), answering "
-                                f"MERGE-HOLD-{n} (comment #{hold['id']})")
+    whole = [h for h, problems in zip(holds, lacking) if not problems]
+    decisions = room.decisions(a.decision)
+    pair = next(((h, d) for h in whole for d in decisions if room.before(h, d)), None)
+    if pair:
+        g.ok("sensitive paths", f"{held}: allowed by {a.decision} (comment #{pair[1]['id']}), answering "
+                                f"MERGE-HOLD-{n} (comment #{pair[0]['id']})")
         return
-    if hold:
+    edited = next((h for h in whole for d in decisions if h["id"] < d["id"]), None)
+    hold = whole[0] if whole else None
+    if edited:
+        missing = f"MERGE-HOLD-{n} (comment #{edited['id']}) edited after {a.decision}: post a new hold"
+    elif hold:
         missing = f"no trusted {a.decision} from the architect or Matthew after MERGE-HOLD-{n} (comment #{hold['id']})"
     elif holds:  # safe to show the form: a decision must still come after a new hold
         missing = (f"no MERGE-HOLD-{n} for this hold: the lead's doesn't name {', '.join(min(lacking, key=len))} "

@@ -1373,6 +1373,53 @@ def t_allow_hold():
     gh_reset()
 
 
+
+def edit_comment(cid, old, new, updated_at="2099-01-01T00:00:00Z"):
+    """Edit a room comment in place in the fake GitHub, as the web UI does: same id, new body and updated_at."""
+    with open(ENV["FAKE_GH_DB"]) as f:
+        db = json.load(f)
+    for issue in db["repos"]["SigorMatt/pet"]["issues"].values():
+        for c in issue["comments"]:
+            if c["id"] == cid:
+                assert old in c["body"], c["body"]
+                c["body"], c["updated_at"] = c["body"].replace(old, new), updated_at
+    with open(ENV["FAKE_GH_DB"], "w") as f:
+        json.dump(db, f)
+
+
+def say_id(*args, **env):
+    return int(re.search(r"sent #(\d+)", room("say", *args, check=True, **env).stdout).group(1))
+
+
+def t_edited_hold_or_escalation_doesnt_count():  # qodo PR #7: An edited hold releases paths nobody approved
+    s = mission(extra={".github/workflows/ci.yml": "on: push\n"})
+    gh_cfg(check_runs={s["head"]: [{"id": 1, "name": "ci", "status": "completed", "conclusion": "success",
+                                    "app": {"slug": "github-actions"}}]})
+    path = ".github/workflows/ci.yml"
+    try:
+        hold = say_id("1", "lead", f"MERGE-HOLD-90: PR #{PR}, reason 5 (sensitive paths): lib/old.py")
+        room("say", "1", "architect", "DECISION-90: merge lib/old.py", check=True)
+        r = gate("--allow-hold", "5", "--decision", "DECISION-90")
+        failed(r, "sensitive paths", f"the lead's doesn't name {path}")
+        edit_comment(hold, "lib/old.py", path)
+        r = gate("--allow-hold", "5", "--decision", "DECISION-90")
+        failed(r, "sensitive paths", f"MERGE-HOLD-90 (comment #{hold}) edited after DECISION-90: post a new hold")
+        assert verdict(r) == "gate: FAIL hold reasons 5", out(r)
+        edit_comment(hold, path, path, updated_at="2000-01-01T00:00:00Z")  # an edit before the decision counts
+        assert gate("--allow-hold", "5", "--decision", "DECISION-90").returncode == 0
+    finally:
+        gh_reset()
+    mission(cold_rows=lambda s: [("R1-1", "high", "app.py", "owner decision: not a bug, Matthew (DECISION-91)"),
+                                 ("R1-2", "low", "app.py", "dismissed: checked by the caller")])
+    ask = say_id("1", "lead", "ESCALATION-91: cold R1-2 (low): keep it?")
+    room("say", "1", "architect", "DECISION-91: keep it", check=True)
+    failed(gate(), "dispositions", "cold R1-1 cites DECISION-91, but room 1 has no trusted DECISION-91")
+    edit_comment(ask, "R1-2 (low)", "R1-1 (high)")
+    r = gate()
+    failed(r, "dispositions", "cold R1-1 cites DECISION-91, but the lead's ESCALATION-91 or MERGE-HOLD-91 about R1-1 "
+                              "was edited after DECISION-91: post a new escalation or hold")
+    assert verdict(r) == "gate: FAIL hold reasons 1", out(r)
+
 def t_hold_paths_are_whole_tokens():  # cold M3 R2-10, S1-2
     hp = R.hold_problems
     assert hp("MERGE-HOLD-20: PR #12, reason 5: lib/tests/test_x.py", 12, ["tests/test_x.py"]) == ["tests/test_x.py"]
