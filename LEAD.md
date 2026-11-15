@@ -329,7 +329,7 @@ At the end of a mission, or early at a step boundary when your context gets heav
 
 ## 7. Phase end
 
-A lead that joins at step `done` comes here too, and finishes only what is missing: reconcile's hint says whether the room was closed.
+A lead that joins at step `done` comes here too, and finishes only what is missing. If `gh api repos/OWNER/NAME/issues/N --jq .state` prints `closed`, skip step 3; if the room then has no lead `DONE`, post it with `say`.
 
 1. Check that every criterion of the phase is covered by a merged mission, and every open ledger item targets the next phase's backlog or is marked won't fix by Matthew. If not: plan another mission (section 4), or escalate.
 2. Mark the phase done:
