@@ -32,6 +32,12 @@ Applied without asking. Stop and ask only if the lead cannot merge PRs at all, o
 | Resuming a builder doesn't work | Fresh builder with the full brief |
 | A waiter dies when the machine idles | Rely on the watchdog and scheduled check-ins |
 
+## Owner to-dos (Matthew)
+
+| Since | To-do | Steps | Status |
+| --- | --- | --- | --- |
+| 2026-11-15 | Buy a paid ntfy.sh plan, so buzzes stop failing on the shared-IP limit (finding M) | [Handle ntfy limit errors](../manual/handle-ntfy-limit-errors.md), step 3: create an access token, add it to the `agent-room` environment as a network secret for `ntfy.sh` (or as `ROOM_NTFY_TOKEN`), then [test the buzz](../manual/test-the-buzz.md). Before M7 | Open |
+
 ## Platform check
 
 Results of the eleven assumptions in `v1.md` ("To verify"). Evidence lives in issue #4 and in the commits of the PR that closes M1.
@@ -83,6 +89,7 @@ Results of the eleven assumptions in `v1.md` ("To verify"). Evidence lives in is
 | 2026-11-14 | The protocols, briefs and thin skill move from the core milestone to M5, after the code they describe | Keeps each milestone PR reviewable; `v1.md` stays the authority meanwhile |
 | 2026-11-14 | Mission PRs merge with a merge commit, not a squash | Keeps every `fixed in <sha>` reachable from `main` after the branch is deleted |
 | 2026-11-15 | The lease is released at `HANDOFF` (`handoff` records the step and cursor, posts `HANDOFF`, then releases), `PAUSED`, `STOPPED` and `DONE`; `lease take` fails while another session holds it, unless `--takeover`, which only a lead Matthew starts after `LEAD-SILENT` uses | Makes "only one successor can win the lease" hold for launches minutes apart, not only for simultaneous pushes (cold M2 R1-3) |
+| 2026-11-15 | Matthew buys a paid ntfy plan (owner to-do above) | Finding M: the free plan loses buzzes on shared cloud IPs |
 
 ## Assumptions while Matthew was away (from 2026-11-15 01:24)
 
