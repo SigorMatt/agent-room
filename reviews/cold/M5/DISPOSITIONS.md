@@ -24,3 +24,17 @@
 | R1-20 | low | briefs/auditor.md | Auditor rejects the reader's cold caught form | fixed in 3ee7f36 | Accepts yes (<ID>); docs checked by tests/test_docs.py |
 | R1-21 | low | briefs/planner.md | Planner runs tests in the lead's checkout | fixed in 89a3982 | Uses its own fresh clone; docs checked by tests/test_docs.py |
 | R1-22 | low | ARCHITECT.md | A state-unreadable alarm is treated as a dead lead | fixed in 3d78e06 | Restore the state branch first (c570229); docs checked by tests/test_docs.py |
+| R2-1 | high | LEAD.md | Back to Build after the PR exists has no path | fixed in 228f343 | Keeps the PR; granted extra cold rounds (round 3 on) and Qodo rounds on the same PR; cold brief round-2-and-later variant; docs checked by tests/test_docs.py |
+| R2-2 | medium | ARCHITECT.md | Merge as is offered for failing checks (reason 3) | fixed in 5f2ef19 | Reason 3 offers back to Build, fix or relax the check, or drop; docs checked by tests/test_docs.py |
+| R2-3 | medium | LEAD.md | The QODO-VALUE draft is lost at a takeover | fixed in d31f352 | Draft line committed on the state branch, finalised at close; docs checked by tests/test_docs.py |
+| R2-4 | medium | ARCHITECT.md | A pipeline fault can't reach the stuck lead | fixed in 6f8ac2a | Patched release, pin bump, DECISION to re-download; LEAD.md re-downloads (f75c4c8); docs checked by tests/test_docs.py |
+| R2-5 | medium | ARCHITECT.md | A foreground-builder lead can't check in before a takeover; pushes skip the lease | fixed in 10c3a04 | Recent push or STATUS earns one more check-in; LEAD.md lease check before every push, STATUS before each foreground builder (35760f3); docs checked by tests/test_docs.py |
+| R2-6 | medium | LEAD.md | Merge as is after a long hold still escalates the budget | fixed in 4ab2860 | Budget only during Build and rounds; merge as is restarts the clock; ARCHITECT.md in 6f8ac2a; docs checked by tests/test_docs.py |
+| R2-7 | medium | LEAD.md | Weakened tests aren't a lead-judged hold (B-4) | fixed in b1882e3 | Gate step holds a cold finding of weakened tests under reason 5 naming the files; hold list in 6e8d573; docs checked by tests/test_docs.py |
+| R2-8 | low | LEAD.md | A joining lead handles a DECISION off the mission branch | fixed in c45150d | Switches to the mission branch first; docs checked by tests/test_docs.py |
+| R2-9 | low | ARCHITECT.md | state init restore restarts the lead records | fixed in 88bbbfd | Re-push from any copy first; state init last, with a DECISION to rebuild records and the counter; docs checked by tests/test_docs.py |
+| R2-10 | low | LEAD.md | Close repeats its line and STATUS | fixed in d31f352 | Close does only what is missing; docs checked by tests/test_docs.py |
+| R2-11 | low | LEAD.md | Phase end can't tell whether the room was closed | fixed in 6be51a3 | Checks the issue state; docs checked by tests/test_docs.py |
+| R2-12 | low | LEAD.md | A successor task that asks stays armed | fixed in 2963109 | Disabled, never deleted, before NEXT-LEAD-NEEDED; docs checked by tests/test_docs.py |
+| R2-13 | low | LEAD.md | A dropped mission is resumed | fixed in ca1d99e | Row marked dropped, PR closed, never resumed; docs checked by tests/test_docs.py |
+| R2-14 | low | LEAD.md | A lead joining at gate misses reason 6 | fixed in b1882e3 | The gate step checks reason 6 from the two PRs' dispositions; docs checked by tests/test_docs.py |
