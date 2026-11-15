@@ -1456,14 +1456,16 @@ def qodo_findings(text):
 
 
 def qodo_titles(fetches):
-    """{title key: {title, severity, first, fetch}} over every archived fetch: the strictest severity any
-    finding of that title had, and the reviewed commit of the first fetch that holds the title."""
+    """{title key: {title, severity, first}} over every archived fetch: the strictest severity any finding
+    of that title had, and the reviewed commit of the first fetch that shows it open (None when no fetch
+    does: then a fix has no lower bound but the PR's own commits)."""
     out = {}
     for f in fetches:
         for x in f["findings"]:
-            t = out.setdefault(x["key"], {"title": x["title"], "severity": x["severity"], "first": f["reviewed"],
-                                          "fetch": f["fetch"]})
+            t = out.setdefault(x["key"], {"title": x["title"], "severity": x["severity"], "first": None})
             t["severity"] = stricter(x["severity"], t["severity"])
+            if not x["resolved"] and t["first"] is None:
+                t["first"] = f["reviewed"]
     return out
 
 
@@ -1801,7 +1803,7 @@ def row_files(cell):
 
 def judge(root, head, label, cell, top, file_cell, ledger, reported=None, room=None, finding=None):
     """What is wrong with one dispositions row: [(text, hold reason or None)]. REPORTED is the commit the
-    finding was reported against: a cold report's covers:, or the first Qodo fetch holding the title.
+    finding was reported against: a cold report's covers:, or the first Qodo fetch showing the title open.
     ROOM (a RoomLog) answers whether an owner decision on a top-severity row is really Matthew's. LEDGER is
     ledger_entries(); FINDING names the finding for a deferral's ledger row (see ledger_problems)."""
     form, m = parse_disposition(cell)

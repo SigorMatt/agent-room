@@ -176,7 +176,7 @@ def post_raw(body, login="SigorMatt"):
 APP1 = "def greet(name):\n    return 'hi ' + name\n"
 APP2 = "def greet(name):\n    return 'hi ' + (name or 'there')\n"
 GREY = '<img src="https://www.qodo.ai/wp-content/uploads/2025/11/light-grey-line.svg" height="10%" alt="Grey Divider">'
-QODO_FINDINGS = [("Action required", "Crash when the name is missing", True),
+QODO_FINDINGS = [("Action required", "Crash when the name is missing", False),  # open at C1, fixed in C2
                  ("Informational", "Greeting text is hard-coded", False)]
 
 
@@ -738,6 +738,37 @@ def t_deferral_needs_its_own_open_ledger_row():  # cold M3 R1-17
     assert R.ledger_problems(entries["L-7"], ("qodo", "1", "Use <path> placeholders"), "M4") != []
     assert R.ledger_problems(dict(entries["L-7"], source="cold M3 R1-20"), ("cold", "M3", "R1-2"), "M4") != []
 
+
+def t_qodo_fix_bound_is_the_first_fetch_showing_it_open():  # cold M3 R2-3
+    crash = "Crash when the name is missing"
+    resolved = [("Action required", crash, True), ("Informational", "Greeting text is hard-coded", False)]
+    start()
+    c1 = commit("feat", {"app.py": APP1})
+    c2 = commit("fix: greet without a name", {"app.py": APP2})  # pushed before Qodo's first fetch
+
+    def records(fetches, rows):
+        files = {"reviews/cold/M3/round-1.md": cold_report(1, c2), "reviews/cold/M3/DISPOSITIONS.md": cold_dispositions([])}
+        for k, (findings, reviewed) in enumerate(fetches, 1):
+            files.update(qodo_archive(k, findings, reviewed))
+        files[f"reviews/qodo/PR-{PR}/DISPOSITIONS.md"] = qodo_dispositions(
+            rows, reviewed=fetches[-1][1], fetches=", ".join(str(k) for k in range(1, len(fetches) + 1)))
+        return files
+
+    rows = [("1", "Action required", crash, "app.py", f"fixed in {c2[:7]}"),
+            ("2", "Informational", "Greeting text is hard-coded", "app.py", "dismissed: by design")]
+    commit("review: qodo fetch 1 is the re-review of C2, the finding already resolved", records([(resolved, c2)], rows))
+    publish()
+    r = gate()
+    assert r.returncode == 0, out(r)
+    rows[0] = ("1", "Action required", crash, "app.py", f"fixed in {c1[:7]}")  # no fetch shows it open: no bound
+    commit("review: cite C1", records([(resolved, c2)], rows))
+    publish()
+    assert gate().returncode == 0
+    commit("review: fetch 1 at C1 shows it open, fetch 2 at C2 resolved",
+           records([(QODO_FINDINGS, c1), (resolved, c2)], rows))
+    publish()
+    failed(gate(), "dispositions", f'Qodo #1 "{crash}": fixed in {c1[:7]}, which the review that found it had already seen')
+
 def t_disposition_failures():
     g("checkout", "-q", "-B", "side", "origin/main")
     side = commit("elsewhere", {"other.py": "x = 1\n"})
@@ -827,7 +858,7 @@ def t_qodo_counts_must_agree():  # cold M3 R1-7
     c1 = commit("feat", {"app.py": APP1})
     drifted = qodo_comment(QODO_FINDINGS, c1).replace("<summary>  1.  ", "<summary><b>1.</b> ").replace(
         "<summary>  2.  ", "<summary><b>2.</b> ")
-    assert R.header_total(drifted) == 1 and R.qodo_findings(drifted) == []
+    assert R.header_total(drifted) == 2 and R.qodo_findings(drifted) == []
     files = qodo_archive(1, QODO_FINDINGS, c1)
     files[f"reviews/qodo/PR-{PR}/1/issue-comment-7001.md"] = drifted
     files.update({"reviews/cold/M3/DISPOSITIONS.md": cold_dispositions([]),
@@ -836,12 +867,12 @@ def t_qodo_counts_must_agree():  # cold M3 R1-7
     publish()
     r = gate()
     failed(r, "dispositions", f"Qodo comment did not parse: read it (reviews/qodo/PR-{PR}/1/issue-comment-7001.md: "
-                              "the header counts 1 open, 0 parsed open)")
-    no_counts = qodo_comment(QODO_FINDINGS, c1).replace("<code>🐞 Bugs (1)</code>  <code>📘 Rule violations (0)</code>", "")
+                              "the header counts 2 open, 0 parsed open)")
+    no_counts = qodo_comment(QODO_FINDINGS, c1).replace("<code>🐞 Bugs (2)</code>  <code>📘 Rule violations (0)</code>", "")
     assert R.header_total(no_counts) is None
     commit("records: no header counts", {f"reviews/qodo/PR-{PR}/1/issue-comment-7001.md": no_counts})
     publish()
-    failed(gate(), "dispositions", "Qodo comment did not parse: read it", "no header counts, 1 parsed open")
+    failed(gate(), "dispositions", "Qodo comment did not parse: read it", "no header counts, 2 parsed open")
 
 
 def t_an_archived_qodo_review_needs_qodo_on():  # cold M3 R1-6
