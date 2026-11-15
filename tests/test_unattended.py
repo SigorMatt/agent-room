@@ -394,11 +394,17 @@ def t_watchdog_quiet_when_paused_stopped_or_done():
     set_state("step=build again", hours=5)
     for status in ("paused", "stopped", "done"):
         set_state(f"status={status}", hours=5)
+        # cold M4 R2-4: written but the lease still held: the lead died before its post and release, so alarm
+        r = watchdog()
+        assert r.returncode == 0 and "alarm: no progress for 5h" in r.stdout, out(r)
+        assert f"note: status is {status}, but L1 still holds the lease, so it counts as running" in r.stdout
+        age_alarms()
+        room("lease", "release", check=True)
         n, before = len(alarms()), state_sha()
         r = watchdog()
-        assert r.returncode == 0 and r.stdout.strip() == f"quiet: status is {status}", out(r)
+        assert r.returncode == 0 and r.stdout.strip() == f"quiet: status is {status} and the lease is released", out(r)
         assert len(alarms()) == n and state_sha() == before
-    set_state("status=running", hours=5)
+        room("lease", "take", check=True)  # which sets status back to running
     r = watchdog()
     assert r.returncode == 0 and "alarm" in r.stdout, out(r)
 
@@ -411,7 +417,7 @@ def t_pause_flow():
     assert "[buzz sent]" in r.stdout, out(r)
     assert "released by L1" in room("lease", "release", check=True).stdout
     assert block()["lease_session"] == "none" and block()["status"] == "paused"
-    assert watchdog().stdout.strip() == "quiet: status is paused"
+    assert watchdog().stdout.strip() == "quiet: status is paused and the lease is released"
     gen = int(block()["lease_generation"])
     # cold M4 R1-2: the next lead's plain take sets status back to running, in the same write
     before = state_sha()
@@ -441,11 +447,13 @@ def t_watchdog_status_values():
     for value in ("PAUSED", "Stopped", "done"):
         edit_state("MISSIONS.md", lambda t, v=value: re.sub(r"^status: .*$", f"status: {v}", t, count=1, flags=re.M),
                    hours=5)
+        room("lease", "release", check=True)
         n = len(alarms())
         r = watchdog()
-        assert r.returncode == 0 and r.stdout.strip() == f"quiet: status is {value}", (value, out(r))
+        assert r.returncode == 0 and r.stdout.strip() == f"quiet: status is {value} and the lease is released", \
+            (value, out(r))
         assert len(alarms()) == n
-    set_state("status=running", hours=5)
+        room("lease", "take", check=True)
 
 
 def t_watchdog_quiet_while_waiting_for_owner():

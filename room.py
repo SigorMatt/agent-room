@@ -2345,7 +2345,11 @@ def halted(values):
 def quiet_reason(a, values, playbook):
     """Why the watchdog stays quiet whatever the progress, or None."""
     if halted(values):
-        return f"status is {status_of(values)}"
+        holder, _ = lease_of(values)
+        if holder == "none":  # the lead posted PAUSED, STOPPED or DONE and released the lease
+            return f"status is {status_of(values)} and the lease is released"
+        # written, but the lease is still held: the lead may have died before its post and release
+        print(f"note: status is {status_of(values)}, but {holder} still holds the lease, so it counts as running")
     if (values.get("waiting_for_owner") or "").strip().lower() == "yes":
         return "waiting_for_owner is yes"
     step = values.get("step") or "none"
