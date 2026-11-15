@@ -35,7 +35,7 @@
 ## What you should see
 
 - The lead's first line: "Operating as lead under agent-room `<version>`."
-- `LEAD ONLINE` in the room within about 10 minutes. The lead picks up where the last one stopped.
+- `LEAD ONLINE` in the room within about 10 minutes. The lead picks up where the last one stopped. After `PAUSED` or `STOPPED`, it carries on, and doesn't act on the old `PAUSE` or `STOP` again.
 
 ## If you don't
 
