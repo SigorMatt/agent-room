@@ -268,6 +268,8 @@ This follows `~/agent-room/docs/QODO-REVIEW.md` ([`docs/QODO-REVIEW.md`](docs/QO
    | 6 | `gate: FAIL hold reasons …` | Fix what is yours (a missing row; uncovered code needs a scoped review, `step="scoped <s> for gate"`; a failing check gets one builder attempt). Hold for what stands |
    | 5 | lease lost | Stand down |
 
+   A `FAIL` the records can't fix is a pipeline fault: its line says `the records can't fix this`, as for "Qodo comment did not parse". Never edit records to get past it. Escalate it (section 8), quoting the line, then record `waiting_for_owner=yes step="waiting for owner: gate"` and do nothing else on that PR.
+
 3. Merge:
    ```bash
    python3 room.py merge <PR> --sha <sha>
@@ -343,7 +345,7 @@ A lead that joins at step `done` comes here too, and finishes only what is missi
 
 ## 8. Escalations
 
-Escalate when the docs don't settle a question and the choice would change interfaces, data formats, scope, dependencies, security or user-visible behaviour, or would be costly to reverse. Also for: a top-severity finding you won't fix; a second deferral; a task that failed three attempts; a mission over budget; a preflight `✗` only Matthew can fix. What `PLAYBOOK.md` leaves to the lead's discretion you decide, and record under "Lead decisions" in `MISSIONS.md`.
+Escalate when the docs don't settle a question and the choice would change interfaces, data formats, scope, dependencies, security or user-visible behaviour, or would be costly to reverse. Also for: a top-severity finding you won't fix; a second deferral; a task that failed three attempts; a mission over budget; a preflight `✗` only Matthew can fix; a pipeline fault, such as a gate failure the records can't fix. What `PLAYBOOK.md` leaves to the lead's discretion you decide, and record under "Lead decisions" in `MISSIONS.md`.
 
 1. Take the next number. Escalations and holds share it.
    ```bash
