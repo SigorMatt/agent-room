@@ -18,9 +18,9 @@ This skill only finds your protocol and loads it. The protocol is the authority:
 `<version>` is a release tag such as `v1.0.0`, or `main` before the first release.
 
 1. **Lead:** the `pipeline` your join line names. It comes from `PLAYBOOK.md`.
-2. **Architect:** if the chat can't reach `OWNER/NAME`, attach it with your add-repo tool. Then read the `pipeline:` line of the project's playbook on its state branch:
+2. **Architect:** if the chat can't reach `OWNER/NAME`, attach it with your add-repo tool. Then read the version from the `pipeline:` line of the project's playbook on its state branch. This prints the version alone, such as `v1.0.0`, without the `pipeline:` prefix:
    ```bash
-   gh api "repos/OWNER/NAME/contents/docs/playbook/PLAYBOOK.md?ref=agent-room/state" -H "Accept: application/vnd.github.raw" | grep '^pipeline:'
+   gh api "repos/OWNER/NAME/contents/docs/playbook/PLAYBOOK.md?ref=agent-room/state" -H "Accept: application/vnd.github.raw" | sed -n 's/^pipeline:[[:space:]]*\([^[:space:]]*\).*/\1/p'
    ```
 3. **New project** (that fails with 404: no state branch yet): the one line of agent-room's `STABLE` file.
    ```bash
