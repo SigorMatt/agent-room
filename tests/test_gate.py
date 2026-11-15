@@ -135,9 +135,12 @@ def gh_reset():
     save()
 
 
-def set_pr(sha, ref=BRANCH, state="open", base="main", repo="SigorMatt/pet", merged=False):
-    gh_cfg(pulls={PR: {"number": int(PR), "state": state, "merged": merged, "base": {"ref": base},
-                       "head": {"ref": ref, "sha": sha, "repo": {"full_name": repo}}}})
+def set_pr(sha, ref=BRANCH, state="open", base="main", repo="SigorMatt/pet", merged=False, updated_at=None):
+    pr = {"number": int(PR), "state": state, "merged": merged, "base": {"ref": base},
+          "head": {"ref": ref, "sha": sha, "repo": {"full_name": repo}}}
+    if updated_at:
+        pr["updated_at"] = updated_at
+    gh_cfg(pulls={PR: pr})
 
 
 def calls():
@@ -1017,7 +1020,7 @@ def t_checks():
 
     def run(name, status="completed", conclusion="success", id=1, suite=1):
         return {"id": id, "name": name, "status": status, "conclusion": conclusion if status == "completed" else None,
-                "check_suite": {"id": suite}}
+                "check_suite": {"id": suite}, "app": {"slug": "github-actions"}}
 
     gh_cfg(check_runs={sha: [run("ci"), run("docs", conclusion="skipped", id=2), run("lint", conclusion="neutral", id=3)]})
     r = gate()
@@ -1048,6 +1051,12 @@ def t_checks():
     r = gate()
     failed(r, "checks", "required but missing: lint")
     assert verdict(r) == "gate: FAIL hold reasons 3"
+    # a required context that hasn't reported while another still runs is late, not missing (cold M3 R2-6)
+    gh_cfg(check_runs={sha: [run("ci", status="in_progress")]}, statuses={sha: []},
+           protection={"required_status_checks": {"contexts": ["ci", "deploy-preview"]}})
+    r = gate()
+    assert r.returncode == 3 and "pending: ci; not reported yet: deploy-preview" in line(r, "checks"), out(r)
+    gh_cfg(check_runs={sha: [run("ci")]}, protection={"required_status_checks": {"contexts": ["ci", "lint"]}})
     gh_cfg(statuses={sha: [{"context": "lint", "state": "success"}, {"context": "deploy", "state": "error"}]})
     failed(gate(), "checks", "failed: deploy")
     gh_cfg(statuses={sha: [{"context": "lint", "state": "pending"}]})
@@ -1076,11 +1085,20 @@ def t_checks_wait_while_new_head_has_workflows_but_no_runs():  # cold M3 R1-10
     commit("ci: add a workflow", {".github/workflows/ci.yml": "on: push\n"})
     g("push", "-q", "origin", "main")
     try:
-        mission()
+        s = mission()
         r = gate()
         assert r.returncode == 3, out(r)
-        assert "no check runs or statuses for HEAD yet, though it has 1 workflow(s)" in line(r, "checks")
-        assert verdict(r).startswith("gate: WAIT checks: no check runs"), out(r)
+        assert "no GitHub Actions runs for HEAD yet, though it has 1 workflow(s)" in line(r, "checks")
+        assert verdict(r).startswith("gate: WAIT checks: no GitHub Actions runs"), out(r)
+        # another app's results don't show that Actions has started (cold M3 R2-6)
+        gh_cfg(statuses={s["head"]: [{"context": "preview/deploy", "state": "success"}]},
+               check_runs={s["head"]: [{"id": 5, "name": "deploy", "status": "completed", "conclusion": "success",
+                                        "app": {"slug": "vercel"}}]})
+        assert gate().returncode == 3
+        gh_cfg(check_runs={s["head"]: [{"id": 6, "name": "ci", "status": "completed", "conclusion": "success",
+                                        "app": {"slug": "github-actions"}}]}, statuses={})
+        assert gate().returncode == 0
+        gh_reset()
         gh_cfg(protection={"required_status_checks": {"contexts": ["ci"]}})
         assert gate().returncode == 3, "a new HEAD waits rather than failing on a missing required check"
         gh_reset()
@@ -1092,6 +1110,16 @@ def t_checks_wait_while_new_head_has_workflows_but_no_runs():  # cold M3 R1-10
             EXTRA_GIT_ENV.clear()
         r = gate()
         assert r.returncode == 0 and "✓ checks: no checks ran for HEAD" in r.stdout, out(r)
+        # an old commit pushed just now: the wait runs from the PR's update (cold M3 R2-6)
+        now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        set_pr(head(), updated_at=now)
+        r = gate()
+        assert r.returncode == 3 and "no GitHub Actions runs for HEAD yet" in line(r, "checks"), out(r)
+        set_pr(head(), updated_at=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - 3600)))
+        gh_cfg(statuses={head(): [{"context": "preview/deploy", "state": "success"}]})
+        r = gate()
+        assert r.returncode == 0 and "1 passed; no GitHub Actions runs for HEAD" in line(r, "checks"), out(r)
+        gh_cfg(statuses={})
         gh_cfg(protection={"required_status_checks": {"contexts": ["ci"]}})
         failed(gate(), "checks", "required but missing: ci")
     finally:
@@ -1101,6 +1129,7 @@ def t_checks_wait_while_new_head_has_workflows_but_no_runs():  # cold M3 R1-10
         g("push", "-q", "origin", "main")
     mission()
     assert "no checks configured" in line(gate(), "checks"), "a HEAD without workflows"
+
 
 def t_sensitive_paths():
     mission(extra={".github/workflows/ci.yml": "on: push\n"})

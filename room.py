@@ -56,6 +56,7 @@ Environment:
   ROOM_NTFY_TOKEN   optional ntfy access token (only raises limits on a paid ntfy.sh tier)
 """
 import argparse
+import calendar
 import html
 import json
 import os
@@ -2001,7 +2002,7 @@ CHECKS_GRACE = 600  # seconds a new HEAD with workflows may have no runs before 
 WORKFLOW = glob_regex(".github/workflows/*.y*ml")
 
 
-def check_checks(g, root, head):
+def check_checks(g, root, head, pr_updated=None):
     required, err = required_contexts()
     if err:
         g.fail("checks", [(err, None)])
@@ -2023,30 +2024,40 @@ def check_checks(g, root, head):
             v = {"success": "ok", "pending": "pending"}.get(s.get("state"), "failed")
             statuses[s["context"]] = max(statuses.get(s["context"], v), v, key=rank.get)
     results += list(statuses.items())
-    note = "no checks configured"
-    if not results:  # CI may not have created its runs yet: wait while HEAD is new
-        workflows = [p for p in zsplit(git("ls-tree", "-r", "--name-only", "-z", head, "--", ".github/workflows",
-                                           cwd=root).stdout) if WORKFLOW.fullmatch(p)]
-        if workflows:
-            age = int(time.time()) - int(git_out("log", "-1", "--format=%ct", head, cwd=root))
-            if age < CHECKS_GRACE:
-                g.wait("checks", f"no check runs or statuses for HEAD yet, though it has {len(workflows)} "
-                                 f"workflow(s); HEAD is {max(age, 0)}s old (waiting up to {CHECKS_GRACE // 60} minutes)")
-                return
-            note = "no checks ran for HEAD"
     names = {name for name, _ in results}
     failed = sorted({c for c, v in results if v == "failed"})
     missing = sorted(required - names)
     pending = sorted({c for c, v in results if v == "pending"})
-    if failed or missing:
-        g.fail("checks", [(t, 3) for t in (f"failed: {', '.join(failed)}" if failed else None,
+    if failed:
+        g.fail("checks", [(t, 3) for t in (f"failed: {', '.join(failed)}",
                                             f"required but missing: {', '.join(missing)}" if missing else None) if t])
-    elif pending:
-        g.wait("checks", f"pending: {', '.join(pending)}")
+        return
+    # with workflows in HEAD, Actions may not have created its runs yet; other apps' results don't tell.
+    # Wait from the later of HEAD's commit and the PR's last update (a push of an older commit moves the PR)
+    workflows = [p for p in zsplit(git("ls-tree", "-r", "--name-only", "-z", head, "--", ".github/workflows",
+                                       cwd=root).stdout) if WORKFLOW.fullmatch(p)]
+    no_actions = bool(workflows) and not any((r.get("app") or {}).get("slug") == "github-actions"
+                                             for r in runs.values())
+    if no_actions:
+        changed = int(git_out("log", "-1", "--format=%ct", head, cwd=root))
+        try:
+            changed = max(changed, calendar.timegm(time.strptime(pr_updated or "", "%Y-%m-%dT%H:%M:%SZ")))
+        except ValueError:
+            pass
+        age = int(time.time()) - changed
+        if age < CHECKS_GRACE:
+            g.wait("checks", f"no GitHub Actions runs for HEAD yet, though it has {len(workflows)} workflow(s); "
+                             f"last change {max(age, 0)}s ago (waiting up to {CHECKS_GRACE // 60} minutes)")
+            return
+    if pending:  # a required context that hasn't reported may be late while others still run
+        g.wait("checks", f"pending: {', '.join(pending)}" + (f"; not reported yet: {', '.join(missing)}" if missing else ""))
+    elif missing:
+        g.fail("checks", [(f"required but missing: {', '.join(missing)}", 3)])
     elif not results:
-        g.ok("checks", note)
+        g.ok("checks", "no checks ran for HEAD" if workflows else "no checks configured")
     else:
-        g.ok("checks", f"{len(results)} passed" + (f" (required: {', '.join(sorted(required))})" if required else ""))
+        g.ok("checks", f"{len(results)} passed" + (f" (required: {', '.join(sorted(required))})" if required else "")
+             + ("; no GitHub Actions runs for HEAD" if no_actions else ""))
 
 
 def room_number(playbook, missions):
@@ -2227,7 +2238,7 @@ def run_gate(a, expect_sha=None):
     except (StateError, ValueError):
         phase = None
     check_dispositions(g, root, sha, rec, ledger, room, phase)  # 4
-    check_checks(g, root, sha)                                # 5
+    check_checks(g, root, sha, pr.get("updated_at"))          # 5
     check_sensitive(g, root, sha, playbook, a, room)          # 6
     return g.verdict(sha), sha
 
