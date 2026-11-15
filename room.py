@@ -2312,11 +2312,15 @@ class RoomLog:
 
     def answers(self, decision, finding):
         """The trusted DECISION-n that answers the lead's earlier ESCALATION-n or MERGE-HOLD-n naming FINDING:
-        ("cold", M<k>, ID), named by its ID, or ("qodo", PR, title), named by its title."""
+        ("cold", M<k>, ID) or ("qodo", PR, title). A message names it by its cold ID, by the full Qodo title,
+        or by the dispositions file the finding sits in, as v1's "point to files instead of pasting" asks."""
         n = decision.rsplit("-", 1)[1]
-        kind, _, what = finding
+        kind, where, what = finding
+        record = f"reviews/cold/{where}/DISPOSITIONS.md" if kind == "cold" else f"reviews/qodo/PR-{where}/DISPOSITIONS.md"
 
         def names(text):
+            if record in message_tokens(text):
+                return True
             if kind == "cold":
                 return re.search(rf"(?<![\w-]){re.escape(what)}(?![\w-])", text)
             return re.search(rf"(?<!\w){re.escape(title_key(what))}(?!\w)", title_key(text))
@@ -2330,12 +2334,33 @@ class RoomLog:
         return [m for m in self.messages() if m["role"] == "lead" and message_kind(m["text"]) == kind]
 
 
+def message_tokens(text):
+    """The whole tokens of a room message, for naming paths: backticked text, and the words split on
+    whitespace and commas with quotes, trailing '.', ',', ';', ':' and unbalanced parentheses dropped, so
+    that src/app/(auth)/page.tsx and "(see app/auth.py)." both name their path."""
+    out = set(re.findall(r"`([^`]+)`", text))
+    for tok in re.split(r"[\s,]+", text):
+        while True:
+            before = tok
+            tok = tok.strip("\"'`").rstrip(".,;:")
+            if tok.endswith(")") and tok.count(")") > tok.count("("):
+                tok = tok[:-1]
+            if tok.startswith("(") and tok.count("(") > tok.count(")"):
+                tok = tok[1:]
+            if tok == before:
+                break
+        out.add(tok)
+        if tok.startswith("(") and tok.endswith(")"):
+            out.add(tok[1:-1])
+    return out
+
+
 def hold_problems(text, pr, paths):
-    """What a MERGE-HOLD message lacks for a reason-5 hold of PR's PATHS: [] when it names them all. A path
-    is named as a whole token, backticked or set off by whitespace, commas or parentheses."""
+    """What a MERGE-HOLD message lacks for a reason-5 hold of PR's PATHS: [] when it names them all, each
+    as a whole token (message_tokens)."""
     out = [] if re.search(rf"PR #{pr}(?!\d)", text) else [f"PR #{pr}"]
     out += [] if re.search(r"\breason 5\b", text, re.I) else ["reason 5"]
-    tokens = set(re.findall(r"`([^`]+)`", text)) | set(re.split(r"[\s,()]+", text))
+    tokens = message_tokens(text)
     return out + [p for p in paths if p not in tokens]
 
 
@@ -2379,8 +2404,9 @@ def check_sensitive(g, root, head, playbook, a, room):
         return
     if hold:
         missing = f"no trusted {a.decision} from the architect or Matthew after MERGE-HOLD-{n} (comment #{hold['id']})"
-    elif holds:
-        missing = f"no MERGE-HOLD-{n} for this hold: the lead's doesn't name {', '.join(min(lacking, key=len))}"
+    elif holds:  # safe to show the form: a decision must still come after a new hold
+        missing = (f"no MERGE-HOLD-{n} for this hold: the lead's doesn't name {', '.join(min(lacking, key=len))} "
+                   f"(the form: MERGE-HOLD-<n>: PR #{a.pr}, reason 5 (sensitive paths): {', '.join(paths)})")
     else:
         missing = f"no trusted MERGE-HOLD-{n} from the lead"
     g.fail("sensitive paths", [(f"{held}; --allow-hold 5 --decision {a.decision}: {room.where()} has {missing}", 5)])

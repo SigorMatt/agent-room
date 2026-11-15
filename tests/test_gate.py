@@ -720,6 +720,29 @@ def t_top_owner_decision_needs_the_rooms_decision():  # cold M3 R1-3, R2-2
     assert gate().returncode == 0
 
 
+
+def t_a_message_names_a_finding_by_its_record():  # cold M3 S1-3
+    crash = "Crash when the name is missing"
+    mission(cold_rows=lambda s: [("R1-1", "high", "app.py", "owner decision: not a bug, Matthew (DECISION-61)"),
+                                 ("R1-2", "low", "app.py", "dismissed: checked by the caller")],
+            qodo_rows=lambda s: [("1", "Action required", crash, "app.py",
+                                  "owner decision: accept the crash, Matthew (DECISION-61)"),
+                                 ("2", "Informational", "Greeting text is hard-coded", "app.py", "dismissed: x")])
+    room("say", "1", "lead", "ESCALATION-61: PR #12 has two top-severity findings that need an owner decision; see "
+                             "reviews/cold/M3/DISPOSITIONS.md and reviews/qodo/PR-12/DISPOSITIONS.md.", check=True)
+    room("say", "1", "architect", "DECISION-61: not a bug; accept the crash", check=True)
+    r = gate()
+    assert r.returncode == 0, out(r)
+    for n, text in ((62, "see reviews/cold/M2/DISPOSITIONS.md and reviews/qodo/PR-13/DISPOSITIONS.md"),
+                    (63, "see reviews/cold/M3/DISPOSITIONS.md.bak and xreviews/qodo/PR-12/DISPOSITIONS.md")):
+        room("say", "1", "lead", f"ESCALATION-{n}: two findings need an owner decision; {text}", check=True)
+        room("say", "1", "architect", f"DECISION-{n}: not a bug", check=True)
+        mission(cold_rows=lambda s: [("R1-1", "high", "app.py", f"owner decision: not a bug, Matthew (DECISION-{n})"),
+                                     ("R1-2", "low", "app.py", "dismissed: x")],
+                qodo_rows=lambda s: [("1", "Action required", crash, "app.py", f"owner decision: ok, Matthew (DECISION-{n})"),
+                                     ("2", "Informational", "Greeting text is hard-coded", "app.py", "dismissed: x")])
+        failed(gate(), "dispositions", f"cold R1-1 cites DECISION-{n}", f'Qodo #1 "{crash}" cites DECISION-{n}')
+
 def t_fixed_in_must_come_after_the_finding():  # cold M3 R1-2
     on_main = g("log", "-1", "--format=%H", "origin/main", "--", "app.py").stdout.strip()
     mission(cold_rows=lambda s: [("R1-1", "high", "app.py", f"fixed in {s['c1'][:7]}"),
@@ -1244,7 +1267,9 @@ def t_allow_hold():
     # a hold names each path as a whole token (cold M3 R2-10)
     room("say", "1", "lead", f"MERGE-HOLD-15: PR #{PR}, reason 5 (sensitive paths): lib/{path}", check=True)
     room("say", "1", "architect", "DECISION-15: merge", check=True)
-    failed(allow(15), "sensitive paths", f"the lead's doesn't name {path}")
+    r = allow(15)
+    failed(r, "sensitive paths", f"the lead's doesn't name {path}",  # and the form to post (cold M3 S1-2)
+           f"(the form: MERGE-HOLD-<n>: PR #{PR}, reason 5 (sensitive paths): {path})")
     room("say", "1", "lead", f"MERGE-HOLD-12: PR #{PR}, reason 5 (sensitive paths): {path}", check=True)
     room("say", "1", "architect", "DECISION-12: merge the CI change", check=True)
     r = allow(12)
@@ -1257,13 +1282,20 @@ def t_allow_hold():
     gh_reset()
 
 
-def t_hold_paths_are_whole_tokens():  # cold M3 R2-10
+def t_hold_paths_are_whole_tokens():  # cold M3 R2-10, S1-2
     hp = R.hold_problems
     assert hp("MERGE-HOLD-20: PR #12, reason 5: lib/tests/test_x.py", 12, ["tests/test_x.py"]) == ["tests/test_x.py"]
-    assert hp("MERGE-HOLD-20: PR #12, reason 5: tests/test_x.py.", 12, ["tests/test_x.py"]) == ["tests/test_x.py"]
+    assert hp("MERGE-HOLD-20: PR #12, reason 5: xtests/test_x.py.", 12, ["tests/test_x.py"]) == ["tests/test_x.py"]
     for text in ("MERGE-HOLD-20: PR #12, reason 5: a.py, tests/test_x.py", "MERGE-HOLD-20: PR #12 (reason 5: tests/test_x.py)",
-                 "MERGE-HOLD-20: PR #12, reason 5: `tests/test_x.py`", "MERGE-HOLD-20: PR #12, reason 5:\ntests/test_x.py b"):
+                 "MERGE-HOLD-20: PR #12, reason 5: `tests/test_x.py`", "MERGE-HOLD-20: PR #12, reason 5:\ntests/test_x.py b",
+                 "MERGE-HOLD-20: PR #12, reason 5: tests/test_x.py.", "MERGE-HOLD-20: PR #12, reason 5: a.py; tests/test_x.py;",
+                 'MERGE-HOLD-20: PR #12, reason 5: "tests/test_x.py"', "MERGE-HOLD-20: PR #12, reason 5 (tests/test_x.py)",
+                 "MERGE-HOLD-20: PR #12, reason 5: a.py and tests/test_x.py:"):
         assert hp(text, 12, ["tests/test_x.py"]) == [], text
+    nextjs = "src/app/(auth)/login/page.tsx"
+    for text in (f"MERGE-HOLD-80: PR #12, reason 5 (sensitive paths): {nextjs}", f"MERGE-HOLD-80: PR #12, reason 5: {nextjs}.",
+                 f"MERGE-HOLD-80: PR #12, reason 5 ({nextjs})", f"MERGE-HOLD-80: PR #12, reason 5: `{nextjs}`"):
+        assert hp(text, 12, [nextjs]) == [], text
     assert hp("MERGE-HOLD-20: PR #120, reason 50: x", 12, ["x"]) == ["PR #12", "reason 5"]
 
 
