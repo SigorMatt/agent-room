@@ -1051,6 +1051,16 @@ def t_qodo_severity_must_parse():  # cold M3 R2-9
     failed(r, "dispositions", f'severity did not parse: read the comment ({comment}: #1 "Crash when the name is missing", '
                               '#2 "Greeting text is hard-coded"; the records can\'t fix this')
 
+
+def t_one_row_per_finding():  # qodo PR #7: Qodo findings can have two dispositions
+    mission(qodo_rows=lambda s: default_qodo_rows(s) + [
+        ("2", "Informational", "greeting text is  HARD-CODED", "app.py", "deferred: L-3 to phase 2 backlog")])
+    r = gate()
+    failed(r, "dispositions", f"reviews/qodo/PR-{PR}/DISPOSITIONS.md: two rows for: greeting text is HARD-CODED")
+    assert verdict(r) == "gate: FAIL hold reasons none; fix first: dispositions", out(r)
+    mission(cold_rows=lambda s: default_cold_rows(s) + [("R1-2", "low", "app.py", "deferred: L-1 to M4")])
+    failed(gate(), "dispositions", "reviews/cold/M3/DISPOSITIONS.md: R1-2 has two rows")
+
 def t_qodo_dispositions():
     mission(qodo="off", qodo_file=False)
     r = gate(QODO_REVIEW="off")

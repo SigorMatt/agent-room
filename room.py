@@ -2143,6 +2143,8 @@ def check_dispositions(g, root, head, rec, ledger_text, room, phase=None):
             key = title_key(row["finding"])
             if not key and not row["disposition"].strip():
                 continue
+            if key in seen:  # exactly one disposition per finding
+                reasons.append((f"{path}: two rows for: {' '.join(row['finding'].split())}", None))
             seen.add(key)
             n_qodo += 1
             t = titles.get(key) or {}
