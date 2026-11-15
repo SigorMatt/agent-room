@@ -74,7 +74,7 @@ You are the lead: a Claude Code cloud session that runs one mission of a project
    | `none` or `plan` | 4. Phase planning |
    | `spec` | 5.1 Spec |
    | `build` | 5.2 Build |
-   | `cold round <r>` or `scoped <s>` | 5.3 Cold review |
+   | `cold round <r>`, `scoped <s>` or `scoped <s> for <step>` | 5.3 Cold review |
    | `PR` | 5.4 PR |
    | `Qodo …` | 5.5 Qodo |
    | `gate` | 5.6 Gate and merge; if reconcile says the PR is merged, 5.7 |
@@ -207,7 +207,8 @@ Up to two rounds on the mission branch, before the PR. Code changed after the la
 8. Choose the next step:
    - Code changed after round 1: round 2, `step="cold round 2"`.
    - Code changed after round 2 or a scoped review: a scoped review, `step="scoped <s>"` (`s` = 1, 2, …). It doesn't count as a round, and its `high` findings go to Matthew.
-   - Nothing changed since the last review: the PR, `step=PR`. After round 2, first defer what is still undecided, or make it an owner decision. Each ledger item of the mission must be fixed or deferred again.
+   - Nothing changed since the last review, and no PR yet (`pr` is `none`): the PR, `step=PR`. After round 2, first defer what is still undecided, or make it an owner decision. Each ledger item of the mission must be fixed or deferred again.
+   - Nothing changed, and the PR exists: back to the step that sent you here, named in the step `scoped <s> for <step>` (`Qodo round <r>` or `gate`). Never open a second PR.
    ```bash
    python3 room.py state set step=<next>
    ```
@@ -242,7 +243,7 @@ This follows `~/agent-room/docs/QODO-REVIEW.md` ([`docs/QODO-REVIEW.md`](docs/QO
    git push origin <branch>
    python3 room.py state set step="Qodo round <r>"
    ```
-6. Each round: a fresh reader, variant `round-<r>`. It waits up to 10 minutes. With no re-review it reports `no re-review of <sha>`; code since the last covering review then needs a scoped cold review (5.3). Commit the archive, decide and fix as above.
+6. Each round: a fresh reader, variant `round-<r>`. It waits up to 10 minutes. With no re-review it reports `no re-review of <sha>`; code since the last covering review then needs a scoped cold review (5.3, `step="scoped <s> for Qodo round <r>"`). Commit the archive, decide and fix as above.
 7. Nothing open, or no round left: write `reviews/qodo/PR-<PR>/DISPOSITIONS.md` from [the template](templates/reviews/qodo-DISPOSITIONS.md). One row per finding of the latest fetch plus every `absent now` finding; `cold caught` from the first-review reader. Audit it until it passes. Commit it with any archive not yet committed, and push.
 8. That push triggers Qodo's final check: a fresh reader, variant `final-check`, which commits nothing. Nothing new: go on. Something new: copy `/tmp/qodo-final/PR-<PR>/<f>` to `reviews/qodo/PR-<PR>/` and go back to step 3 if a round is left; otherwise decide those findings without a push, or hold (reason 2).
    ```bash
@@ -261,7 +262,7 @@ This follows `~/agent-room/docs/QODO-REVIEW.md` ([`docs/QODO-REVIEW.md`](docs/QO
    | --- | --- | --- |
    | 0 | `gate: PASS <sha>` | Merge, naming that sha |
    | 3 | `gate: WAIT …` (checks pending) | `python3 room.py wait N lead --timeout 300`, then run the gate again |
-   | 6 | `gate: FAIL hold reasons …` | Fix what is yours (a missing row; uncovered code needs a scoped review; a failing check gets one builder attempt). Hold for what stands |
+   | 6 | `gate: FAIL hold reasons …` | Fix what is yours (a missing row; uncovered code needs a scoped review, `step="scoped <s> for gate"`; a failing check gets one builder attempt). Hold for what stands |
    | 5 | lease lost | Stand down |
 
 3. Merge:
