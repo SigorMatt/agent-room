@@ -796,8 +796,8 @@ def t_handoff():
     assert w.returncode == 0 and "CHANGE-8" in w.stdout, out(w)
     assert room("cursor", "1", "lead", check=True).stdout.strip() != cursor
     gen = block()["lease_generation"]
-    snap = os.path.join(tmp, "room-at-push.json")
-    pre_push(f'cp "$FAKE_GH_DB" "{snap}"\nexit 0\n')
+    snaps = tempfile.mkdtemp(dir=tmp, prefix="room-at-push-")  # the room as each state push found it
+    pre_push(f'cp "$FAKE_GH_DB" "{snaps}/$(ls "{snaps}" | wc -l | tr -d " ").json"\nexit 0\n')
     try:
         r = room("handoff", "1", "--step", "spec", "--cursor", cursor)
     finally:
@@ -808,16 +808,18 @@ def t_handoff():
     assert "NEXT-LEAD-NEEDED" in r.stdout and "[buzz" not in r.stdout, "HANDOFF names the fallback and doesn't buzz"
     h = comments()[-1]
     assert tag(h) == ("lead", "L1") and text_of(h).splitlines()[0] == "HANDOFF: mission M2, next step spec", h
-    # posted while the lease was held: the room already had it when the state write was pushed
-    with open(snap) as f:
-        at_push = json.load(f)["repos"]["SigorMatt/pet"]["issues"]["1"]["comments"]
-    assert h["id"] in [c["id"] for c in at_push]
-    b, prev = block(), block("agent-room/state~1")
+    # qodo PR #8 "A failed handoff leaves a false notice": (a) the record write, (b) HANDOFF, (c) the release
+    at_push = []
+    for i in (0, 1):
+        with open(os.path.join(snaps, f"{i}.json")) as f:
+            at_push.append([c["id"] for c in json.load(f)["repos"]["SigorMatt/pet"]["issues"]["1"]["comments"]])
+    assert len(os.listdir(snaps)) == 2 and h["id"] not in at_push[0] and h["id"] in at_push[1], at_push
+    b, rec, prev = block(), block("agent-room/state~1"), block("agent-room/state~2")
     assert b["step"] == "spec" and b["cursor"] == cursor and b["intent"] == "none", b
     assert b["lease_session"] == "none" and b["lease_generation"] == gen, b
-    # one state write: the commit before it is the lease still held, and only these keys changed
-    assert prev["lease_session"] == "L1" and prev["step"] == "gate", prev
-    assert {k for k in b if b[k] != prev.get(k)} == {"step", "cursor", "intent", "lease_session"}
+    assert rec["lease_session"] == "L1" and prev["step"] == "gate", (rec, prev)
+    assert {k for k in rec if rec[k] != prev.get(k)} == {"step", "cursor", "intent"}, "recorded, the lease held"
+    assert {k for k in b if b[k] != rec.get(k)} == {"lease_session"}, "then released, after the post"
     assert "handoff" in g("--git-dir", PET, "log", "-1", "--format=%s", "agent-room/state").stdout
 
 
@@ -869,6 +871,32 @@ def t_handoff_retries_when_the_branch_moves():
     b = block()
     assert b["step"] == "cold round 1" and b["lease_session"] == "none", b
     assert "the architect wrote meanwhile" in remote_file("docs/playbook/HANDOFF.md")
+    room("lease", "take", check=True)
+
+
+def t_handoff_failures_leave_no_false_notice():
+    # qodo PR #8 "A failed handoff leaves a false notice": a failed record write posts nothing; a failed release
+    # after the post says so and exits 1, and the release can be run again
+    set_state("step=build 12")
+    before, n = block(), len(comments())
+    pre_push("exit 1\n")  # every push refused, not a race
+    try:
+        r = room("handoff", "1", "--step", "spec 12", "--cursor", "none")
+    finally:
+        no_hooks()
+    assert r.returncode == 1 and len(comments()) == n and block() == before, out(r)
+    assert g("-C", STATE_DIR, "status", "--porcelain").stdout == "" and \
+        g("-C", STATE_DIR, "rev-parse", "HEAD").stdout.strip() == state_sha(), "no unpushed commit is left behind"
+    pre_push('n=$(cat "$0.count" 2>/dev/null || echo 0); echo $((n + 1)) > "$0.count"\n[ "$n" -ge 1 ] && exit 1\nexit 0\n')
+    try:  # the record write passes, the release is refused
+        r = room("handoff", "1", "--step", "spec 12", "--cursor", "none")
+    finally:
+        no_hooks()
+    assert r.returncode == 1 and "lease not released: git push" in r.stderr, out(r)
+    assert f"HANDOFF is posted; run 'python3 {ROOM} lease release' again" in r.stderr, out(r)
+    assert len(comments()) == n + 1 and text_of(comments()[-1]).startswith("HANDOFF: mission M2, next step spec 12")
+    assert block()["step"] == "spec 12" and block()["lease_session"] == "L1"
+    assert "released by L1" in room("lease", "release", check=True).stdout
     room("lease", "take", check=True)
 
 

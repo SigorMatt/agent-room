@@ -3049,19 +3049,32 @@ def cmd_handoff(a):
             raise StateError(f"not handed off: --cursor {cursor}: {e}")
         if not (c.get("issue_url") or "").endswith(f"/issues/{a.room}"):
             raise StateError(f"not handed off: --cursor {cursor} is not a comment of room {a.room}")
-    # posted while this session still holds the lease; then step, cursor, intent and the release in one write
+    # (a) record step, cursor and intent=none, holding the lease; (b) post HANDOFF, still holding it; (c) release it.
+    # If (a) fails, nothing is posted; if (c) fails, the room has the HANDOFF and the lead must release by hand.
+    def write(msg, updates):
+        for attempt in (1, 2, 3):
+            try:
+                return change_state(a, msg, lambda v: updates)
+            except StateMoved:  # someone else wrote the state branch meanwhile: re-read, re-check the lease, re-apply
+                if attempt == 3:
+                    raise
+            except StateError:
+                reset_to_remote(path)  # drop the unpushed commit, so the next try starts clean
+                raise
+    try:
+        write(f"handoff: {sid} records step {step} for its successor",
+              {"step": step, "cursor": cursor, "intent": "none"})
+    except StateMoved:
+        raise StateExit(EXIT_MOVED, f"not handed off: {STATE_BRANCH} kept moving, so nothing was posted; run "
+                                    "handoff again")
     say(a.room, "lead", f"HANDOFF: mission {values.get('mission') or 'none'}, next step {step}\n\n"
                         "Successor: being scheduled now; a NEXT-LEAD-NEEDED follows if that fails.", a)
-    updates = {"step": step, "cursor": cursor, "intent": "none", "lease_session": "none"}
-    for attempt in (1, 2, 3):
-        try:
-            change_state(a, f"handoff: {sid} hands over at step {step} and releases the lease", lambda v: updates)
-            break
-        except StateMoved:  # someone else wrote the state branch meanwhile: re-read, re-check the lease, re-apply
-            if attempt == 3:
-                raise StateExit(EXIT_MOVED, "HANDOFF is posted, but the state branch kept moving, so the state "
-                                            f"is not recorded: run '{ME} state set step={step} cursor={cursor} "
-                                            f"intent=none', then '{ME} lease release'")
+    try:
+        write(f"handoff: {sid} releases the lead lease", {"lease_session": "none"})
+    except (StateError, StateMoved, StateExit) as e:
+        print(f"lease not released: {str(e) or f'{STATE_BRANCH} kept moving'}", file=sys.stderr)
+        print(f"HANDOFF is posted; run '{ME} lease release' again", file=sys.stderr)
+        return 1
     print(f"recorded step {step}, cursor {cursor}, intent none; lease released by {sid}")
     print("Schedule a one-time task about a minute from now whose prompt is the join line below. If that fails: "
           f"{ME} say {a.room} lead 'NEXT-LEAD-NEEDED: ...' --repo {REPO}")
@@ -3323,8 +3336,8 @@ def add_unattended_commands(sub, common):
     s.add_argument("room", type=int)
     s.add_argument("--takeover", action="store_true",
                    help="for the lead Matthew starts after LEAD-SILENT: take the lease with lease take --takeover")
-    s = leaf("handoff", cmd_handoff, "post HANDOFF while holding the lease, then record step, cursor and intent=none "
-                                     "and release the lease in one state write; prints the join line to schedule")
+    s = leaf("handoff", cmd_handoff, "record step, cursor and intent=none holding the lease, post HANDOFF, then "
+                                     "release the lease; prints the join line to schedule")
     s.add_argument("room", type=int)
     s.add_argument("--step", required=True, help="the step the successor starts at")
     s.add_argument("--cursor", required=True, type=from_arg, metavar="ID",

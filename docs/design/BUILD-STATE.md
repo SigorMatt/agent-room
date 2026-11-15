@@ -75,7 +75,7 @@ Results of the eleven assumptions in `v1.md` ("To verify"). Evidence lives in is
 | 2026-11-14 | Docs-only milestone PRs get Qodo but no cold review | The design's coverage rule covers code changes only; the design itself had two cold reviews |
 | 2026-11-14 | The protocols, briefs and thin skill move from the core milestone to M5, after the code they describe | Keeps each milestone PR reviewable; `v1.md` stays the authority meanwhile |
 | 2026-11-14 | Mission PRs merge with a merge commit, not a squash | Keeps every `fixed in <sha>` reachable from `main` after the branch is deleted |
-| 2026-11-15 | The lease is released at `HANDOFF`, `PAUSED`, `STOPPED` and `DONE`; `lease take` fails while another session holds it, unless `--takeover`, which only a lead Matthew starts after `LEAD-SILENT` uses | Makes "only one successor can win the lease" hold for launches minutes apart, not only for simultaneous pushes (cold M2 R1-3) |
+| 2026-11-15 | The lease is released at `HANDOFF` (`handoff` records the step and cursor, posts `HANDOFF`, then releases), `PAUSED`, `STOPPED` and `DONE`; `lease take` fails while another session holds it, unless `--takeover`, which only a lead Matthew starts after `LEAD-SILENT` uses | Makes "only one successor can win the lease" hold for launches minutes apart, not only for simultaneous pushes (cold M2 R1-3) |
 
 ## Assumptions while Matthew was away (from 2026-11-15 01:24)
 
