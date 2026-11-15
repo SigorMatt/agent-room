@@ -35,12 +35,14 @@ Set `DIR` and `DOC` for your role (architect: `~/agent-room-tools` and `ARCHITEC
 DIR=~/agent-room-tools DOC=ARCHITECT.md V=<version>
 mkdir -p "$DIR" && cd "$DIR"
 for f in room.py "$DOC"; do
-  curl -fsSL "https://raw.githubusercontent.com/SigorMatt/agent-room/$V/$f" -o "$f" ||
-    gh api "repos/SigorMatt/agent-room/contents/$f?ref=$V" -H "Accept: application/vnd.github.raw" > "$f"
+  { curl -fsSL "https://raw.githubusercontent.com/SigorMatt/agent-room/$V/$f" -o "$f" ||
+    gh api "repos/SigorMatt/agent-room/contents/$f?ref=$V" -H "Accept: application/vnd.github.raw" > "$f"; } &&
+    test -s "$f" && { [ "$f" != room.py ] || python3 -c "import ast,sys; ast.parse(open(sys.argv[1]).read())" room.py; } ||
+    { echo "FAILED $f"; break; }
 done
 ```
 
-If both fail, attach `SigorMatt/agent-room` (read access) with your add-repo tool and retry. Never fall back to `main` or to an older copy. `python3 room.py --help` lists every command.
+Each file must download whole: non-empty, and `room.py` must parse as Python. The loop stops at the first that doesn't, printing `FAILED <file>`. Then attach `SigorMatt/agent-room` (read access) with your add-repo tool and retry; a lead without that tool retries once. Never go on with a failed file, and never fall back to `main` or to an older copy. `python3 room.py --help` lists every command.
 
 ## 4. Read the protocol in full and follow it
 

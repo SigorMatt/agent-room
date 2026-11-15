@@ -21,10 +21,13 @@ You are the lead: a Claude Code cloud session that runs one mission of a project
        briefs/builder.md briefs/cold-review.md briefs/qodo-reader.md briefs/auditor.md briefs/planner.md \
        templates/reviews/cold-round.md templates/reviews/cold-scoped.md \
        templates/reviews/cold-DISPOSITIONS.md templates/reviews/qodo-DISPOSITIONS.md; do
-     curl -fsSL "https://raw.githubusercontent.com/SigorMatt/agent-room/<version>/$f" -o "$f" || echo "FAILED $f"
+     { curl -fsSL "https://raw.githubusercontent.com/SigorMatt/agent-room/<version>/$f" -o "$f" ||
+       gh api "repos/SigorMatt/agent-room/contents/$f?ref=<version>" -H "Accept: application/vnd.github.raw" > "$f"; } &&
+       test -s "$f" && { [ "$f" != room.py ] || python3 -c "import ast,sys; ast.parse(open(sys.argv[1]).read())" room.py; } ||
+       { echo "FAILED $f"; break; }
    done
    ```
-   For a file that failed: `gh api "repos/SigorMatt/agent-room/contents/<file>?ref=<version>" -H "Accept: application/vnd.github.raw" > <file>`.
+   Each file must download whole: non-empty, and `room.py` must parse as Python. The loop stops at the first that doesn't, printing `FAILED <file>`. Run the block once more; if it fails again, end without writing or posting anything. Never go on with a failed file.
 2. Prepare the checkout. Cloud checkouts fetch only `main`, so add the mission and state branches. room.py stays out of commits:
    ```bash
    cd <checkout>
