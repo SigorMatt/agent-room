@@ -557,7 +557,7 @@ def push_edit(repo, name, fn):
 
 
 AGAIN = dict(cwd=os.path.join(tmp, "work", "again"), ROOM_REPO="SigorMatt/again", state="GA")
-BREAK_FENCE = ("```agent-room-state", "``` agent-room-state")
+BREAK_FENCE = ("```agent-room-state\n", "```agent-room-state:\n")  # no longer the block's info string
 MANGLE = ("```agent-room-state\n", "```agent-room-state  # machine block\n")
 VALID = "MISSIONS.md must keep a valid agent-room-state block with the current lease"
 
@@ -598,7 +598,8 @@ def t_damaged_block_falls_back_to_the_last_valid_one():
     r = room("state", "set", "step=build", session="L1", **AGAIN)
     assert "this write restores it" in r.stderr, r.stderr
     text = remote_file(repo, "docs/playbook/MISSIONS.md")
-    assert BREAK_FENCE[1] not in text and text.count("agent-room-state") == 1, text
+    assert BREAK_FENCE[1] not in text and "```agent-room-state-damaged:\n" in text, text  # retired, not deleted
+    assert text.index("```agent-room-state\n") < text.index("-damaged"), "the fresh block comes first"
     b = block(repo)
     assert b["lease_session"] == "L1" and b["step"] == "build" and list(b)[0] == "lease_session", b
     # so does a hand repair by the holder, checked like any other commit
@@ -664,6 +665,63 @@ QUOTES = {
     "html": "\n<!-- before the takeover:\nlease_session: L0\nlease_generation: 1\n-->\n",
     "indented": "\n    lease_session: L0\n    lease_generation: 1\n",
 }
+
+
+def t_strict_block_parsing():
+    # qodo PR #6 "A damaged block restores an old lead" (B-3, cold M2 S3-1, S3-2): a block that loses its closing
+    # fence, or a quote of an old block with the same info string, is invalid; the last valid block decides
+    quote = "\n```text\nlease_session: L0\nlease_generation: 1\ncounter: 0\n```\n"
+    same_info = "\n```agent-room-state\nlease_session: L0\nlease_generation: 1\ncounter: 0\n```\n"
+    for damage in ("drop the closing fence", "mangle the fence above a same-info quote"):
+        repo, K, S = fence_project("strict-" + damage.split()[0])
+        room("state", "sync", session="L1", state=S["FL1"], **K)
+        if damage.startswith("drop"):
+            edit_file(playbook_path(S["FL1"], "MISSIONS.md"), lambda t: t.replace(
+                "### Parked questions\n", "### Parked questions\n\n- state before the takeover:\n" + quote, 1))
+            assert "pushed" in room("state", "commit", "-m", "note", session="L1", state=S["FL1"], **K).stdout
+            push_edit(repo, "MISSIONS.md", lambda t: t.replace("waiting_for_owner: no\n```\n",
+                                                               "waiting_for_owner: no\n", 1))
+        else:
+            edit_file(playbook_path(S["FL1"], "MISSIONS.md"), lambda t: t.replace(
+                "### Parked questions\n", "### Parked questions\n\n- state before the takeover:\n" + same_info, 1))
+            r = room("state", "commit", "-m", "note", session="L1", state=S["FL1"], check=False, **K)
+            assert r.returncode == 1 and VALID in r.stderr and "2 agent-room-state blocks" in r.stderr, r.stderr
+            room("state", "sync", session="L1", state=S["FL1"], **K)  # drop the refused edit
+            push_edit(repo, "MISSIONS.md", lambda t: t.replace(*MANGLE, 1).replace(
+                "### Parked questions\n", "### Parked questions\n\n- state before the takeover:\n" + same_info, 1))
+        r = room("lease", "check", session="L0", state=S["FA"], check=False, **K)
+        assert r.returncode == 5 and "held by L1 (generation 2)" in r.stdout, (damage, r.stdout, r.stderr)
+        r = room("say", "1", "lead", "MERGE-HOLD-1: stale", session="L0", state=S["FA"], check=False, **K)
+        assert r.returncode == 5, (damage, r.returncode, r.stderr)
+        r = room("state", "next", "counter", session="L1", state=S["FL1"], **K)
+        assert r.stdout.strip() == "4" and "restores it" in r.stderr, (damage, r.stdout, r.stderr)
+        b = block(repo)
+        assert (b["lease_session"], b["lease_generation"], b["counter"]) == ("L1", "2", "4"), (damage, b)
+
+
+def t_block_repair_deletes_nothing():
+    # qodo PR #6 "Block repair erases mission records" (B-3, cold M2 S3-3)
+    repo, K, S = fence_project("keep")
+    room("state", "sync", session="L1", state=S["FL1"], **K)
+    edit_file(playbook_path(S["FL1"], "MISSIONS.md"), lambda t: t.replace(
+        "### Parked questions\n\n- none", "### Parked questions\n\n- Q-1: error seen:\n\n```text\nTraceback\n```\n", 1))
+    assert "pushed" in room("state", "commit", "-m", "note", session="L1", state=S["FL1"], **K).stdout
+    before = remote_file(repo, "docs/playbook/MISSIONS.md")
+    push_edit(repo, "MISSIONS.md", lambda t: t.replace(*MANGLE, 1).replace("waiting_for_owner: no\n```\n",
+                                                                         "waiting_for_owner: no\n", 1))
+    damaged = remote_file(repo, "docs/playbook/MISSIONS.md")
+    r = room("state", "set", "step=build", session="L1", state=S["FL1"], **K)
+    assert "restores it" in r.stderr, r.stderr
+    after = remote_file(repo, "docs/playbook/MISSIONS.md")
+    assert after.startswith("# Missions\n\n```agent-room-state\n"), after[:200]
+    for keep in ("## Phase 1", "## Current mission", "### Tasks in flight", "Q-1: error seen", "Traceback"):
+        assert keep in after, keep
+    rest = after.split("```\n", 1)[1]  # all after the fresh block
+    assert rest.lstrip("\n") == damaged.split("\n", 1)[1].lstrip("\n").replace(
+        "```agent-room-state  # machine block", "```agent-room-state-damaged  # machine block", 1), rest
+    b = block(repo)
+    assert (b["lease_session"], b["counter"], b["step"]) == ("L1", "3", "build"), b
+    assert before != after
 
 
 def t_quoted_lease_line_cannot_decide():

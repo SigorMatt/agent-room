@@ -550,8 +550,9 @@ LEAD_PATHS = {f"{PLAYBOOK_DIR}/{n}" for n in LEAD_FILES}
 MISSIONS = f"{PLAYBOOK_DIR}/MISSIONS.md"
 LEASE_KEYS = ("lease_session", "lease_generation")
 LEASE_HISTORY = 200  # commits of MISSIONS.md walked back to find the last valid block
-STATE_BLOCK = re.compile(r"^```agent-room-state[ \t]*\n(.*?)^```[ \t]*$", re.M | re.S)
-BROKEN_BLOCK = re.compile(r"^```[ \t]*agent-room-state\b[^\n]*\n.*?^```[ \t]*$\n?", re.M | re.S)  # a damaged fence
+FENCE = re.compile(r" {0,3}(`{3,}|~{3,})[ \t]*(.*?)[ \t]*")  # a fenced code block's fence line, and its info string
+BLOCK_INFO = "agent-room-state"
+BLOCK_LINE = re.compile(r"([a-z][a-z0-9_]*):[ \t]*(.*?)[ \t]*")
 STATE_KEY = re.compile(r"[a-z][a-z0-9_]*")
 TEMPLATE_URL = "https://raw.githubusercontent.com/{repo}/{version}/templates/playbook/{name}"
 FIRST_GITIGNORE = "__pycache__/\n*.pyc\n.venv/\nnode_modules/\n.env\n.DS_Store\n"
@@ -907,52 +908,96 @@ def add_missing(names, msg):
     return path, missing
 
 
-# the machine block at the top of MISSIONS.md: `key: value` lines that only room.py edits
+# The machine block of MISSIONS.md, parsed strictly (B-3, cold M2 S3-1 to S3-3): it is the first fenced block
+# in the file and the only one whose info string is agent-room-state; its body is only `key: value` and blank
+# lines, each key once; a bare fence line closes it. Anything else makes it invalid, and the lease then comes
+# from the last commit whose block is valid (pushed_lease).
+
+def fenced_blocks(lines):
+    """[(open, close or None, info)] of the fenced code blocks in LINES, by line index, in order."""
+    out, cur = [], None
+    for i, line in enumerate(lines):
+        m = FENCE.fullmatch(line.rstrip("\r"))
+        if cur is None:
+            if m:
+                cur = (i, m.group(1), m.group(2))
+        elif m and m.group(1)[0] == cur[1][0] and len(m.group(1)) >= len(cur[1]) and not m.group(2):
+            out.append((cur[0], i, cur[2]))
+            cur = None
+    if cur:
+        out.append((cur[0], None, cur[2]))
+    return out
+
+
+def locate_block(text):
+    """(open, close, values) of the machine block in MISSIONS.md TEXT, by line index. Raises BlockUnreadable,
+    saying why, unless the block is valid."""
+    lines = text.split("\n")
+    blocks = fenced_blocks(lines)
+    ours = [b for b in blocks if b[2] == BLOCK_INFO]
+    if not ours:
+        raise BlockUnreadable(f"{MISSIONS} has no {BLOCK_INFO} block")
+    if len(ours) > 1:
+        raise BlockUnreadable(f"{MISSIONS} has {len(ours)} {BLOCK_INFO} blocks, and may have only one")
+    start, end, _ = ours[0]
+    if blocks[0] != ours[0]:
+        raise BlockUnreadable(f"{MISSIONS}'s {BLOCK_INFO} block isn't its first fenced block")
+    if end is None:
+        raise BlockUnreadable(f"{MISSIONS}'s {BLOCK_INFO} block has no closing fence")
+    values = {}
+    for line in lines[start + 1:end]:
+        if not line.strip():
+            continue
+        m = BLOCK_LINE.fullmatch(line.rstrip("\r"))
+        if not m:
+            raise BlockUnreadable(f"{MISSIONS}'s {BLOCK_INFO} block has a line that isn't `key: value`: {line[:60]!r}")
+        if m.group(1) in values:
+            raise BlockUnreadable(f"{MISSIONS}'s {BLOCK_INFO} block sets {m.group(1)} twice")
+        values[m.group(1)] = m.group(2)
+    return start, end, values
+
 
 def read_block(text):
-    m = STATE_BLOCK.search(text)
-    if not m:
-        raise BlockUnreadable(f"{PLAYBOOK_DIR}/MISSIONS.md has no agent-room-state block")
-    values = {}
-    for line in m.group(1).splitlines():
-        key, sep, value = line.partition(":")
-        if sep and STATE_KEY.fullmatch(key.strip()):
-            values[key.strip()] = value.strip()
-    return values
+    return locate_block(text)[2]
 
 
 def write_block(text, updates):
-    m = STATE_BLOCK.search(text)
-    if not m:
-        raise StateError(f"{PLAYBOOK_DIR}/MISSIONS.md has no agent-room-state block")
-    lines, done = [], set()
-    for line in m.group(1).splitlines():
-        key, sep, _ = line.partition(":")
-        if sep and key.strip() in updates:
-            lines.append(f"{key.strip()}: {updates[key.strip()]}")
-            done.add(key.strip())
+    """TEXT with the valid machine block's keys set from UPDATES (new keys appended), all else untouched."""
+    start, end, _ = locate_block(text)
+    lines = text.split("\n")
+    body, done = [], set()
+    for line in lines[start + 1:end]:
+        m = BLOCK_LINE.fullmatch(line.rstrip("\r"))
+        if m and m.group(1) in updates:
+            body.append(f"{m.group(1)}: {updates[m.group(1)]}")
+            done.add(m.group(1))
         else:
-            lines.append(line)
-    lines += [f"{k}: {v}" for k, v in updates.items() if k not in done]
-    return text[:m.start(1)] + "".join(line + "\n" for line in lines) + text[m.end(1):]
+            body.append(line)
+    body += [f"{k}: {v}" for k, v in updates.items() if k not in done]
+    return "\n".join(lines[:start + 1] + body + lines[end:])
 
 
 def render_block(values):
-    return "```agent-room-state\n" + "".join(f"{k}: {v}\n" for k, v in values.items()) + "```\n"
+    return f"```{BLOCK_INFO}\n" + "".join(f"{k}: {v}\n" for k, v in values.items()) + "```\n"
 
 
 def with_block(text, values):
-    """MISSIONS.md TEXT (None if missing) with its machine block holding VALUES: updated in place if it
-    parses, rewritten in place if only its fence is damaged, else prepended under the title. A missing
-    file starts from the template."""
+    """MISSIONS.md TEXT (None if missing: the template) with its machine block holding VALUES: updated in
+    place if valid. Otherwise nothing is deleted: every fence whose info string starts with agent-room-state
+    is renamed to agent-room-state-damaged, and a fresh block goes first, under the title."""
     if text is None:
         text = template("MISSIONS.md")
-    if STATE_BLOCK.search(text):
+    try:
         return write_block(text, values)
+    except BlockUnreadable:
+        pass
+    lines = text.split("\n")
+    for i, line in enumerate(lines):
+        m = FENCE.fullmatch(line.rstrip("\r"))
+        if m and re.match(rf"{BLOCK_INFO}(?![\w-])", m.group(2)):
+            lines[i] = line.replace(BLOCK_INFO, f"{BLOCK_INFO}-damaged", 1)
+    text = "\n".join(lines)
     block = render_block(values)
-    m = BROKEN_BLOCK.search(text)
-    if m:
-        return text[:m.start()] + block + text[m.end():]
     first, _, rest = text.partition("\n")
     if first.startswith("# "):
         return f"{first}\n\n{block}\n" + rest.lstrip("\n")
@@ -1120,15 +1165,18 @@ def check_missions(path, current):
     """Refuse (exit 1) a MISSIONS.md that loses its valid block or changes the lease by hand: only
     lease take, lease release and room.py's own writes change lease_session and lease_generation."""
     f = os.path.join(path, MISSIONS)
+    why = "it would change the lease"
     try:
         new = read_block(open(f).read()) if os.path.isfile(f) else None
-    except BlockUnreadable:
-        new = None
+        if new is None:
+            why = "it would be gone"
+    except BlockUnreadable as e:
+        new, why = None, str(e)
     if new is None or lease_of(new) != lease_of(current):
         holder, gen = lease_of(current)
         raise StateError(f"not committed: MISSIONS.md must keep a valid agent-room-state block with the current "
-                         f"lease (lease_session: {holder}, lease_generation: {gen}); only 'lease take' and "
-                         "'lease release' change the lease")
+                         f"lease (lease_session: {holder}, lease_generation: {gen}), and {why}; only 'lease take' "
+                         "and 'lease release' change the lease")
 
 
 def cmd_state_commit(a):
