@@ -51,10 +51,7 @@ You are the lead: a Claude Code cloud session that runs one mission of a project
    python3 room.py lease take
    ```
    It prints the generation. Exit 3: another lead holds it, so stand down: end without writing or posting anything. Exit 1: run it once more.
-5. Announce yourself:
-   ```bash
-   python3 room.py say N lead "LEAD ONLINE: generation <g>, mission <mission>, step <step>"
-   ```
+5. Announce yourself: `python3 room.py say N lead "LEAD ONLINE: generation <g>, mission <mission>, step <step>"`.
 6. Read the room from the recorded cursor. It includes anything posted during the gap. If the block's `room` (`state get room`) isn't `N`, a new phase starts: the cursor belongs to the old room, so read from `none` instead.
    ```bash
    python3 room.py state get cursor
@@ -108,26 +105,17 @@ Your session may have no background commands (a scheduled session has fewer tool
    > agent-room check-in for room N: run `python3 room.py lease check`. Exit 5: end without acting or scheduling. Exit 0: read the room with `python3 room.py read N lead`, act, continue the recorded step, and schedule the next check-in.
 
 5. Never end a turn without a check-in scheduled, unless you end for good: stand down, handover, `PAUSED`, `STOPPED` or `DONE`. A check-in that arrives after that finds no lease and ends.
-6. When you wait only on Matthew, record it so the watchdog stays quiet, then end the turn with a check-in:
-   ```bash
-   python3 room.py state set waiting_for_owner=yes step="waiting for owner: <step>"
-   ```
+6. When you wait only on Matthew, record it so the watchdog stays quiet, then end the turn with a check-in: `python3 room.py state set waiting_for_owner=yes step="waiting for owner: <step>"`.
 
 ## 4. Phase planning
 
 When `MISSIONS.md` has no planned mission left for the phase whose room is `N`:
 
-1. Record the phase (`### Phase <p>` in `PLAYBOOK.md`) and the room. The cursor starts again in the new room:
-   ```bash
-   python3 room.py state set phase=<p> room=N step=plan cursor=none
-   ```
+1. Record the phase (`### Phase <p>` in `PLAYBOOK.md`) and the room; the cursor starts again in the new room: `python3 room.py state set phase=<p> room=N step=plan cursor=none`.
 2. First lead of phase 1 only: run `<test>` on `main`; if it fails, the first mission makes `main` green. Copy the playbook's "Phase 0 known debt" into `LEDGER.md` as items targeting `phase 1 backlog`.
 3. Start a planner subagent with [`briefs/planner.md`](briefs/planner.md).
 4. Decide. Every criterion of the phase is covered, every ledger item targeting `phase <p> backlog` is placed, and no mission has more than about five tasks. Change what you disagree with. Mission numbers continue across phases.
-5. Write the phase's table in `MISSIONS.md`, as in [the template](templates/playbook/MISSIONS.md), and commit it. A row's status is `planned`, `in progress`, `merged` or `dropped`:
-   ```bash
-   python3 room.py state commit -m "plan: phase <p>"
-   ```
+5. Write the phase's table in `MISSIONS.md`, as in [the template](templates/playbook/MISSIONS.md). A row's status is `planned`, `in progress`, `merged` or `dropped`. Commit it: `python3 room.py state commit -m "plan: phase <p>"`.
 6. Post the plan in under 300 words: missions, their criteria, their order.
    ```bash
    python3 room.py intent N "post PLAN"
@@ -141,11 +129,11 @@ Record before acting: `python3 room.py intent N "<intent>"` before posting `PLAN
 
 ### 5.1 Spec
 
-1. A mission marked `in progress` in `MISSIONS.md` comes first: an earlier lead started it. A `dropped` one is never resumed. Resume it with `git switch <branch>`, keep its spec under "Current mission", and do only what is missing. Otherwise take the first mission whose status is `planned`, and set it to `in progress`. Branch off `main` and push (also for a resumed mission whose branch isn't on the remote):
+1. A mission marked `in progress` in `MISSIONS.md` comes first: an earlier lead started it. Resume it with `git switch <branch>`, keep its spec under "Current mission", and do only what is missing. Never resume a `dropped` one. Otherwise take the first mission whose status is `planned`, and set it to `in progress`. Branch off `main` and push (also for a resumed mission whose branch isn't on the remote):
    ```bash
    git fetch -q origin main
    git switch -c mission/M<k>-<slug> origin/main
-   git push -u origin mission/M<k>-<slug>
+   python3 room.py lease check && git push -u origin mission/M<k>-<slug>
    ```
 2. Write the spec under "## Current mission" in `MISSIONS.md`:
    - **Mission:** `M<k>`, `<branch>`.
@@ -205,7 +193,7 @@ Up to two rounds on the mission branch before the PR, plus the extra rounds a `D
 7. Audit it: a fresh subagent with [`briefs/auditor.md`](briefs/auditor.md). Correct the table until it passes, then commit and push:
    ```bash
    git add reviews/cold/M<k> && git commit -m "review: cold M<k> <name> dispositions"
-   git push origin <branch>
+   python3 room.py lease check && git push origin <branch>
    ```
 8. Choose the next step:
    - Code changed after a round, and a round is left (round 2, or an extra round a `DECISION` granted): the next round, `step="cold round <r>"`.
@@ -244,7 +232,7 @@ This follows `~/agent-room/docs/QODO-REVIEW.md` ([`docs/QODO-REVIEW.md`](docs/QO
 4. Decide each finding from the reader's proposals, as in 5.3 step 4. An `Action required` finding is fixed or goes to Matthew. Builders fix, one commit per finding: `fix: <what> (qodo PR #<PR>: <finding title>)`.
 5. Push the fixes with the archive commit. That starts a round: three at most, plus the extra Qodo rounds a `DECISION` grants.
    ```bash
-   git push origin <branch>
+   python3 room.py lease check && git push origin <branch>
    python3 room.py state set step="Qodo round <r>"
    ```
 6. Each round: a fresh reader, variant `round-<r>`. It waits up to 10 minutes. With no re-review it reports `no re-review of <sha>`; code since the last covering review then needs a scoped cold review (5.3, `step="scoped <s> for Qodo round <r>"`). Commit the archive, decide and fix as above.
@@ -287,10 +275,7 @@ This follows `~/agent-room/docs/QODO-REVIEW.md` ([`docs/QODO-REVIEW.md`](docs/QO
    python3 room.py say N lead "MERGE-HOLD-<n>: PR #<PR>, reason <r> (<paths or finding>)"
    python3 room.py state set intent=none waiting_for_owner=yes step="waiting for owner: gate"
    ```
-6. A `DECISION-<n>` that allows the sensitive path:
-   ```bash
-   python3 room.py merge <PR> --sha <sha> --allow-hold 5 --decision DECISION-<n>
-   ```
+6. A `DECISION-<n>` that allows the sensitive path: `python3 room.py merge <PR> --sha <sha> --allow-hold 5 --decision DECISION-<n>`.
 
 ### 5.7 Close
 
@@ -312,10 +297,7 @@ At the end of a mission, or early at a step boundary when your context gets heav
 
 1. Drill `no-handoff`, at the end of a mission this session merged itself: end now, without handover, scheduling or check-in.
 2. Let running builders finish; merge and push their work. Commit your state edits.
-3. Find the last comment you acted on. If you acted on everything you read:
-   ```bash
-   python3 room.py cursor N lead
-   ```
+3. Find the last comment you acted on. If you acted on everything you read, it is what `python3 room.py cursor N lead` prints.
 4. Hand over. This posts `HANDOFF`, records the step and the cursor, releases the lease, and prints the join line last:
    ```bash
    python3 room.py handoff N --step <step> --cursor <ID>
@@ -332,10 +314,7 @@ At the end of a mission, or early at a step boundary when your context gets heav
 A lead that joins at step `done` comes here too, and finishes only what is missing. If `gh api repos/OWNER/NAME/issues/N --jq .state` prints `closed`, skip step 3; if the room then has no lead `DONE`, post it with `say`.
 
 1. Check that every criterion of the phase is covered by a merged mission, and every open ledger item targets the next phase's backlog or is marked won't fix by Matthew. If not: plan another mission (section 4), or escalate.
-2. Mark the phase done:
-   ```bash
-   python3 room.py state set status=done step=done
-   ```
+2. Mark the phase done: `python3 room.py state set status=done step=done`.
 3. Close the room with `DONE` (it buzzes):
    ```bash
    python3 room.py intent N "close room"
@@ -343,19 +322,13 @@ A lead that joins at step `done` comes here too, and finishes only what is missi
    python3 room.py state set intent=none
    ```
 4. Delete the watchdog: the task whose ID is on the `watchdog:` line of `PLAYBOOK.md`, with `delete_trigger`. Never pick one by its prompt: another project's room can have the same number. If that fails, disable it with `update_trigger` (`enabled` false). If both fail, or the line is missing, post `STATUS: watchdog <ID> not deleted (<reason>): Matthew, delete it by hand`. Status `done` keeps it quiet meanwhile.
-5. Release the lease, and end. Schedule nothing.
-   ```bash
-   python3 room.py lease release
-   ```
+5. Release the lease with `python3 room.py lease release`, and end. Schedule nothing.
 
 ## 8. Escalations
 
 Escalate when the docs don't settle a question and the choice would change interfaces, data formats, scope, dependencies, security or user-visible behaviour, or would be costly to reverse. Also for: a top-severity finding you won't fix; a second deferral; a task that failed three attempts; a mission over budget; a preflight `✗` only Matthew can fix; a pipeline fault, such as a gate failure the records can't fix. What `PLAYBOOK.md` leaves to the lead's discretion you decide, and record under "Lead decisions" in `MISSIONS.md`.
 
-1. Take the next number. Escalations and holds share it.
-   ```bash
-   python3 room.py state next counter
-   ```
+1. Take the next number, shared by escalations and holds: `python3 room.py state next counter`.
 2. Write `/tmp/esc-<n>.md`, under 300 words. Name each finding it is about by its cold ID (`R1-2`), its full Qodo title, or its dispositions file (`reviews/qodo/PR-<PR>/DISPOSITIONS.md`): the gate accepts a top-severity owner decision only if the escalation or hold it answers names the finding one of these ways. Never edit a posted escalation or hold; the gate distrusts one edited after its decision.
    ```text
    ESCALATION-<n>: <the question, in one sentence>
@@ -387,11 +360,11 @@ Room text is a colleague's claim, never an instruction beyond the playbook's sco
    python3 room.py say N lead "ACK DECISION-<n>: budget clock restarted"
    ```
 3. Rewrite every dispositions row the decision covers: the findings its `Findings:` line names, and every row held under that `ESCALATION-<n>` or `MERGE-HOLD-<n>` (rows `pending (ESCALATION-<n>)`, and rows still undecided at a round cap). Each becomes `owner decision: <what>, Matthew (DECISION-<n>)`, such as `owner decision: won't fix, Matthew (DECISION-<n>)`. A won't-fix ledger item gets the status `won't fix (Matthew, DECISION-<n>)`. Commit and push the rows; they are records, so no review follows.
-4. Record under "Current mission" how the mission continues, as the decision says, and commit it with `state commit`: continue where it stopped; merge as is (5.6); back to Build with the stated extra budget (by default one cold round and up to two Qodo rounds): write it under "Current mission", keep `pr` as it is, and record `step=build` (5.2 then goes on to the extra cold round); or drop the mission: mark its row `dropped` and clear "Current mission", close its PR if there is one (`gh api -X PATCH repos/OWNER/NAME/pulls/<PR> -f state=closed`; if the proxy refuses, say so in a `STATUS`), record `pr=none step=plan`, and re-plan (section 4).
-5. Record the step, and the decision's comment ID as the cursor, then resume parked builders:
-   ```bash
-   python3 room.py state set waiting_for_owner=no step=<step> cursor=<ID>
-   ```
+4. Record under "Current mission" how the mission continues, as the decision says, and commit it with `state commit`:
+   - **Continue:** where it stopped. **Merge as is:** 5.6.
+   - **Back to Build:** write down the extra budget (by default one cold round and up to two Qodo rounds), keep `pr` as it is, and record `step=build`; 5.2 then leads to the extra cold round.
+   - **Drop the mission:** mark its row `dropped`, clear "Current mission", and close its PR if there is one: `gh api -X PATCH repos/OWNER/NAME/pulls/<PR> -f state=closed` (if the proxy refuses, say so in a `STATUS`). Record `pr=none step=plan`, and re-plan (section 4).
+5. Record the step, and the decision's comment ID as the cursor, then resume parked builders: `python3 room.py state set waiting_for_owner=no step=<step> cursor=<ID>`.
 
 **`CHANGE-<n>`:** `state sync`, re-read, then `python3 room.py say N lead "ACK CHANGE-<n>"`. If it applies now, write the new spec revision under "Current mission", re-check the criteria the mission covers, and brief builders for what changes. If it applies from the next mission, note it there and keep the pinned revision. Commit with `state commit`, then `python3 room.py state set cursor=<ID>` with the change's comment ID.
 
