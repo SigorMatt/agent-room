@@ -566,6 +566,7 @@ STATE_KEY = re.compile(r"[a-z][a-z0-9_]*")
 TEMPLATE_URL = "https://raw.githubusercontent.com/{repo}/{version}/templates/playbook/{name}"
 FIRST_GITIGNORE = "__pycache__/\n*.pyc\n.venv/\nnode_modules/\n.env\n.DS_Store\n"
 STATUSES = ("running", "paused", "stopped", "done")  # the machine block's status; a missing one reads as running
+STATE_MARKER = "agent-room-state"  # in the git dir of each state worktree room.py makes
 EXIT_MOVED, EXIT_LEASE = 3, 5
 
 
@@ -595,12 +596,19 @@ def identity(cwd):
 
 
 def state_checkout():
-    """The project checkout to add the state worktree to, or None to clone instead."""
+    """The project checkout to add the state worktree to (its main worktree), or None to clone instead. Never
+    a state clone room.py made, even when run from inside one."""
     if os.environ.get("ROOM_STATE_REMOTE"):
         return None
     here = repo_from_checkout()
     if not here or here.lower() != REPO.lower():
         return None
+    common = git("rev-parse", "--git-common-dir", check=False).stdout.strip()
+    common = os.path.realpath(common) if common else ""
+    if not common or os.path.isfile(os.path.join(common, STATE_MARKER)):
+        return None  # inside a state clone: it is no project checkout
+    if os.path.basename(common) == ".git":
+        return os.path.dirname(common)  # from a linked worktree too, so moving that one aside can't pull the rug
     r = git("rev-parse", "--show-toplevel", check=False)
     return r.stdout.strip() if r.returncode == 0 and r.stdout.strip() else None
 
@@ -618,9 +626,8 @@ def state_worktree_exists():
     return os.path.exists(os.path.join(state_path(), ".git"))
 
 
-def remote_heads():
-    """{branch: sha} of the project repo's branches."""
-    root = state_checkout()
+def ls_heads(root):
+    """{branch: sha} of the project repo's branches, through the checkout ROOT or, if None, remote_url()."""
     out = git("ls-remote", "--heads", "origin", cwd=root).stdout if root else \
         git("ls-remote", "--heads", remote_url()).stdout
     heads = {}
@@ -631,32 +638,55 @@ def remote_heads():
     return heads
 
 
-def project_toplevel():
-    """The main worktree of the project checkout around the current directory, or None."""
-    if (repo_from_checkout() or "").lower() != REPO.lower():
+def remote_heads():
+    """{branch: sha} of the project repo's branches."""
+    return ls_heads(state_checkout())
+
+
+# Only a directory room.py made is ever moved aside and rebuilt: it writes STATE_MARKER into the git dir of every
+# state worktree or clone it creates (B-2, cold M2 S1-3 to S1-5). A directory whose .git file names an admin dir
+# that is gone (the checkout it was added from was cloned again) is the one other case. Anything else is refused,
+# whatever the current directory.
+
+def git_dir_of(path):
+    """PATH's git dir, read from the file system (PATH/.git, or the gitdir its .git file names) whether or not
+    git can open it; None when PATH has no .git."""
+    dot = os.path.join(path, ".git")
+    if os.path.isdir(dot):
+        return dot
+    try:
+        with open(dot) as f:
+            line = f.read().strip()
+    except OSError:
         return None
-    common = git("rev-parse", "--git-common-dir", check=False).stdout.strip()
-    common = os.path.realpath(common) if common else ""
-    return os.path.dirname(common) if os.path.basename(common) == ".git" else None
+    if not line.startswith("gitdir:"):
+        return None
+    gd = line[len("gitdir:"):].strip()
+    return gd if os.path.isabs(gd) else os.path.normpath(os.path.join(path, gd))
 
 
-def is_stale_state_worktree(path):
-    """A state worktree left over from an agent-room/state that was deleted and recreated: a linked
-    worktree or clone of this repo whose HEAD holds docs/playbook/, and not the project checkout."""
-    url = git("remote", "get-url", "origin", cwd=path, check=False).stdout.strip()
-    if (repo_of_url(url) or "").lower() != REPO.lower() and url != remote_url():
-        return False
-    if git("rev-parse", "-q", "--verify", f"HEAD:{PLAYBOOK_DIR}", cwd=path, check=False).returncode != 0:
-        return False
-    top = project_toplevel()
-    return not (top and os.path.realpath(top) == os.path.realpath(path))
+def has_marker(path):
+    gd = git_dir_of(path)
+    return bool(gd) and os.path.isfile(os.path.join(gd, STATE_MARKER))
+
+
+def dangling_gitfile(path):
+    """PATH's .git is a file naming a git dir that no longer exists."""
+    gd = git_dir_of(path)
+    return os.path.isfile(os.path.join(path, ".git")) and bool(gd) and not os.path.exists(gd)
+
+
+def mark(path):
+    gd = os.path.join(path, git_out("rev-parse", "--git-dir", cwd=path))
+    with open(os.path.join(gd, STATE_MARKER), "w") as f:
+        f.write(f"The {STATE_BRANCH} worktree of {REPO}, made by room.py, which may move it aside and rebuild it.\n")
 
 
 def check_state_dir(path):
     """Fetch, then judge the directory before anything resets or cleans it. Returns 'ok', or 'stale'
-    for a state worktree whose history the recreated branch no longer shares. Refuses anything else:
-    a directory with another branch checked out, or with no state history (the project checkout, or
-    a builder's worktree, whatever the current directory)."""
+    for a state worktree room.py made whose history the recreated branch no longer shares. Refuses
+    anything else: a directory with another branch checked out, or with no state history and no marker
+    (the project checkout, or a builder's worktree, whatever the current directory)."""
     branch = git("symbolic-ref", "-q", "--short", "HEAD", cwd=path, check=False).stdout.strip()
     if branch and branch != STATE_BRANCH:
         raise StateError(f"{path} has branch {branch} checked out, so it isn't the state worktree; "
@@ -664,40 +694,80 @@ def check_state_dir(path):
     fetch(path)
     if git("merge-base", "HEAD", STATE_REF, cwd=path, check=False).returncode == 0:
         return "ok"
-    if is_stale_state_worktree(path):
+    if has_marker(path):
         return "stale"
-    raise StateError(f"{path} holds no {STATE_BRANCH} history (the project checkout?), so it isn't the "
-                     "state worktree; set ROOM_STATE_DIR to a directory of its own")
+    raise StateError(f"{path} holds no {STATE_BRANCH} history and has no {STATE_MARKER} marker in its git dir "
+                     "(the project checkout?), so room.py didn't make it and leaves it alone: move it yourself, or "
+                     "set ROOM_STATE_DIR to a directory of its own")
 
 
-def move_aside(path, why):
-    aside = f"{path}.broken-{time.strftime('%Y%m%dT%H%M%SZ', time.gmtime())}"
+def save_local_work(path, stamp, aside):
+    """Before a stale state worktree is moved aside: its HEAD and uncommitted changes as a commit on
+    refs/agent-room/broken-<stamp> in its repository (for a linked worktree, the project's, which outlives the
+    worktree's own admin dir), else as a patch next to the moved dir. Returns the words for the notice."""
+    try:
+        head = git_out("rev-parse", "HEAD", cwd=path)
+        git("add", "-A", cwd=path)  # its index moves aside with it anyway
+        tree = git_out("write-tree", cwd=path)
+        snap = head if tree == git_out("rev-parse", "HEAD^{tree}", cwd=path) else git_out(
+            *identity(path), "commit-tree", tree, "-p", head, "-m",
+            f"agent-room: uncommitted work of the stale state worktree {path}", cwd=path)
+        ref = f"refs/agent-room/broken-{stamp}"
+        if git("update-ref", ref, snap, "0" * 40, cwd=path, check=False).returncode != 0:  # create, never overwrite
+            ref += f"-{os.getpid()}"
+            git("update-ref", ref, snap, "0" * 40, cwd=path)
+        repo = os.path.realpath(os.path.join(path, git_out("rev-parse", "--git-common-dir", cwd=path)))
+        inside = os.path.realpath(path) + os.sep
+        if repo.startswith(inside):  # a clone keeps its repo, which moves with it
+            repo = os.path.join(aside, repo[len(inside):])
+        what = "its HEAD" + (" and uncommitted changes" if snap != head else "")
+        return f"saved {what} as {ref} ({snap[:12]}) in {repo}"
+    except (StateError, OSError) as e:
+        patch = f"{aside}.patch"
+        try:
+            diff = git("diff", "--cached", "--binary", "HEAD", cwd=path, check=False).stdout
+            head = git("rev-parse", "HEAD", cwd=path, check=False).stdout.strip() or "unknown"
+            with open(patch, "w") as f:
+                f.write(f"HEAD of {path} was {head}; its uncommitted changes follow.\n\n{diff}")
+            return f"couldn't save a commit ({e}); saved its HEAD and changes as {patch}"
+        except OSError as e2:
+            return f"couldn't save its HEAD or changes ({e}; {e2}); its files are in the moved dir"
+
+
+def move_aside(path, why, save=False):
+    stamp = time.strftime('%Y%m%dT%H%M%SZ', time.gmtime())
+    aside = f"{path}.broken-{stamp}"
     if os.path.lexists(aside):
         aside += f"-{os.getpid()}"
+    saved = save_local_work(path, stamp, aside) if save else None
     os.rename(path, aside)
-    print(f"[state worktree {path} {why}; moved it to {aside} and made a new one]", file=sys.stderr)
+    print(f"[state worktree {path} {why}; " + (f"{saved}; " if saved else "") +
+          f"moved it to {aside} and made a new one]", file=sys.stderr)
 
 
 def ensure_worktree():
     """Path of the state worktree, just fetched: checked, rebuilt if broken or stale, created if missing."""
     path = state_path()
+    root = state_checkout()  # before anything moves: the current directory may be inside the one moved aside
     if os.path.lexists(os.path.join(path, ".git")):
         r = git("rev-parse", "--show-toplevel", cwd=path, check=False)
         if r.returncode == 0:
             if check_state_dir(path) == "ok":
                 return path
-            move_aside(path, f"is stale (no history of the recreated {STATE_BRANCH})")
-        elif "not a git repository" in r.stderr:
+            move_aside(path, f"is stale (no history of the recreated {STATE_BRANCH})", save=True)
+        elif dangling_gitfile(path) or has_marker(path):
             # e.g. the project checkout it was added from was cloned again
-            move_aside(path, "was broken")
+            move_aside(path, "was broken (no git data left to save; its files are kept)")
+        elif "not a git repository" in r.stderr:
+            raise StateError(f"{path} is no git checkout room.py can open, and has no {STATE_MARKER} marker, so "
+                             "room.py leaves it alone: move it yourself, or set ROOM_STATE_DIR")
         else:
             raise StateError(f"git rev-parse in {path}: {r.stderr.strip()}")
-    if STATE_BRANCH not in remote_heads():
+    if STATE_BRANCH not in ls_heads(root):
         raise StateError(f"{STATE_BRANCH} doesn't exist in {REPO} yet: the architect runs '{ME} state init'")
     if os.path.isdir(path) and os.listdir(path):
         raise StateError(f"{path} exists and is not a git checkout: move it, or set ROOM_STATE_DIR")
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    root = state_checkout()
     if root:
         git("fetch", "-q", "origin", f"+refs/heads/{STATE_BRANCH}:{STATE_REF}", cwd=root)
         git("worktree", "prune", cwd=root)
@@ -705,6 +775,7 @@ def ensure_worktree():
         git("worktree", "add", "-q", "--detach", path, STATE_REF, cwd=root)
     else:
         git("clone", "-q", "--depth", "1", "--single-branch", "--branch", STATE_BRANCH, remote_url(), path)
+    mark(path)
     return path
 
 
