@@ -27,7 +27,7 @@ To look up a message in the room: who sent it, whether it buzzes, and what you d
    | `PAUSED` | Lead | Yes | Paused at a safe point; the lead ended | Resume when you like ([Start the next lead by hand](start-the-next-lead-by-hand.md)) |
    | `STOPPED` | Lead | Yes | Halted on `STOP`; the lead ended | [Answer a buzz](answer-a-buzz.md) |
    | `DONE` | Lead | Yes | The phase is complete and the room closed | [Answer a buzz](answer-a-buzz.md) |
-   | `LEAD-SILENT` | Watchdog | Yes | No progress for three hours. With the lead task set up, a takeover lead is started too, at most twice for the same stall. The last one, "two takeover leads made no progress; no more starts", starts nothing. "no lead joined after DECISION-n": the leads started for your decision never joined. A lead that posted lately isn't taken over | [Answer a buzz](answer-a-buzz.md) |
+   | `LEAD-SILENT` | Watchdog | Yes | No progress for three hours. With the lead task set up, a takeover lead is started too, at most twice for the same stall. The last one, "two takeover leads made no progress; no more starts", starts nothing. "no lead joined after DECISION-n": no lead joined after your decision, watched like a stall. "still no progress since …": a reminder every 12 hours; "last start failed" means the watchdog can't start leads. A lead that keeps posting is alarmed but never taken over | [Answer a buzz](answer-a-buzz.md) |
    | `ACK DECISION-n`, `ACK CHANGE-n` | Lead | No | Received and applied | Nothing |
    | `DECISION-n` | Architect | No | Your answer to escalation or hold n, with how the mission continues | Wait for the ACK |
    | `CHANGE-n` | Architect | No | A design change in the middle of a phase | [Change something mid-build](change-something-mid-build.md) |

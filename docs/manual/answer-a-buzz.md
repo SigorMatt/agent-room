@@ -29,7 +29,7 @@ The design doesn't settle a question. Meanwhile the lead keeps building whatever
 1. The architect explains the question, the options, the lead's recommendation, and what is blocked.
 2. Decide together. Ask anything you need.
 3. The architect records your decision in `DESIGN.md`, then posts `DECISION-n` in the room, saying how the mission continues.
-4. If the lead was waiting for you, it had ended. The architect starts a new lead to act on your decision. You may get an approval pop-up: approve it. If the architect doesn't, the watchdog does, at its first run more than 30 minutes after the decision: its `LEAD-STARTED` ends `started by watchdog after DECISION-n`. That's an ordinary start, not a takeover. If no lead joins, it tries once more; if that fails too, a `LEAD-SILENT: no lead joined after DECISION-n` buzz follows (see `LEAD-SILENT` below).
+4. If the lead was waiting for you, it had ended. The architect starts a new lead to act on your decision. You may get an approval pop-up: approve it. If the architect doesn't, the watchdog does, at its first run more than 30 minutes after the decision: its `LEAD-STARTED` ends `started by watchdog after DECISION-n`. That's an ordinary start, not a takeover. If no lead joins, the watchdog watches it like a stall: a `LEAD-SILENT: no lead joined after DECISION-n` buzz, one more start, and at last `…; no more starts` (see `LEAD-SILENT` below).
 5. Wait for the lead's `ACK DECISION-n` ("What you should see").
 
 If the escalation is a **pipeline fault** (the quoted line says "the records can't fix this"), agent-room itself needs a fix. Report it ([Report a pipeline problem](report-a-pipeline-problem.md)); the mission waits. When the patched release is out, tell the architect, with its version:
@@ -80,9 +80,12 @@ The lead merged the last mission, checked every criterion, posted `DONE`, closed
 
 ### `LEAD-SILENT`: no progress for three hours
 
-The watchdog saw nothing move. A lead died, got stuck or ran out of Claude usage, or the next one never started. With the lead task set up, the watchdog has usually started a takeover lead already: a `LEAD-STARTED` follows in the room, then that lead's `LEAD ONLINE`. It tries at most two takeovers for the same stall. It never takes over from a lead that posted lately, such as a `STATUS`: that lead is alive but slow, and the architect tells you so.
+The watchdog saw nothing move. A lead died, got stuck or ran out of Claude usage, or the next one never started. With the lead task set up, the watchdog has usually started a takeover lead already: a `LEAD-STARTED` follows in the room, then that lead's `LEAD ONLINE`. It tries at most two takeovers for the same stall. It never takes over from a lead that posted lately, such as a `STATUS`. That lead may be working, or looping: posting without getting anywhere. It still gets alarms, and the architect looks at what it does; for a looping lead, it may start a takeover by hand with your agreement.
 
-If the message reads `LEAD-SILENT: no lead joined after DECISION-n`, the leads started for your decision never joined, and none starts on its own any more. The architect finds out why with you (often the lead task's token, or Claude usage), fixes it, and starts a lead.
+Other texts:
+
+- `LEAD-SILENT: no lead joined after DECISION-n`: no lead has joined since your decision. The watchdog is still starting leads for it, at most two; handle it like the steps below. With `; no more starts`, none starts on its own any more: the architect finds out why with you (often the lead task's token, or Claude usage), fixes it, and starts a lead, which the watchdog then watches again.
+- `LEAD-SILENT: still no progress since <time> (… takeover starts so far; …)`: a reminder, every 12 hours by default, while nothing moves. If it ends `(last start failed: <reason>)`, the watchdog can't start leads, often because of the lead task's token or the task itself. The architect fixes the cause with you ([Set up the lead task](set-up-the-lead-task.md), "If you don't"), then starts a lead by hand. Otherwise a lead is there but not progressing: as above.
 
 1. If the buzz's message reads `LEAD-SILENT: state unreadable (…)`, the pipeline's records are broken, not the lead. The architect checks them first. If the `agent-room/state` branch was deleted, it is restored before any lead starts. Best: the architect pushes it again from its own copy, or you push it from a fork or a local clone that still has it. In a local clone, run:
 
