@@ -781,8 +781,7 @@ def t_start_lead_refuses_a_pin_the_prompt_rejects():
         before = counts()
         for args in (("--takeover",), ("--takeover", "--force")):
             r = start("architect", *args, ROOM_SESSION="arch")
-            assert r.returncode == 6 and r.stderr.strip() == "pin v1.0.0-rc.1 isn't accepted by the lead task's " \
-                "prompt", (args, out(r))
+            assert r.returncode == 6 and r.stderr.strip() == REJECTED_PIN, (args, out(r))
         assert counts() == before, "nothing started, nothing posted"
         edit_state("PLAYBOOK.md", lambda t: re.sub(r"^pipeline: .*$", "pipeline: v2.10", t, count=1, flags=re.M))
         r = start("architect", "--takeover", ROOM_SESSION="arch")
@@ -977,6 +976,44 @@ def t_a_second_start_when_the_started_lead_makes_no_progress():
     online()
     set_state("step=build 22")
     age_watchdog()
+
+
+REJECTED_PIN = "pin v1.0.0-rc.1 isn't accepted by the lead task's prompt: pin main or a release vX.Y.Z"
+
+
+def t_join_line_preflight_and_handoff_refuse_a_pin_the_prompt_rejects():
+    # cold M6b R1-6: the architect fires join-line's output, so join-line refuses the pin start-lead refuses, and
+    # preflight fails it; handoff warns instead of printing a line the lead task would reject
+    original = edit_state("PLAYBOOK.md", lambda t: re.sub(r"^pipeline: .*$", "pipeline: v1.0.0-rc.1", t, count=1,
+                                                          flags=re.M))
+    try:
+        for args in ((), ("--takeover",)):
+            r = room("join-line", "1", *args)
+            assert r.returncode == 6 and r.stdout == "" and r.stderr.strip() == REJECTED_PIN, (args, out(r))
+        r = start("architect", "--takeover", ROOM_SESSION="arch")
+        assert r.returncode == 6 and r.stderr.strip() == REJECTED_PIN, out(r)
+        for role, env in (("architect", {}), ("lead", dict(ROOM_NTFY_TOPIC="t", QODO_REVIEW="on"))):
+            r = room("preflight", "--role", role, **env)
+            lines = [ln for ln in r.stdout.splitlines() if ln.startswith(("✓ state branch", "✗ state branch",
+                                                                          "! state branch"))]
+            want = f"✗ state branch: {REJECTED_PIN}" + (" (the architect)" if role == "lead" else "")
+            assert r.returncode == 1 and lines == [want], (role, out(r))
+        set_state("step=build 23")
+        n = len(comments())
+        r = room("handoff", "1", "--step", "spec 23", "--cursor", "none")
+        assert r.returncode == 0 and "Join agent room" not in r.stdout and REJECTED_PIN in r.stderr, out(r)
+        assert len(comments()) == n + 1 and text_of(comments()[-1]).startswith("HANDOFF: mission M1, next step spec 23")
+        room("lease", "take", check=True)
+    finally:
+        edit_state("PLAYBOOK.md", lambda t: original)
+    assert room("join-line", "1", check=True).stdout.strip() == JOIN.format(n=1, v="main")
+    edit_state("PLAYBOOK.md", lambda t: re.sub(r"^pipeline: .*$", "pipeline: v1.2.3", t, count=1, flags=re.M))
+    try:
+        assert room("join-line", "1", check=True).stdout.strip() == JOIN.format(n=1, v="v1.2.3")
+        r = room("preflight", "--role", "architect")
+        assert r.returncode == 0 and "✓ state branch has PLAYBOOK.md and DESIGN.md, pinned to v1.2.3" in r.stdout, out(r)
+    finally:
+        edit_state("PLAYBOOK.md", lambda t: original)
 
 
 setup()
