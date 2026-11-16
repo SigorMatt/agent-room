@@ -1362,6 +1362,24 @@ def t_a_first_alarm_says_when_its_start_is_held_off():
     age_room()
 
 
+# --- fixes after the second scoped cold review
+
+def t_gateway_errors_are_unconfirmed_starts():
+    # cold M6b S2-5: a 502 or 504 from a gateway, or a garbled reply, can come after the API fired the run
+    online()
+    for env, reason in ((dict(FAKE_FIRE_STATUS="502", FAKE_FIRE_BODY="Bad Gateway"), "HTTP 502"),
+                        (dict(FAKE_FIRE_STATUS="504", FAKE_FIRE_BODY="Gateway Timeout"), "HTTP 504"),
+                        (dict(FAKE_FIRE_FAIL="Weird server reply", FAKE_FIRE_EXIT="8"), "curl: (8) Weird server reply"),
+                        (dict(FAKE_FIRE_FAIL="Error in the HTTP2 framing layer", FAKE_FIRE_EXIT="16"),
+                         "curl: (16) Error in the HTTP2 framing layer")):
+        nc = len(comments())
+        r = start("architect", "--takeover", ROOM_SESSION="arch", **env)
+        assert r.returncode == 0 and r.stdout.startswith("warning: the lead task may have started a lead"), (env, out(r))
+        assert len(comments()) == nc + 1 and text_of(comments()[-1]) == \
+            f"LEAD-STARTED: unconfirmed ({reason})" + UNCONFIRMED.format(role="architect"), text_of(comments()[-1])
+        online()
+
+
 setup()
 for name, fn in list(globals().items()):
     if name.startswith("t_"):

@@ -3684,8 +3684,10 @@ def one_line(text, token, limit=300):
     return " ".join(scrub(str(text), (token,)).split())[:limit]
 
 
-UNSURE_CURL_EXITS = {18, 28, 52, 55, 56, 92}  # curl gave up after the request may have reached the API: timed out,
-# a partial, empty or lost reply, a broken send or stream. Any other curl failure (no DNS, no connection) is definite.
+UNSURE_CURL_EXITS = {8, 16, 18, 28, 52, 55, 56, 92}  # curl gave up after the request may have reached the API: a weird
+# reply, broken HTTP/2 framing, a timeout, a partial, empty or lost reply, a broken send or stream (cold M6b S2-5).
+# Any other curl failure (no DNS, no connection) is definite.
+UNSURE_STATUSES = {200, 502, 504}  # 200 without routine_fire, and a gateway's errors, which can come after the API fired
 
 
 def fire(task, token, text):
@@ -3840,10 +3842,11 @@ def start_lead(a, room, role, takeover=False, force=False, after=None):
         if err:
             print(f"started, but LEAD-STARTED wasn't posted: {one_line(err, token)}")
         return 0, None
-    if status == -1 or status == 200:
+    if status == -1 or status in UNSURE_STATUSES:
         # the outcome is unknown: a lead may have started, so a retry could start a second one (qodo PR #11). Record
         # it as unconfirmed: the watchdog then counts it as a sign of a lead, and a LEAD ONLINE follows if one started
-        reason = one_line(answer, token, 200) if status == -1 else "HTTP 200 without routine_fire"
+        reason = one_line(answer, token, 200) if status == -1 else \
+            "HTTP 200 without routine_fire" if status == 200 else f"HTTP {status}"
         print(f"warning: the lead task may have started a lead ({reason}); recorded as unconfirmed, not retried")
         err = post_quietly(room, role, f"LEAD-STARTED: unconfirmed ({reason}); a LEAD ONLINE follows if the lead "
                                        f"started ({by})", a)
