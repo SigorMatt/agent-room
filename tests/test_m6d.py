@@ -247,8 +247,22 @@ def t_a_plain_start_after_the_alarm_with_the_lease_released():
     assert [body_of(x) for x in fires()[nf:]] == [JOIN.format(n=1)]
 
 
+def answer_open_requests():
+    """Answer, as the architect, every lead request an earlier test left open in room 1, so a test's own request is
+    the room's oldest open one (B-6 reminds about the oldest, cold M6d R3-2)."""
+    msgs = [(c, re.match(r"<!-- agent-room role=(\S+)", c["body"]), text_of(c)) for c in comments()]
+    for c, tagged, text in msgs:
+        ask = re.match(r"(?:ESCALATION|MERGE-HOLD)-(\d+)(?!\d)", text)
+        if not (ask and tagged and tagged.group(1) == "lead" and c["user"]["login"] == "SigorMatt"):
+            continue
+        n = ask.group(1)
+        if not any(d["id"] > c["id"] and re.match(rf"DECISION-{n}(?!\d)", t) for d, _, t in msgs):
+            say(f"DECISION-{n}: answered (test cleanup)", role="architect", ROOM_SESSION="arch")
+
+
 def park(n, step):
     """The lead escalates and parks: ESCALATION-N 5 hours ago, the waiting step, the lease released."""
+    answer_open_requests()
     age_room()
     room("lease", "take", "--takeover", check=True)
     esc = say(f"ESCALATION-{n}: which one?")
@@ -432,6 +446,7 @@ def t_no_start_while_paused_or_stopped_with_the_lease_held():
 
 def t_a_waiting_reminder_doesnt_stand_in_for_a_decisions_alarm():
     # cold M6d R1-3: a reminder for ESCALATION-3 posted after DECISION-2 is not DECISION-2's alarm
+    answer_open_requests()
     age_room()
     room("lease", "take", "--takeover", check=True)
     e2 = say("ESCALATION-2: which font?")
@@ -570,6 +585,102 @@ def t_a_reposted_alarm_or_a_reminder_fires_nothing():
     assert new_kinds(n) == ["LEAD-SILENT"] * 3 and len(fires()) == nf
 
 
+# --- after cold review round 3 of M6d
+
+def t_start_lead_replacing_takes_over_only_the_lead_it_names():
+    # cold M6d R3-1: a takeover starter names the lead it replaces; it starts while that lead holds the lease, even
+    # as it keeps posting (a looping lead), and is refused once the lease is released or held by another session
+    stall("build 100")
+    say("STATUS: retrying task 3 again")  # L1 loops, still posting
+    nf = len(fires())
+    r = room("start-lead", "1", "architect", "--takeover", "--replacing", "L1", ROOM_SESSION="arch")
+    assert r.returncode == 0 and "started: " in r.stdout and len(fires()) == nf + 1, out(r)
+    assert text_of(comments()[-1]).endswith("(takeover join line, started by architect)")
+    stall("build 101")
+    room("handoff", "1", "--step", "build 101", "--cursor", "none", check=True)  # L1 handed over meanwhile
+    nf, n = len(fires()), len(comments())
+    r = room("start-lead", "1", "architect", "--takeover", "--replacing", "L1", ROOM_SESSION="arch")
+    assert r.returncode == 3 and r.stderr.strip() == "refused: the lease is now released, not held by L1; read the " \
+        "room again", out(r)
+    stall("build 102")
+    room("lease", "take", "--takeover", check=True, ROOM_SESSION="T7")  # another lead took the lease
+    r = room("start-lead", "1", "architect", "--takeover", "--replacing", "L1", ROOM_SESSION="arch")
+    assert r.returncode == 3 and r.stderr.strip() == "refused: the lease is now held by T7, not held by L1; read the " \
+        "room again", out(r)
+    r = room("start-lead", "1", "architect", "--replacing", "T7", ROOM_SESSION="arch")
+    assert r.returncode == 2 and "--replacing SESSION goes with --takeover" in r.stderr, out(r)
+    assert len(fires()) == nf
+
+
+def t_a_takeover_of_a_halted_build_needs_force():
+    # cold M6d R3-3: a takeover's lease take would set paused or stopped back to running, so start-lead refuses it for
+    # every role while this room's status is halted and the lease held; --force, on Matthew's word to resume, starts
+    for status in ("paused", "stopped"):
+        stall(f"build 110 {status}")
+        set_state(f"status={status}")
+        nf = len(fires())
+        for role, session in (("architect", "arch"), ("watchdog", "wd"), ("lead", "L5")):
+            r = room("start-lead", "1", role, "--takeover", ROOM_SESSION=session)
+            assert r.returncode == 3 and r.stderr.strip() == (
+                f"refused: status is {status} with the lease still held: a takeover would set it back to running; "
+                "on Matthew's word to resume, add --force"), (role, out(r))
+        assert len(fires()) == nf
+        r = room("start-lead", "1", "architect", "--takeover", "--force", ROOM_SESSION="arch")
+        assert r.returncode == 0 and "started: " in r.stdout and len(fires()) == nf + 1, out(r)
+        set_state("status=running")
+
+
+def t_an_ended_sessions_lease_is_no_sign_of_life():
+    # cold M6d R3-4 (its E2): a lead took the lease after the stall began, then handed over at the same step and its
+    # release failed: it has ended, so its lease is no sign of life, and the watchdog takes over at the first alarm
+    age_room()
+    room("lease", "take", "--takeover", check=True, ROOM_SESSION="L0", **ago(7)[1])
+    room("state", "set", "step=gate 120", check=True, ROOM_SESSION="L0", **ago(6)[1])  # L0's progress, 6h ago
+    room("lease", "release", check=True, ROOM_SESSION="L0", **ago(5.9)[1])
+    room("lease", "take", check=True, ROOM_SESSION="L8", **ago(5)[1])  # L8 joins 5h ago
+    online = say("LEAD ONLINE", ROOM_SESSION="L8")
+    backdate(lambda c: c["id"] == online, 300)
+    room("state", "set", "step=gate 120", "cursor=none", "intent=none", check=True, ROOM_SESSION="L8", **ago(4)[1])
+    handoff = say("HANDOFF: mission M1, next step gate 120", ROOM_SESSION="L8")  # then its release fails
+    backdate(lambda c: c["id"] == handoff, 240)
+    nf, n = len(fires()), len(comments())
+    r = watchdog()
+    assert "alarm: no progress for 6h" in r.stdout and "started: https://claude.ai/code/" in r.stdout, out(r)
+    assert new_kinds(n) == ["LEAD-SILENT", "LEAD-STARTED"], new_kinds(n)
+    assert text_of(comments()[-1]).endswith("(takeover join line, started by watchdog)") and len(fires()) == nf + 1
+    room("lease", "take", "--takeover", check=True)
+
+
+def t_an_older_open_request_gets_its_reminder():
+    # cold M6d R3-2 (its E3): two escalations; Matthew answers the newer one; the lead started after it applies it and
+    # parks again, still blocked on the older one, which gets the reminder
+    answer_open_requests()
+    age_room()
+    room("lease", "take", "--takeover", check=True, **ago(30)[1])
+    e21 = say("ESCALATION-21: which storage format for task 2?")
+    e22 = say("ESCALATION-22: task 4 failed three attempts")
+    backdate(lambda c: c["id"] == e21, 30 * 60)
+    backdate(lambda c: c["id"] == e22, 29 * 60)
+    set_state("waiting_for_owner=yes", "step=waiting for owner: build", hours=29)
+    room("lease", "release", check=True, **ago(29)[1])
+    d22 = say("DECISION-22: drop task 4", role="architect", ROOM_SESSION="arch")
+    backdate(lambda c: c["id"] == d22, 28 * 60)
+    room("lease", "take", check=True, ROOM_SESSION="L2", **ago(27.9)[1])
+    joined, ack = say("LEAD ONLINE", ROOM_SESSION="L2"), say("ACK DECISION-22", ROOM_SESSION="L2")
+    backdate(lambda c: c["id"] in (joined, ack), 27.9 * 60)
+    set_state("waiting_for_owner=no", "step=build", hours=27.8, ROOM_SESSION="L2")
+    set_state("waiting_for_owner=yes", "step=waiting for owner: build", hours=27.5, ROOM_SESSION="L2")
+    room("lease", "release", check=True, ROOM_SESSION="L2", **ago(27.5)[1])
+    asked = next(c for c in comments() if c["id"] == e21)["created_at"]
+    nf, n = len(fires()), len(comments())
+    r = watchdog()
+    assert "alarm: still waiting for Matthew: ESCALATION-21" in r.stdout, out(r)
+    assert [text_of(c) for c in comments()[n:]] == [f"LEAD-SILENT: still waiting for Matthew: ESCALATION-21 since "
+                                                    f"{asked} (step waiting for owner: build) (buzz sent)"], out(r)
+    assert len(fires()) == nf
+    room("lease", "take", check=True)
+
+
 # --- B-6: reminders while a room waits on Matthew
 
 def t_a_reminder_while_a_request_waits_on_matthew():
@@ -591,7 +702,8 @@ def t_a_reminder_while_a_request_waits_on_matthew():
     r = watchdog()
     assert "(again: the last buzz failed)" in r.stdout and text_of(comments()[-1]) == f"{text} (buzz sent)", out(r)
     assert len(comments()) == n + 3 and len(fires()) == nf, "no start on this path"
-    # a merge hold waits the same way
+    # a merge hold waits the same way, once ESCALATION-4 is answered
+    answer_open_requests()
     age_room()  # all of the above came before it
     hold = say("MERGE-HOLD-5: sensitive path")
     backdate(lambda c: c["id"] == hold, 730)

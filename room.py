@@ -25,8 +25,9 @@ in Claude chat and cloud sessions, or `gh auth login` on your own machine.
                                            joined after a DECISION; reminders, also while a request waits on
                                            Matthew; one lead start per stall; never writes state
   room.py join-line N [--takeover]         print the line that starts a lead
-  room.py start-lead N ROLE [--takeover] [--force] [--seen ID]   start a lead through the lead task; LEAD-STARTED
-                                           (exit 1 try once more, 3 refused, 6 not configured or rejected)
+  room.py start-lead N ROLE [--takeover] [--force] [--seen ID] [--replacing SESSION]   start a lead through the lead
+                                           task and post LEAD-STARTED (exit 1 try once more, 3 refused, 6 not
+                                           configured or rejected)
   room.py lead-task-prompt                 print the prompt of this repo's lead task
   room.py handoff N --step STEP --cursor ID   post HANDOFF, record step and cursor, release the lease, print the join line
   room.py intent N "INTENT"                record before acting (post KIND intents note the room's last comment)
@@ -2723,7 +2724,8 @@ def add_gate_commands(sub, common):
 # the state changes around it. Every command here works inside the project's checkout or without one
 # (ROOM_STATE_REMOTE).
 #
-#   watchdog N [--silent-after 3h]   join-line N [--takeover]   start-lead N ROLE [--takeover] [--force] [--seen ID]
+#   watchdog N [--silent-after 3h]   join-line N [--takeover]
+#   start-lead N ROLE [--takeover] [--force] [--seen ID] [--replacing SESSION]
 #   lead-task-prompt   handoff N --step STEP --cursor ID   reconcile N   budget
 #
 # watchdog, reconcile and budget read the pushed state branch and never write it. The watchdog schedules nothing; it
@@ -3091,7 +3093,8 @@ def sign_of_life(msgs, since, values, path):
     """What shows a lead alive since SINCE, or None (M6d, B-5 rule 3): a trusted lead message newer than SINCE from a
     session that hasn't handed over, or the lease taken after SINCE. MSGS are the room's trusted messages. A session's
     HANDOFF ends it, so its HANDOFF and what it posted before, and its LEAD-STARTED or NEXT-LEAD-NEEDED after it (the
-    rest of a handover), are no sign; anything else it posts after its HANDOFF is (a reused session ID)."""
+    rest of a handover), are no sign; anything else it posts after its HANDOFF is (a reused session ID). Nor is the
+    lease of a session that posted a HANDOFF after taking it: it ended, even if its release failed."""
     ended = {}  # session -> ID of its newest HANDOFF
     for m in msgs:
         if m["role"] == "lead" and message_kind(m["text"]) == "HANDOFF":
@@ -3109,6 +3112,10 @@ def sign_of_life(msgs, since, values, path):
             taken = last_change(path, lambda k: k == "lease_session")
         except StateError as e:
             return f"the lease's history can't be read ({e}), so no start this run"
+        handed = [m for m in msgs if m["role"] == "lead" and m["session"] == holder
+                  and message_kind(m["text"]) == "HANDOFF" and taken and (parse_time(m["at"]) or 0) > taken[1]]
+        if handed:  # it handed over after taking the lease, so it has ended even if its release failed (cold M6d R3-4)
+            return None
         if taken and taken[1] > since:
             return f"the lease taken by {holder} at {iso(taken[1])}, commit {taken[0][:12]}"
     return None
@@ -3116,23 +3123,22 @@ def sign_of_life(msgs, since, values, path):
 
 def waiting_request(a, values, playbook):
     """The request a parked lead waits on Matthew for (M6d, B-6): while the lease is released and room N is recorded
-    as the current room, the room's newest trusted lead ESCALATION-n or MERGE-HOLD-n, unless a trusted DECISION-n
-    (from the architect or Matthew) came after it; else None. Unlike pending_decision, a room that neither PLAYBOOK.md
-    nor the machine block records gets no reminder (qodo PR #14)."""
+    as the current room, the room's oldest trusted lead ESCALATION-n or MERGE-HOLD-n with no trusted DECISION-n (from
+    the architect or Matthew) after it, so one left open after a newer one was answered still gets its reminder (cold
+    M6d R3-2); else None. Unlike pending_decision, a room that neither PLAYBOOK.md nor the machine block records gets
+    no reminder (qodo PR #14)."""
     room = current_room(playbook, values)
     if lease_of(values)[0] != "none" or room is None or room[0] != a.room:
         return None
     msgs = [m for m in map(parse, comments(a.room)) if trusted(m)]
     asks = [m for m in msgs if m["role"] == "lead" and re.fullmatch(r"(?:ESCALATION|MERGE-HOLD)-\d+",
                                                                      message_kind(m["text"]) or "")]
-    if not asks:
-        return None
-    ask = asks[-1]
-    n = message_kind(ask["text"]).rsplit("-", 1)[1]
-    if any(m["id"] > ask["id"] and m["role"] in ("architect", "human") and message_kind(m["text"]) == f"DECISION-{n}"
-           for m in msgs):
-        return None
-    return ask
+    for ask in asks:
+        n = message_kind(ask["text"]).rsplit("-", 1)[1]
+        if not any(m["id"] > ask["id"] and m["role"] in ("architect", "human")
+                   and message_kind(m["text"]) == f"DECISION-{n}" for m in msgs):
+            return ask
+    return None
 
 
 def alarm(a, text):
@@ -3781,11 +3787,16 @@ def start_refusal(room, role, takeover, force, values, playbook, sid=None):
     own = (values.get("room") or "").strip()
     # a status recorded for another room says nothing here; a halted one with the lease still held counts as running,
     # as in M4: the lead may have died between writing it and posting (cold M6b R1-5)
-    if not (own.isdigit() and int(own) > 0 and int(own) != room) and holder == "none":
+    here = not (own.isdigit() and int(own) > 0 and int(own) != room)
+    if here and holder == "none":
         if status == "done":
             return "status is done and the lease is released: the phase is over"
         if status in ("paused", "stopped") and role != "architect":
             return f"status is {status} and the lease is released: only the architect resumes, on Matthew's word"
+    if here and holder != "none" and takeover and status in ("paused", "stopped") and not force:
+        # the takeover lead's lease take --takeover would set the status back to running, for any role (cold M6d R3-3)
+        return (f"status is {status} with the lease still held: a takeover would set it back to running; on "
+                "Matthew's word to resume, add --force")
     if holder != "none" and not takeover:
         if holder == sid:  # e.g. a handoff whose release failed (cold M6b R2-4)
             return "this session still holds the lease: run lease release, then start-lead again"
@@ -3849,13 +3860,23 @@ def room_moved_on(room, seen):
     return None
 
 
-def start_lead(a, room, role, takeover=False, force=False, seen=None):
+def lease_moved(values, replacing):
+    """Why a takeover replacing session REPLACING is out of date, or None: the lease in VALUES isn't held by it."""
+    holder = lease_of(values)[0]
+    if holder == replacing:
+        return None
+    now = "released" if holder == "none" else f"held by {holder}"
+    return f"the lease is now {now}, not held by {replacing}; read the room again"
+
+
+def start_lead(a, room, role, takeover=False, force=False, seen=None, replacing=None):
     """Start a lead in ROOM through the lead task, as ROLE: read the configuration, check the guards, POST the join
     line, then post LEAD-STARTED. Returns (exit code, why): 0 started, or maybe started (an unconfirmed LEAD-STARTED;
     why None), 1 a definite failure (try once more), 3 refused, 6 not configured or rejected. ROLE is the lead (its
     handover), the architect, or the watchdog (one start per stall, M6d). SEEN, a comment ID: refuse when the room
     moved on after it (an architect's starter task, which may run hours after it was made). A broken read of the
-    state branch or the room raises StateError or GhError."""
+    state branch or the room raises StateError or GhError. REPLACING, a session, with TAKEOVER: refuse unless the
+    lease is still held by it, the lead the architect decided to take over (cold M6d R3-1)."""
     try:
         path = ensure_worktree()  # fetched
     except StateError:
@@ -3877,6 +3898,8 @@ def start_lead(a, room, role, takeover=False, force=False, seen=None):
     why = start_refusal(room, role, takeover, force, values, playbook, session_id(a))
     if why is None and seen is not None:
         why = room_moved_on(room, seen)
+    if why is None and replacing is not None:
+        why = lease_moved(values, replacing)
     if why:
         return EXIT_REFUSED, f"refused: {why}"
     version = pinned_version(path)
@@ -3916,7 +3939,11 @@ def start_lead(a, room, role, takeover=False, force=False, seen=None):
 
 
 def cmd_start_lead(a):
-    code, why = start_lead(a, a.room, a.role, a.takeover, a.force, a.seen)
+    if a.replacing is not None and not a.takeover:
+        print("room.py start-lead: error: --replacing SESSION goes with --takeover: it names the lead a takeover "
+              "replaces", file=sys.stderr)
+        return 2
+    code, why = start_lead(a, a.room, a.role, a.takeover, a.force, a.seen, a.replacing)
     if why:
         print(why, file=sys.stderr)
     return code
@@ -3956,11 +3983,15 @@ def add_unattended_commands(sub, common):
                    help="the takeover join line, for a lead that stopped without handing over; needed while the "
                         "lease is held")
     s.add_argument("--force", action="store_true",
-                   help="start even though a LEAD-STARTED under 30 minutes old has no LEAD ONLINE after it")
+                   help="start even though a LEAD-STARTED under 30 minutes old has no LEAD ONLINE after it; also take "
+                        "over a paused or stopped build whose lease is still held, only on Matthew's word to resume")
     s.add_argument("--seen", type=seen_arg, metavar="ID",
                    help="the room's newest comment ID when the start was decided (the architect's starter tasks), or "
                         "0 for a room with no comments: refuse (exit 3) if a lead message, or a LEAD-STARTED from "
                         "anyone, came after it")
+    s.add_argument("--replacing", type=session_arg, metavar="SESSION",
+                   help="with --takeover: the session that held the lease when the takeover was decided (the "
+                        "architect's takeover starters); refuse (exit 3) unless it still holds it")
     leaf("lead-task-prompt", cmd_lead_task_prompt, "print the prompt of this repo's lead task, for Matthew to "
                                                    "paste when he creates the task")
     s = leaf("handoff", cmd_handoff, "record step, cursor and intent=none holding the lease, post HANDOFF, then "
@@ -3982,6 +4013,12 @@ def add_unattended_commands(sub, common):
 
 
 # --- end of unattended operation
+
+
+def session_arg(s):
+    if not re.fullmatch(SESSION_RE, s):
+        raise argparse.ArgumentTypeError("a session ID: up to 64 letters, digits, '.', '_' or '-'")
+    return s
 
 
 def seen_arg(s):
