@@ -315,7 +315,7 @@ Explain each buzz in plain terms, in a few lines:
    python3 room.py state get lease_session --repo OWNER/NAME
    ```
 
-   Start it as in section 8, steps 9 and 10: the fire action with the normal join line, then `LEAD-STARTED`. If you don't, the watchdog does, at its first run more than 30 minutes after the decision. A lead that isn't parked sees the decision at its next step boundary.
+   Start it as in section 8, steps 9 and 10: the fire action with the normal join line, then `LEAD-STARTED`. If you don't, the watchdog does, at its first run more than 30 minutes after the decision. Its message reads `LEAD-STARTED: … (plain join line, started by watchdog after DECISION-<n>)`: a plain start, not a takeover, and not one of its two takeovers for a stall. A lead that isn't parked sees the decision at its next step boundary.
 8. Check for the `ACK` (9.6).
 
 A "merge as is" for reason 5 lets the lead merge citing your `DECISION-n`, so name the hold in it.
