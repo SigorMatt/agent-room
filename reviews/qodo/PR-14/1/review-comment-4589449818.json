@@ -1,0 +1,71 @@
+{
+  "url": "https://api.github.com/repos/SigorMatt/agent-room/pulls/comments/4589449818",
+  "pull_request_review_id": 5924834293,
+  "id": 4589449818,
+  "node_id": "PRRC_kwDOVVYvuc8AAAABEY1yWg",
+  "diff_hunk": "@@ -3100,13 +3156,25 @@ def cmd_watchdog(a):\n         # and reminders; the architect starts the lead (BUILD-STATE 2026-11-16, B-5)\n         d = pending_decision(a, values, playbook) if why == \"waiting\" else None\n         if d is None:\n-            print(f\"quiet: {text}\")\n+            # a request still waiting on Matthew: a reminder once REMINDER_AFTER x silent-after has passed since it,\n+            # in case its own buzz was lost, then every as long again; no start: Matthew decides (M6d, B-6)\n+            ask = waiting_request(a, values, playbook) if why == \"waiting\" else None\n+            t = parse_time(ask[\"at\"]) if ask else None\n+            if t is None or time.time() - t < REMINDER_AFTER * a.silent_after:\n+                print(f\"quiet: {text}\")\n+                return 0\n+            kind = message_kind(ask[\"text\"])\n+            print(f\"note: {text}, the lease is released, and {kind} #{ask['id']} at {ask['at']} has no decision yet\")\n+            waiting = (f\"still waiting for Matthew: {kind} since {iso(t)}\",\n+                       f\"LEAD-SILENT: still waiting for Matthew: {kind} since {iso(t)} (step {step})\")\n+            stall_alarm(a, t, waiting, waiting)",
+  "path": "room.py",
+  "commit_id": "bc901b7bb45e50a86dc95aa3af100446c8faa6b6",
+  "original_commit_id": "bc901b7bb45e50a86dc95aa3af100446c8faa6b6",
+  "user": {
+    "login": "qodo-code-review[bot]",
+    "id": 151058649,
+    "node_id": "BOT_kgDOCQD42Q",
+    "avatar_url": "https://avatars.githubusercontent.com/in/484649?v=4",
+    "gravatar_id": "",
+    "url": "https://api.github.com/users/qodo-code-review%5Bbot%5D",
+    "html_url": "https://github.com/apps/qodo-code-review",
+    "followers_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/followers",
+    "following_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/following{/other_user}",
+    "gists_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/gists{/gist_id}",
+    "starred_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/starred{/owner}{/repo}",
+    "subscriptions_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/subscriptions",
+    "organizations_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/orgs",
+    "repos_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/repos",
+    "events_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/events{/privacy}",
+    "received_events_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/received_events",
+    "type": "Bot",
+    "user_view_type": "public",
+    "site_admin": false
+  },
+  "body": "<img src=\"https://img.shields.io/badge/Medium-634FD1?style=flat-square\" height=\"20px\" alt=\"Remediation recommended\">\n\n5\\. Other alarms delay owner reminders <code>🐞 Bug</code> <code>≡ Correctness</code>\n\n<pre>\n<b><i>cmd_watchdog()</i></b> passes the waiting request&#x27;s timestamp to <b><i>stall_alarm()</i></b> without restricting it to\nalarms about that request. If state was unreadable after the request and its alarm was posted before\nstate recovered, the unreadable alarm counts as the waiting reminder and postpones the first\nreminder until its own 12-hour interval expires.\n</pre>\n\n\n<details>\n<summary><strong>Agent Prompt</strong></summary>\n\n```\n## Issue description\nAn alarm for another condition can suppress the first reminder for an unanswered owner request.\n## Fix Focus Areas\n- room.py[2956-2964]\n- room.py[3166-3170]\n## Recommended Fix\nSelect only waiting-for-Matthew alarms for the particular request when calculating its retries and reminder interval. Add a test with an intervening state-unreadable alarm.\n```\n\n<code>ⓘ Copy this prompt and use it to remediate the issue with your preferred AI generation tools</code>\n</details>\n\n[Dismiss ↗](https://app.qodo.ai/findings/26c33dd0-7f48-4c2d-97d2-89c24be2ddd0?action=dismiss&origin=git) | [View ↗](https://app.qodo.ai/findings/26c33dd0-7f48-4c2d-97d2-89c24be2ddd0)",
+  "created_at": "2026-11-16T17:57:14Z",
+  "updated_at": "2026-11-16T17:57:14Z",
+  "html_url": "https://github.com/SigorMatt/agent-room/pull/14#discussion_r4589449818",
+  "pull_request_url": "https://api.github.com/repos/SigorMatt/agent-room/pulls/14",
+  "_links": {
+    "self": {
+      "href": "https://api.github.com/repos/SigorMatt/agent-room/pulls/comments/4589449818"
+    },
+    "html": {
+      "href": "https://github.com/SigorMatt/agent-room/pull/14#discussion_r4589449818"
+    },
+    "pull_request": {
+      "href": "https://api.github.com/repos/SigorMatt/agent-room/pulls/14"
+    }
+  },
+  "reactions": {
+    "url": "https://api.github.com/repos/SigorMatt/agent-room/pulls/comments/4589449818/reactions",
+    "total_count": 0,
+    "+1": 0,
+    "-1": 0,
+    "laugh": 0,
+    "hooray": 0,
+    "confused": 0,
+    "heart": 0,
+    "rocket": 0,
+    "eyes": 0
+  },
+  "start_line": null,
+  "original_start_line": null,
+  "start_side": null,
+  "line": 3170,
+  "original_line": 3170,
+  "side": "RIGHT",
+  "author_association": "NONE",
+  "original_position": 221,
+  "position": 221,
+  "subject_type": "line",
+  "is_copilot_code_review": false,
+  "copilot_code_review_sources": []
+}

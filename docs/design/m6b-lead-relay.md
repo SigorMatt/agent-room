@@ -83,6 +83,8 @@ Unchanged except the second paragraph of `HANDOFF`: `The successor is being star
 
 ### `watchdog`
 
+> **Note (M6d):** M6d brings back one watchdog start per stall (B-5), and adds a reminder while a parked room waits on Matthew (B-6). See [`m6d-watchdog.md`](m6d-watchdog.md).
+
 **It only alarms; it starts no leads** (decision of 2026-11-16 in `BUILD-STATE.md`; automatic starts deferred as B-5). Three cold reviews of the watchdog's start rules (R2-1, S2-1, S3-4, all high) each found new interactions between starts, alarms and the decision path. So takeovers, and the lead after a decision, are started by the architect, through a starter task since finding T (`ARCHITECT.md` 9.2, 9.5). The handover start, which matters most, stays automatic through `start-lead`. The attempt at automatic starts is in PR #11's history, with its reviews under `reviews/cold/M6/`.
 
 Its rules, all covered by tests:

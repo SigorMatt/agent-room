@@ -1,0 +1,71 @@
+{
+  "url": "https://api.github.com/repos/SigorMatt/agent-room/pulls/comments/4589449836",
+  "pull_request_review_id": 5924834293,
+  "id": 4589449836,
+  "node_id": "PRRC_kwDOVVYvuc8AAAABEY1ybA",
+  "diff_hunk": "@@ -3002,6 +3002,85 @@ def pending_decision(a, values, playbook):\n     return found[-1] if found else None\n \n \n+def lead_task_ready(playbook=None):\n+    \"\"\"Whether start-lead could fire: a token, and a lead-task: line in PLAYBOOK.md (read from the pushed state branch\n+    when PLAYBOOK is None).\"\"\"\n+    if not fire_token():\n+        return False\n+    if playbook is None:\n+        try:\n+            playbook = pushed_text(ensure_worktree(), \"PLAYBOOK.md\")\n+        except StateError:\n+            return False\n+    return bool(lead_task_id(playbook))\n+\n+\n+def start_after_alarm(a, since, takeover, playbook=None):\n+    \"\"\"One start per stall (M6d, B-5), after stall_alarm for the same SINCE (None, before any lead joined: the whole\n+    room). It starts a lead as the watchdog, with --takeover when TAKEOVER (the lease is held), only when all hold:\n+    (1) the stall has a trusted watchdog LEAD-SILENT newer than SINCE, its buzz failed or not, so a start never\n+    precedes its alarm; (2) no trusted LEAD-STARTED from any role is newer than SINCE, so a stall gets one start, the\n+    architect's or an unconfirmed one included; (3) no trusted lead message of any kind is under silent-after old, so a\n+    lead that has just joined, or still talks, is never displaced; (4) the lead task is configured. Exit 1 from\n+    start-lead is tried again at the next run, as nothing was posted; 3 and 6 print a note.\"\"\"\n+    msgs = [m for m in map(parse, comments(a.room)) if trusted(m)]\n+    now = time.time()\n+\n+    def newer(m):\n+        return since is None or (parse_time(m[\"at\"]) or 0) > since\n+    if not any(m[\"role\"] == \"watchdog\" and message_kind(m[\"text\"]) == \"LEAD-SILENT\" and newer(m) for m in msgs):\n+        return\n+    started = [m for m in msgs if message_kind(m[\"text\"]) == \"LEAD-STARTED\" and newer(m)]\n+    if started:\n+        print(f\"note: LEAD-STARTED #{started[-1]['id']} at {started[-1]['at']} is this stall's start; the watchdog \"\n+              \"starts no other\")\n+        return",
+  "path": "room.py",
+  "commit_id": "842c7a0cba202e46b5dfcebffb257e4af7121bac",
+  "original_commit_id": "bc901b7bb45e50a86dc95aa3af100446c8faa6b6",
+  "user": {
+    "login": "qodo-code-review[bot]",
+    "id": 151058649,
+    "node_id": "BOT_kgDOCQD42Q",
+    "avatar_url": "https://avatars.githubusercontent.com/in/484649?v=4",
+    "gravatar_id": "",
+    "url": "https://api.github.com/users/qodo-code-review%5Bbot%5D",
+    "html_url": "https://github.com/apps/qodo-code-review",
+    "followers_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/followers",
+    "following_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/following{/other_user}",
+    "gists_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/gists{/gist_id}",
+    "starred_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/starred{/owner}{/repo}",
+    "subscriptions_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/subscriptions",
+    "organizations_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/orgs",
+    "repos_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/repos",
+    "events_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/events{/privacy}",
+    "received_events_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/received_events",
+    "type": "Bot",
+    "user_view_type": "public",
+    "site_admin": false
+  },
+  "body": "<img src=\"https://img.shields.io/badge/Medium-634FD1?style=flat-square\" height=\"20px\" alt=\"Remediation recommended\">\n\n2\\. No automatic restart when a handover's successor dies <code>🐞 Bug</code> <code>≡ Correctness</code>\n\n<pre>\n<b><i>start_after_alarm</i></b> treats any trusted <b><i>LEAD-STARTED</i></b> newer than <b><i>since</i></b> as the stall&#x27;s one start\n(rule 2). On the ordinary path <b><i>since</i></b> is the last progress time, and <b><i>cmd_handoff</i></b> writes the step\nbefore the outgoing lead runs <b><i>start-lead</i></b>, so the successor&#x27;s <b><i>LEAD-STARTED</i></b> is always newer than\nthat progress. The result is that a successor whose start didn&#x27;t take, or that joined and died\nbefore its first step change or push, gets alarms and reminders but never the watchdog start. The\nspec&#x27;s per-path list (&quot;released after a handover whose successor never came: one takeover or plain\nstart&quot;) and the CHANGELOG and ARCHITECT text all promise that start.\n</pre>\n\n\n<details>\n<summary><strong>Agent Prompt</strong></summary>\n\n```\n## Issue description\nOn the ordinary-stall path, `start_after_alarm` counts the handover's own `LEAD-STARTED` (posted by role `lead` right after `handoff` writes the step) as the stall's one start. As a result, the watchdog never starts a lead when a handover's successor fails to join or dies before making progress. The spec says this path gets one start.\n\n## Fix Focus Areas\n- room.py[3033-3037]\n- docs/design/m6d-watchdog.md[13-13]\n- tests/test_m6d.py[1-438]\n\n## Recommended Fix\nPick one of these and apply it everywhere:\n- **Change the code to match the spec:** in rule 2, count only `LEAD-STARTED`s that aren't the handover's. For example, count only role `watchdog`/`architect` starts, or only starts newer than the first alarm of the stall. Then a lead-role `LEAD-STARTED` posted before the alarm doesn't use up the one start.\n- **Change the docs to match the code:** remove the claim from the spec's per-path list, the CHANGELOG and ARCHITECT.md.\n\nEither way, add a test: HANDOFF, then a lead `LEAD-STARTED`, then no LEAD ONLINE, then the stall alarm. Assert the intended outcome.\n```\n\n<code>ⓘ Copy this prompt and use it to remediate the issue with your preferred AI generation tools</code>\n</details>\n\n[Dismiss ↗](https://app.qodo.ai/findings/30007175-bf9b-4263-ab3a-04b17ea93b75?action=dismiss&origin=git) | [View ↗](https://app.qodo.ai/findings/30007175-bf9b-4263-ab3a-04b17ea93b75)",
+  "created_at": "2026-11-16T17:57:14Z",
+  "updated_at": "2026-11-16T17:57:14Z",
+  "html_url": "https://github.com/SigorMatt/agent-room/pull/14#discussion_r4589449836",
+  "pull_request_url": "https://api.github.com/repos/SigorMatt/agent-room/pulls/14",
+  "_links": {
+    "self": {
+      "href": "https://api.github.com/repos/SigorMatt/agent-room/pulls/comments/4589449836"
+    },
+    "html": {
+      "href": "https://github.com/SigorMatt/agent-room/pull/14#discussion_r4589449836"
+    },
+    "pull_request": {
+      "href": "https://api.github.com/repos/SigorMatt/agent-room/pulls/14"
+    }
+  },
+  "reactions": {
+    "url": "https://api.github.com/repos/SigorMatt/agent-room/pulls/comments/4589449836/reactions",
+    "total_count": 0,
+    "+1": 0,
+    "-1": 0,
+    "laugh": 0,
+    "hooray": 0,
+    "confused": 0,
+    "heart": 0,
+    "rocket": 0,
+    "eyes": 0
+  },
+  "start_line": null,
+  "original_start_line": 3033,
+  "start_side": "RIGHT",
+  "line": null,
+  "original_line": 3037,
+  "side": "RIGHT",
+  "author_association": "NONE",
+  "original_position": 106,
+  "position": 1,
+  "subject_type": "line",
+  "is_copilot_code_review": false,
+  "copilot_code_review_sources": []
+}

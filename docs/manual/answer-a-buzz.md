@@ -29,7 +29,7 @@ The design doesn't settle a question. Meanwhile the lead keeps building whatever
 1. The architect explains the question, the options, the lead's recommendation, and what is blocked.
 2. Decide together. Ask anything you need.
 3. The architect records your decision in `DESIGN.md`, then posts `DECISION-n` in the room, saying how the mission continues.
-4. If the lead was waiting for you, it had ended. The architect starts a new lead to act on your decision, with a starter task: approve its pop-up when it appears (a late approval may need a second one). Nobody else starts it. If no lead joins within three hours of your decision, a `LEAD-SILENT: no lead joined after DECISION-n` buzz follows (see `LEAD-SILENT` below).
+4. If the lead was waiting for you, it had ended. The architect starts a new lead to act on your decision, with a starter task: approve its pop-up when it appears (a late approval may need a second one). If no lead joins within three hours of your decision, a `LEAD-SILENT: no lead joined after DECISION-n` buzz follows (see `LEAD-SILENT` below), and if nobody started a lead, the watchdog then tries once to start one.
 5. Wait for the lead's `ACK DECISION-n` ("What you should see").
 
 If the escalation is a **pipeline fault** (the quoted line says "the records can't fix this"), agent-room itself needs a fix. Report it ([Report a pipeline problem](report-a-pipeline-problem.md)); the mission waits. When the patched release is out, tell the architect, with its version:
@@ -84,12 +84,13 @@ The lead merged the last mission, checked every criterion, posted `DONE`, closed
 
 ### `LEAD-SILENT`: no progress for three hours
 
-The watchdog saw nothing move. A lead died, got stuck or ran out of Claude usage, or the next one never started. Or a lead is alive but slow, or looping: posting without getting anywhere. The watchdog only alarms; it starts no lead. The architect works out which it is, and starts a takeover lead if one is needed.
+The watchdog saw nothing move. A lead died, got stuck or ran out of Claude usage, or the next one never started. Or a lead is alive but slow, or looping: posting without getting anywhere. After the alarm, the watchdog starts one lead itself, at most one per stall, but only for a lead that never came: a handover's successor that never joined, the lead after your decision that nobody started, or a lead that died right after its progress without posting. A `LEAD-STARTED … started by watchdog` follows within minutes. It tries only in the run of the first alarm: if no `LEAD-STARTED` follows then, it won't start one later, not even at a reminder, and the architect decides. It doesn't once a lead has shown a sign of life since the stall began (posted anything, such as the `STATUS` after a push, or taken the lease): that lead may still be working. Nor does it for a lead that joined while waiting for your decision, or while the build is paused or stopped. The architect works out the rest, and starts a takeover lead if one is still needed.
 
 Other texts:
 
 - `LEAD-SILENT: no lead joined after DECISION-n`: no lead has joined in the three hours since your decision. The architect checks whether a lead was started; it starts one, or finds out with you why the start didn't take (often the lead task's token, or Claude usage), fixes it, and starts one.
-- `LEAD-SILENT: no lead has joined room N in 12h`: the phase's first lead never joined. The architect checks the lead task with you (often its token), fixes it, and starts the first lead.
+- `LEAD-SILENT: still waiting for Matthew: <KIND>-n since <time> (…)`: the newest `ESCALATION` or `MERGE-HOLD` you haven't answered has waited 12 hours for your decision, maybe because its own buzz was lost. Every other request still open is listed after it, as `(also open: <KIND>-n, …)`. It repeats every 12 hours until you decide. Answer every request in it at the same sitting: the named one and each one listed as also open. A live request gets its real decision. A moot one, which a later decision made unnecessary, gets a short clearing `DECISION` ("no longer needed"), or it stays listed. Then the architect starts one lead, which handles them all. A clearing decision posted on its own would start a lead that only acknowledges it and waits again. Open the room, find those messages, and answer each as its kind says above. Nothing starts on its own meanwhile.
+- `LEAD-SILENT: no lead has joined room N in 12h`: the phase's first lead never joined. The watchdog doesn't start it. The architect checks the lead task with you (often its token), fixes it, and starts the first lead.
 - `LEAD-SILENT: still no progress since …`, `still no lead joined after DECISION-n …`, `still state unreadable (…)` or `still no lead has joined room N`: a reminder, every 12 hours by default, while the stall or the wait lasts. Answer it like the first alarm.
 
 1. If the buzz's message reads `LEAD-SILENT: state unreadable (…)`, the pipeline's records are broken, not the lead. The architect checks them first. If the `agent-room/state` branch was deleted, it is restored before any lead starts. Best: the architect pushes it again from its own copy, or you push it from a fork or a local clone that still has it. In a local clone, run:
@@ -99,7 +100,7 @@ Other texts:
    ```
 
    Only if no copy exists does the architect recreate it from scratch, and tell the next lead to rebuild its records from the merged pull requests and the room. Then go on.
-2. The architect tells you where the build stopped, and whether the lead is dead or alive. If a lead was started less than 30 minutes ago and hasn't joined yet, it waits until then, so it doesn't start a second lead while the first is still starting. It checks back itself, or asks you to send it this then:
+2. The architect tells you where the build stopped, whether the lead is dead or alive, and whether the watchdog already started a lead for this stall. If a lead was started less than 30 minutes ago and hasn't joined yet, it waits until then, so it doesn't start a second lead while the first is still starting. It checks back itself, or asks you to send it this then:
 
    ```text
    check the room
@@ -110,7 +111,7 @@ Other texts:
    - **The architect starts it** with a starter task: approve its pop-up when it appears (a late approval may need a second one). A `LEAD-STARTED` follows about 10 minutes later. That's all: don't start a lead yourself.
    - **Or, if it can't, it posts `LEAD-STARTED: by hand …` and gives you the takeover line.** Start the lead soon after. The line ends with "Take over the lease … the previous lead stopped without handing over." Start a lead with it ([Start the next lead by hand](start-the-next-lead-by-hand.md)), then send the architect the new session's link, so it posts `LEAD-STARTED`. Use a takeover line only when the architect gives you one.
 
-   Either way, if the old lead's session is still open, archive it. If the new lead stalls too, the next alarm or reminder brings you back here.
+   If the watchdog starts a lead first, the architect's starter task finds it and starts nothing (its run says `refused: the lease is held by …`, `refused: LEAD-STARTED #… has no LEAD ONLINE after it …`, `refused: the lease is now held by …`, or `refused: the room moved on after #…`), so you never get two. Either way, if the old lead's session is still open, archive it. If the new lead stalls too, the next alarm or reminder brings you back here; the watchdog doesn't start a second lead for the same stall, nor any for a lead that joined while waiting for your decision.
 
 ## What you should see
 

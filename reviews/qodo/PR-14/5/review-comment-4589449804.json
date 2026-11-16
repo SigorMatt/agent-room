@@ -1,0 +1,71 @@
+{
+  "url": "https://api.github.com/repos/SigorMatt/agent-room/pulls/comments/4589449804",
+  "pull_request_review_id": 5924834293,
+  "id": 4589449804,
+  "node_id": "PRRC_kwDOVVYvuc8AAAABEY1yTA",
+  "diff_hunk": "@@ -3002,6 +3002,85 @@ def pending_decision(a, values, playbook):\n     return found[-1] if found else None\n \n \n+def lead_task_ready(playbook=None):\n+    \"\"\"Whether start-lead could fire: a token, and a lead-task: line in PLAYBOOK.md (read from the pushed state branch\n+    when PLAYBOOK is None).\"\"\"\n+    if not fire_token():\n+        return False\n+    if playbook is None:\n+        try:\n+            playbook = pushed_text(ensure_worktree(), \"PLAYBOOK.md\")\n+        except StateError:\n+            return False\n+    return bool(lead_task_id(playbook))\n+\n+\n+def start_after_alarm(a, since, takeover, playbook=None):\n+    \"\"\"One start per stall (M6d, B-5), after stall_alarm for the same SINCE (None, before any lead joined: the whole\n+    room). It starts a lead as the watchdog, with --takeover when TAKEOVER (the lease is held), only when all hold:\n+    (1) the stall has a trusted watchdog LEAD-SILENT newer than SINCE, its buzz failed or not, so a start never\n+    precedes its alarm; (2) no trusted LEAD-STARTED from any role is newer than SINCE, so a stall gets one start, the\n+    architect's or an unconfirmed one included; (3) no trusted lead message of any kind is under silent-after old, so a\n+    lead that has just joined, or still talks, is never displaced; (4) the lead task is configured. Exit 1 from\n+    start-lead is tried again at the next run, as nothing was posted; 3 and 6 print a note.\"\"\"\n+    msgs = [m for m in map(parse, comments(a.room)) if trusted(m)]\n+    now = time.time()\n+\n+    def newer(m):\n+        return since is None or (parse_time(m[\"at\"]) or 0) > since\n+    if not any(m[\"role\"] == \"watchdog\" and message_kind(m[\"text\"]) == \"LEAD-SILENT\" and newer(m) for m in msgs):\n+        return\n+    started = [m for m in msgs if message_kind(m[\"text\"]) == \"LEAD-STARTED\" and newer(m)]\n+    if started:\n+        print(f\"note: LEAD-STARTED #{started[-1]['id']} at {started[-1]['at']} is this stall's start; the watchdog \"\n+              \"starts no other\")\n+        return\n+    talk = [m for m in msgs if m[\"role\"] == \"lead\" and now - (parse_time(m[\"at\"]) or 0) < a.silent_after]\n+    if talk:\n+        print(f\"note: no start: the lead posted #{talk[-1]['id']} at {talk[-1]['at']}, under {span(a.silent_after)} \"\n+              \"ago\")\n+        return\n+    if not lead_task_ready(playbook):\n+        print(\"note: no start: the lead task isn't configured (no lead-task: line, or no token)\")\n+        return\n+    try:\n+        code, why = start_lead(a, a.room, \"watchdog\", takeover=takeover)",
+  "path": "room.py",
+  "commit_id": "0e3560a05240b8fad1731cc101d0b1460d76d143",
+  "original_commit_id": "bc901b7bb45e50a86dc95aa3af100446c8faa6b6",
+  "user": {
+    "login": "qodo-code-review[bot]",
+    "id": 151058649,
+    "node_id": "BOT_kgDOCQD42Q",
+    "avatar_url": "https://avatars.githubusercontent.com/in/484649?v=4",
+    "gravatar_id": "",
+    "url": "https://api.github.com/users/qodo-code-review%5Bbot%5D",
+    "html_url": "https://github.com/apps/qodo-code-review",
+    "followers_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/followers",
+    "following_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/following{/other_user}",
+    "gists_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/gists{/gist_id}",
+    "starred_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/starred{/owner}{/repo}",
+    "subscriptions_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/subscriptions",
+    "organizations_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/orgs",
+    "repos_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/repos",
+    "events_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/events{/privacy}",
+    "received_events_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/received_events",
+    "type": "Bot",
+    "user_view_type": "public",
+    "site_admin": false
+  },
+  "body": "<img src=\"https://img.shields.io/badge/Medium-634FD1?style=flat-square\" height=\"20px\" alt=\"Remediation recommended\">\n\n3\\. Overlapping runs can start two leads <code>🐞 Bug</code> <code>☼ Reliability</code>\n\n<pre>\n<b><i>start_after_alarm()</i></b> checks for an existing start and then calls <b><i>start_lead()</i></b> without atomically\nclaiming the stall. If two watchdog runs overlap, both can pass that check and <b><i>start_refusal()</i></b>&#x27;s\nseparate comment check before either posts <b><i>LEAD-STARTED</i></b>, allowing both to fire the task.\n</pre>\n\n\n<details>\n<summary><strong>Agent Prompt</strong></summary>\n\n```\n## Issue description\nConcurrent watchdog runs can both observe an unstarted stall and fire its lead task.\n## Fix Focus Areas\n- room.py[3026-3047]\n- room.py[3710-3739]\n## Recommended Fix\nUse an atomic, durable per-stall claim or equivalent serialization before the task fire. Ensure a losing run cannot proceed based on an earlier snapshot of room comments.\n```\n\n<code>ⓘ Copy this prompt and use it to remediate the issue with your preferred AI generation tools</code>\n</details>\n\n[Dismiss ↗](https://app.qodo.ai/findings/ed3c6bb3-cf33-4209-8baa-47b890db11ed?action=dismiss&origin=git) | [View ↗](https://app.qodo.ai/findings/ed3c6bb3-cf33-4209-8baa-47b890db11ed)",
+  "created_at": "2026-11-16T17:57:14Z",
+  "updated_at": "2026-11-16T17:57:14Z",
+  "html_url": "https://github.com/SigorMatt/agent-room/pull/14#discussion_r4589449804",
+  "pull_request_url": "https://api.github.com/repos/SigorMatt/agent-room/pulls/14",
+  "_links": {
+    "self": {
+      "href": "https://api.github.com/repos/SigorMatt/agent-room/pulls/comments/4589449804"
+    },
+    "html": {
+      "href": "https://github.com/SigorMatt/agent-room/pull/14#discussion_r4589449804"
+    },
+    "pull_request": {
+      "href": "https://api.github.com/repos/SigorMatt/agent-room/pulls/14"
+    }
+  },
+  "reactions": {
+    "url": "https://api.github.com/repos/SigorMatt/agent-room/pulls/comments/4589449804/reactions",
+    "total_count": 0,
+    "+1": 0,
+    "-1": 0,
+    "laugh": 0,
+    "hooray": 0,
+    "confused": 0,
+    "heart": 0,
+    "rocket": 0,
+    "eyes": 0
+  },
+  "start_line": 3082,
+  "original_start_line": 3046,
+  "start_side": "RIGHT",
+  "line": 3083,
+  "original_line": 3047,
+  "side": "RIGHT",
+  "author_association": "NONE",
+  "original_position": 116,
+  "position": 186,
+  "subject_type": "line",
+  "is_copilot_code_review": false,
+  "copilot_code_review_sources": []
+}

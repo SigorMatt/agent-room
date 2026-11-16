@@ -2,7 +2,8 @@
 """Stand-in for `gh api` that keeps repos, issues and comments in a JSON file.
 
 Only the endpoints room.py uses. FAKE_GH_DB is the file, FAKE_GH_LOGIN the caller. With FAKE_GH_FAIL_POSTS=N, the
-first N comment posts fail (HTTP 502), counted in the file FAKE_GH_FAIL_COUNTER; with FAKE_GH_LOST_REPLIES=N the first N
+first N comment posts fail (HTTP 502), only those whose body holds FAKE_GH_FAIL_MATCH if that is set, counted in the
+file FAKE_GH_FAIL_COUNTER; with FAKE_GH_LOST_REPLIES=N the first N
 land but answer 502, as GitHub sometimes does.
 """
 import json
@@ -91,8 +92,10 @@ if len(parts) == 5 and method == "PATCH":
         issue["closed_at"] = None
     issue.update(body)
     done({"number": issue["number"], "state": issue["state"], "closed_at": issue.get("closed_at")})
-if len(parts) == 6 and method == "POST" and os.environ.get("FAKE_GH_FAIL_POSTS"):
-    # the first FAKE_GH_FAIL_POSTS comment posts fail, as GitHub does now and then; FAKE_GH_FAIL_COUNTER counts them
+if len(parts) == 6 and method == "POST" and os.environ.get("FAKE_GH_FAIL_POSTS") and \
+        os.environ.get("FAKE_GH_FAIL_MATCH", "") in body["body"]:
+    # the first FAKE_GH_FAIL_POSTS comment posts (holding FAKE_GH_FAIL_MATCH, if set) fail, as GitHub does now and
+    # then; FAKE_GH_FAIL_COUNTER counts them
     with open(os.environ["FAKE_GH_FAIL_COUNTER"], "a+") as f:
         f.seek(0)
         failed = len(f.read())
