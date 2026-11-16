@@ -2953,36 +2953,44 @@ def buzz_failed(m):
     return re.search(r"\(buzz failed\b", m["text"]) is not None
 
 
+def own_alarms(a, since, only=None):
+    """The stall's own trusted watchdog LEAD-SILENTs newer than SINCE (all, if None), failed buzzes included, oldest
+    first; ONLY, if given, picks them."""
+    return [m for m in alarms_since(a, since, failed=True) if only is None or only(m)]
+
+
 def stall_alarm(a, since, first, reminder, prefix="", only=None):
     """The alarms of one stall, which SINCE identifies: its progress time, a pending DECISION's or a request's waiting
     on Matthew (None, before any lead joined: the whole room). FIRST and REMINDER are (printed line, posted text).
     The first alarm comes once. While an alarm's buzz fails, the next run posts it again, at most BUZZ_RETRIES times
     per stall (finding P); after that, and once one got through, a reminder comes every REMINDER_AFTER x silent-after
-    since the stall's last alarm. ONLY, if given, picks the alarms that belong to this stall. Starts are
-    start_after_alarm's (M6d, B-5)."""
-    every = [m for m in alarms_since(a, since, failed=True) if only is None or only(m)]
+    since the stall's last alarm. ONLY, if given, picks the alarms that belong to this stall. Returns True when this
+    run posted the stall's first alarm, the only run that may try a start (M6d, B-5 rule 1); a re-posted failed buzz
+    or a reminder is no first alarm."""
+    every = own_alarms(a, since, only)
     if not every:
         print(f"alarm: {first[0]}")
         alarm(a, first[1])
-        return
+        return True
     last = every[-1]
     retries = sum(1 for prev in every[:-1] if buzz_failed(prev))  # alarms posted again after a failed buzz
     if buzz_failed(last) and retries < BUZZ_RETRIES:
         line, text = reminder if "LEAD-SILENT: still " in last["text"] else first
         print(f"alarm: {line} (again: the last buzz failed)")
         alarm(a, text)
-        return
+        return False
     wait = REMINDER_AFTER * a.silent_after
     if time.time() - (parse_time(last["at"]) or 0) >= wait:
         print(f"alarm: {reminder[0]}")
         alarm(a, reminder[1])
-        return
+        return False
     sent = [m for m in every if not buzz_failed(m)]
     if sent:
         print(f"quiet: {prefix}LEAD-SILENT #{sent[0]['id']} at {sent[0]['at']} already reports this stall")
     else:
         print(f"quiet: {prefix}{len(every)} alarms already posted for this stall, and none buzzed; a reminder follows "
               f"{span(wait)} after the last")
+    return False
 
 
 def pending_decision(a, values, playbook):
@@ -3015,36 +3023,42 @@ def lead_task_ready(playbook=None):
     return bool(lead_task_id(playbook))
 
 
-def start_after_alarm(a, since, takeover, playbook, values, path, only=None):
-    """One start per stall (M6d, B-5), only for a lead that never came: after stall_alarm for the same SINCE (the
-    progress time, or a pending DECISION's) and the same ONLY, on the ordinary stall and the pending decision. It
-    starts a lead as the watchdog, with --takeover when TAKEOVER (the lease is held), only when all hold, in order:
-    (1) alarmed: the stall has one of its own trusted watchdog LEAD-SILENTs (ONLY picks them) newer than SINCE, its
-        buzz sent or failed, so a start never precedes its alarm;
+def try_start(a, posted_first, since, takeover, playbook, values, path, only=None):
+    """After stall_alarm on the ordinary stall or the pending decision: the start rule in the run that posted the
+    stall's first alarm (POSTED_FIRST, rule 1), else one note naming that alarm (M6d, B-5; qodo PR #14)."""
+    if posted_first:
+        start_after_alarm(a, since, takeover, playbook, values, path)
+        return
+    first = own_alarms(a, since, only)
+    if first:
+        print(f"note: no start: the watchdog tries only in the run of the stall's first alarm (#{first[0]['id']}); "
+              "the architect decides")
+
+
+def start_after_alarm(a, since, takeover, playbook, values, path):
+    """One start per stall (M6d, B-5), only for a lead that never came, tried once: in the run whose stall_alarm, on
+    the ordinary stall or the pending decision, posted the stall's first alarm, for the same SINCE (the progress time,
+    or a pending DECISION's), right after it. So the alarm, posted before the fire, records the try, and a lost
+    LEAD-STARTED can't lead to a second fire (qodo PR #14); a start held off, refused or failed then is never
+    retried. It starts a lead as the watchdog, with --takeover when TAKEOVER (the lease is held), only when all hold,
+    in order:
+    (1) at the first alarm only: the caller checks it (try_start);
     (2) one start per stall: no trusted LEAD-STARTED newer than SINCE from anyone but a lead, confirmed or not; a
         lead's own handover start doesn't count, as its successor is what stalled (cold M6d R1-5, qodo PR #14);
     (3) no sign of life since SINCE: no trusted lead message newer than it from a session that hasn't handed over (a
         session's HANDOFF, what it posted before it, and its LEAD-STARTED or NEXT-LEAD-NEEDED after it don't count),
         and the lease not taken after it (held now, its newest change on the state branch at PATH older than SINCE).
         The watchdog can't tell a dead lead from one running a long foreground builder, so a lead that has spoken or
-        taken the lease may be working, and the architect decides; this holds at every later run too (cold M6d R2-1,
-        R1-1, R1-4; qodo PR #14);
+        taken the lease may be working, and the architect decides (cold M6d R2-1, R1-1, R1-4; qodo PR #14);
     (4) not halted: the machine block's status for this room isn't paused, stopped or done, whoever holds the lease,
         as a takeover would set it back to running (cold M6d R1-2);
     (5) the lead task is configured.
-    Each rule that holds a start off prints a note naming why. Exit 1 from start-lead is tried again at the next run,
-    as nothing was posted; 3 and 6 print a note."""
+    Each rule that holds a start off prints a note naming why. Exit 1 from start-lead, and 3 and 6, print why; none
+    is retried: the alarm and its reminders tell Matthew, and the architect decides."""
     msgs = [m for m in map(parse, comments(a.room)) if trusted(m)]
 
-    def when(m):
-        return parse_time(m["at"]) or 0
-
     def newer(m):
-        return since is None or when(m) > since
-    alarms = [m for m in msgs if m["role"] == "watchdog" and message_kind(m["text"]) == "LEAD-SILENT" and newer(m)
-              and (only is None or only(m))]
-    if not alarms:
-        return
+        return since is None or (parse_time(m["at"]) or 0) > since
     started = [m for m in msgs if message_kind(m["text"]) == "LEAD-STARTED" and m["role"] != "lead" and newer(m)]
     if started:
         print(f"note: LEAD-STARTED #{started[-1]['id']} at {started[-1]['at']} is this stall's start; the watchdog "
@@ -3068,7 +3082,7 @@ def start_after_alarm(a, since, takeover, playbook, values, path, only=None):
     except (StateError, GhError) as e:  # reading the state or the room broke: transient
         code, why = 1, str(e)
     if code == 1:
-        print(f"start failed: {why}; the next run tries again")
+        print(f"start failed: {why}; no retry: the alarm and its reminders tell Matthew, and the architect decides")
     elif code:
         print(f"note: no lead started: {why}")
 
@@ -3222,9 +3236,10 @@ def cmd_watchdog(a):
 
         def own(m):
             return mine.match(m["text"]) is not None
-        stall_alarm(a, t, (f"{nobody} ({span(time.time() - t)} ago)", f"LEAD-SILENT: {nobody} (step {step})"),
-                    (f"still {nobody}", f"LEAD-SILENT: still {nobody} (step {step})"), only=own)
-        start_after_alarm(a, t, False, playbook, values, path, only=own)  # plain: the lease is released
+        posted_first = stall_alarm(a, t, (f"{nobody} ({span(time.time() - t)} ago)",
+                                          f"LEAD-SILENT: {nobody} (step {step})"),
+                                   (f"still {nobody}", f"LEAD-SILENT: still {nobody} (step {step})"), only=own)
+        try_start(a, posted_first, t, False, playbook, values, path, only=own)  # plain: the lease is released
         return 0
     # progress, not chatter (v1): a step or pr change, a mission branch push, a mission PR's merge. Lease takes,
     # handoffs at the same step, intents, the counter and the cursor don't count, so a lead in a loop alarms
@@ -3257,15 +3272,15 @@ def cmd_watchdog(a):
               f"under {span(a.silent_after)}")
         return 0
     about = f"step {step}, mission {mission}"
-    stall_alarm(a, progress, (f"no progress for {span(now - progress)} ({what} at {iso(progress)})",
-                              f"LEAD-SILENT: no progress since {iso(progress)} ({about})"),
-                (f"still no progress since {iso(progress)}", f"LEAD-SILENT: still no progress since {iso(progress)} "
-                                                             f"({about})"))
+    posted_first = stall_alarm(a, progress, (f"no progress for {span(now - progress)} ({what} at {iso(progress)})",
+                                             f"LEAD-SILENT: no progress since {iso(progress)} ({about})"),
+                               (f"still no progress since {iso(progress)}",
+                                f"LEAD-SILENT: still no progress since {iso(progress)} ({about})"))
     if joined:
         # each lead started there would begin a new stall, so starts would chain without bound (cold M6d R2-4)
         print("note: no start: a lead joined at waiting for owner; the architect decides")
         return 0
-    start_after_alarm(a, progress, lease_of(values)[0] != "none", playbook, values, path)
+    try_start(a, posted_first, progress, lease_of(values)[0] != "none", playbook, values, path)
     return 0
 
 

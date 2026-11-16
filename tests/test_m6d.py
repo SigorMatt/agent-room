@@ -189,6 +189,12 @@ def stall(step, hours=5):
     return set_state(f"step={step}", hours=hours)
 
 
+def tried_once(first):
+    """The note a run after the stall's first alarm (comment FIRST) prints instead of trying a start."""
+    return (f"note: no start: the watchdog tries only in the run of the stall's first alarm (#{first}); the architect "
+            "decides")
+
+
 def new_kinds(n, room_n="1"):
     return [kind_of(c) for c in comments(room_n)[n:]]
 
@@ -225,7 +231,7 @@ def t_a_takeover_after_a_lead_pushed_posted_nothing_and_died():
         assert [body_of(x) for x in fires()[nf:]] == [JOIN.format(n=1) + TAKEOVER]
         # the same stall: no second start, after the watchdog's own
         r = watchdog()
-        assert "already reports this stall" in r.stdout and "is this stall's start" in r.stdout, out(r)
+        assert "already reports this stall" in r.stdout and tried_once(comments()[n]["id"]) in r.stdout, out(r)
         assert len(fires()) == nf + 1 and len(comments()) == n + 2
     finally:
         drop_mission()
@@ -348,36 +354,51 @@ def t_no_start_after_a_status_one_minute_after_the_progress():
     assert "alarm: no progress for 3h20m (step or pr change " in r.stdout and life in r.stdout and \
         "it may be working; the architect decides" in r.stdout, out(r)
     assert new_kinds(n) == ["LEAD-SILENT"] and len(fires()) == nf
-    for _ in range(2):
+    for _ in range(2):  # later runs try nothing: the watchdog tries only at the first alarm
         r = watchdog()
-        assert "already reports this stall" in r.stdout and life in r.stdout and len(fires()) == nf, out(r)
+        assert "already reports this stall" in r.stdout and tried_once(comments()[n]["id"]) in r.stdout and \
+            len(fires()) == nf, out(r)
     assert len(comments()) == n + 1 and iso(t) in text_of(comments()[n])
 
 
-def t_a_definite_failure_is_retried_at_the_next_run():
+def t_a_definite_failure_is_not_retried():
+    # qodo PR #14 "Lost start records trigger another lead": one try per stall, at its first alarm
     stall("build 7")
     nf, n = len(fires()), len(comments())
     r = watchdog(FAKE_FIRE_STATUS="503", FAKE_FIRE_BODY="overloaded")
-    assert "start failed: lead task not started: HTTP 503: overloaded; the next run tries again" in r.stdout, out(r)
+    assert "start failed: lead task not started: HTTP 503: overloaded; no retry: the alarm and its reminders tell " \
+        "Matthew, and the architect decides" in r.stdout, out(r)
     assert new_kinds(n) == ["LEAD-SILENT"] and len(fires()) == nf + 1
     r = watchdog()
-    assert "already reports this stall" in r.stdout and "started: " in r.stdout and len(fires()) == nf + 2, out(r)
-    assert new_kinds(n) == ["LEAD-SILENT", "LEAD-STARTED"]
+    assert "already reports this stall" in r.stdout and tried_once(comments()[n]["id"]) in r.stdout, out(r)
+    assert len(fires()) == nf + 1 and new_kinds(n) == ["LEAD-SILENT"]
 
 
-def t_not_configured_or_refused_prints_a_note():
+def t_not_configured_or_refused_prints_a_note_and_isnt_retried():
+    # not configured (6) or refused (3) at the first alarm: a note, and no try at a later run, even once the cause is
+    # gone (the lead task configured, the room reopened)
     stall("build 8")
     nf, n = len(fires()), len(comments())
     r = watchdog(ROOM_FIRE_TOKEN_PET=None)
     assert "note: no start: the lead task isn't configured" in r.stdout and len(fires()) == nf, out(r)
+    r = watchdog()  # configured now
+    assert tried_once(comments()[n]["id"]) in r.stdout and len(fires()) == nf, out(r)
+    stall("build 8b")
+    nf, n = len(fires()), len(comments())
     r = watchdog(FAKE_FIRE_STATUS="401", FAKE_FIRE_BODY='{"error": {"message": "bad token"}}')
     assert "note: no lead started: token rejected (HTTP 401)" in r.stdout and len(fires()) == nf + 1, out(r)
+    r = watchdog()
+    assert tried_once(comments()[n]["id"]) in r.stdout and len(fires()) == nf + 1, out(r)
+    stall("build 8c")
+    nf, n = len(fires()), len(comments())
     set_issue_state("1", "closed")
     try:
         r = watchdog()
-        assert "note: no lead started: refused: room 1 is closed" in r.stdout and len(fires()) == nf + 1, out(r)
+        assert "note: no lead started: refused: room 1 is closed" in r.stdout and len(fires()) == nf, out(r)
     finally:
         set_issue_state("1", "open")
+    r = watchdog()  # reopened
+    assert tried_once(comments()[n]["id"]) in r.stdout and len(fires()) == nf, out(r)
     assert new_kinds(n) == ["LEAD-SILENT"], "the alarm alone"
 
 
@@ -519,6 +540,36 @@ def t_start_lead_seen_0_in_a_room_with_no_comments():
         set_state("status=running")
 
 
+# --- one try per stall (qodo PR #14: Lost start records trigger another lead)
+
+def t_a_lost_lead_started_brings_no_second_fire():
+    # the fire worked, but every post of its LEAD-STARTED failed: the alarm before it records the try
+    stall("build 90")
+    nf, n = len(fires()), len(comments())
+    r = watchdog(FAKE_GH_FAIL_POSTS="3", FAKE_GH_FAIL_MATCH="LEAD-STARTED",
+                 FAKE_GH_FAIL_COUNTER=os.path.join(tmp, "lost-lead-started"))
+    assert "started: https://claude.ai/code/" in r.stdout and "started, but LEAD-STARTED wasn't posted" in r.stdout, \
+        out(r)
+    assert new_kinds(n) == ["LEAD-SILENT"] and len(fires()) == nf + 1
+    r = watchdog()
+    assert tried_once(comments()[n]["id"]) in r.stdout and len(fires()) == nf + 1, out(r)
+
+
+def t_a_reposted_alarm_or_a_reminder_fires_nothing():
+    # only the run that posts the stall's first alarm tries: not a re-post after a failed buzz, nor a reminder
+    stall("build 91", hours=14)
+    nf, n = len(fires()), len(comments())
+    r = watchdog(ROOM_NTFY_TOPIC=None, ROOM_FIRE_TOKEN_PET=None)  # its buzz fails; not configured then
+    assert "alarm: no progress for 14h" in r.stdout and "the lead task isn't configured" in r.stdout, out(r)
+    first = comments()[n]["id"]
+    r = watchdog()  # configured now; the alarm is posted again, as its buzz failed
+    assert "(again: the last buzz failed)" in r.stdout and tried_once(first) in r.stdout, out(r)
+    backdate(lambda c: c["id"] >= first, 730)
+    r = watchdog()
+    assert "alarm: still no progress since " in r.stdout and tried_once(first) in r.stdout, out(r)
+    assert new_kinds(n) == ["LEAD-SILENT"] * 3 and len(fires()) == nf
+
+
 # --- B-6: reminders while a room waits on Matthew
 
 def t_a_reminder_while_a_request_waits_on_matthew():
@@ -621,12 +672,13 @@ def t_no_start_after_a_handovers_successor_joined_and_died():
     assert "alarm: no progress for 5h" in r.stdout and life in r.stdout, out(r)
     assert new_kinds(n) == ["LEAD-SILENT"] and len(fires()) == nf, new_kinds(n)
     r = watchdog()
-    assert "already reports this stall" in r.stdout and life in r.stdout and len(fires()) == nf, out(r)
+    assert "already reports this stall" in r.stdout and tried_once(comments()[n]["id"]) in r.stdout and \
+        len(fires()) == nf, out(r)
 
 
 def t_no_start_after_a_lead_joined_after_the_alarm_with_no_lead_started():
-    # qodo PR #14 finding 1: Matthew started a lead in the Code tab, so no LEAD-STARTED was posted; its LEAD ONLINE
-    # after the stall's first alarm makes it this stall's start
+    # qodo PR #14 finding 1: Matthew started a lead in the Code tab, so no LEAD-STARTED was posted; the watchdog,
+    # which tries only at the first alarm, starts no other at a later run
     stall("build 32")
     nf, n = len(fires()), len(comments())
     r = watchdog(ROOM_FIRE_TOKEN_PET=None)
@@ -637,8 +689,7 @@ def t_no_start_after_a_lead_joined_after_the_alarm_with_no_lead_started():
     backdate(lambda c: c["id"] == first, 260)
     backdate(lambda c: c["id"] == joined, 200)
     r = watchdog()
-    assert "already reports this stall" in r.stdout and "note: no start: a lead showed a sign of life since the " \
-        f"stall began (LEAD ONLINE #{joined} at " in r.stdout, out(r)
+    assert "already reports this stall" in r.stdout and tried_once(first) in r.stdout, out(r)
     assert len(fires()) == nf and len(comments()) == n + 2
 
 
