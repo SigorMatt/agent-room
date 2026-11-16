@@ -21,8 +21,8 @@ in Claude chat and cloud sessions, or `gh auth login` on your own machine.
   room.py preflight --role architect|lead [--fix]              check repo, state branch, environment
   room.py gate  PR [--mission M<k>] [--allow-hold 5 --decision DECISION-<n>]   the merge gate
   room.py merge PR --sha SHA [--allow-hold 5 --decision DECISION-<n>]        gate, then merge naming SHA
-  room.py watchdog N [--silent-after 3h] [--no-start]   the watchdog task: LEAD-SILENT (buzzes) when no progress,
-                                           then a start through the lead task; never writes state
+  room.py watchdog N [--silent-after 3h]   the watchdog task: LEAD-SILENT (buzzes) when no progress, or no lead
+                                           joined after a DECISION; reminders; never writes state or starts leads
   room.py join-line N [--takeover]         print the line that starts a lead
   room.py start-lead N ROLE [--takeover] [--force]   start a lead through the lead task and post LEAD-STARTED
                                            (exit 1 try once more, 3 refused, 6 not configured or rejected)
@@ -2722,11 +2722,12 @@ def add_gate_commands(sub, common):
 # the state changes around it. Every command here works inside the project's checkout or without one
 # (ROOM_STATE_REMOTE).
 #
-#   watchdog N [--silent-after 3h] [--no-start]   join-line N [--takeover]   start-lead N ROLE [--takeover] [--force]
+#   watchdog N [--silent-after 3h]   join-line N [--takeover]   start-lead N ROLE [--takeover] [--force]
 #   lead-task-prompt   handoff N --step STEP --cursor ID   reconcile N   budget
 #
-# watchdog, reconcile and budget read the pushed state branch and never write it; the watchdog schedules nothing,
-# but starts leads through the lead task after an alarm or Matthew's decision (unless --no-start).
+# watchdog, reconcile and budget read the pushed state branch and never write it. The watchdog only alarms: it
+# schedules and starts nothing; takeovers and the lead after a decision are the architect's (BUILD-STATE 2026-11-16,
+# B-5).
 # Intents reconcile recognizes: "merge PR #<n> at <sha>", "open PR <branch or M<k>>", "post <KIND> in room <n> after
 # #<id>" and "close room <n> after #<id>" (as 'intent' records them).
 
@@ -2735,7 +2736,6 @@ QUIET_STATUSES = ("paused", "stopped", "done")
 PROGRESS_KEYS = ("step", "pr")  # the machine-block keys whose change is progress; merge records pr
 PRESTART_HOURS = 12  # a room no lead has joined gets one alarm this long after its issue was opened
 ALARM_CAP = 3  # LEAD-SILENT posts per stall while buzzes fail: the first and two retries (finding P)
-DECISION_GRACE = 30 * 60  # seconds a DECISION-n waits for the architect to start its lead before the watchdog does
 DEFAULT_BUDGET_HOURS = 8
 
 
@@ -2945,176 +2945,51 @@ def alarms_since(a, progress, failed=False):
             if failed or not re.search(r"\(buzz failed\b", m["text"])]
 
 
-def watchdog_start(a, takeover, after=None, on_outcome=None):
-    """start-lead's logic as the watchdog, printing how it went. Its exit code never becomes the watchdog's: 6 and 3
-    are notes, and after 1 the next run tries again. TAKEOVER None: --takeover when the lease is held. AFTER names
-    the DECISION-n a decision start answers. ON_OUTCOME, if given, is called once as soon as the outcome is known:
-    with None for a start (confirmed or not), just before its LEAD-STARTED is posted, else with why it failed, so an
-    alarm due in the same run comes first and can say so (cold M6b S2-2)."""
-    told = []
-
-    def outcome(why):
-        if on_outcome and not told:
-            told.append(why)
-            on_outcome(why)
-    try:
-        code, why = start_lead(a, a.room, "watchdog", takeover=takeover, after=after, fired=lambda: outcome(None))
-    except (StateError, GhError) as e:  # reading the state or the room broke: transient
-        code, why = 1, str(e)
-    outcome(why if code else None)
-    if code == 1:
-        print(f"start failed: {why}; the next run tries again")
-    elif code:
-        print(f"note: no lead started: {why}")
-
-
-def decision_start(m):
-    """Whether LEAD-STARTED message M is the watchdog's start after a decision, which no takeover count includes
-    (cold M6b R2-3)."""
-    return re.search(r"\bafter DECISION-\d+\)", m["text"]) is not None
-
-
-FINAL_ALARM = "two takeover leads made no progress; no more starts"  # an episode's last alarm (cold M6b R2-2)
-NO_MORE_STARTS = "; no more starts"  # in every final alarm, the decision path's too
-REMINDER_AFTER = 4  # a reminder alarm once this many silent-afters passed since the episode's last alarm (cold M6b S2-1)
-
-
-def stall_episode(a, stall, opened=None, decision=False):
-    """The stall's episode (cold M6b R2-1), as {start, by, why, alarms, starts, sign, talk}: the time window from its
-    beginning to the next episode's (cold M6b S2-6). It begins at STALL, the progress time (for the decision path,
-    the DECISION's time), and a new one at each later trusted architect LEAD-STARTED (a start by hand), or at a trusted
-    lead LEAD ONLINE after the episode's own final alarm (a lead started by Run now or the Code tab: cold M6b S1-2).
-    For pre-start (STALL None) the room is one episode, opened at OPENED, until an architect LEAD-STARTED (S1-1). BY is
-    the message that began it, if any, and WHY says what it was. ALARMS are its trusted watchdog LEAD-SILENTs, STARTS
-    its watchdog LEAD-STARTEDs: takeover starts on a stall, every one (they say after DECISION-n) on the decision path.
-    SIGN is the time of the last sign of a lead: the latest of the episode's beginning, any trusted LEAD-STARTED (any
-    role) and any trusted lead LEAD ONLINE; on the decision path only those after the DECISION count, and its time
-    doesn't, so the first start is due at once. TALK is the time of the lead's last trusted message of any kind."""
-    msgs = [m for m in map(parse, comments(a.room)) if trusted(m)]
-
-    def when(m):
-        return parse_time(m["at"]) or 0
-
-    def kind(m):
-        return message_kind(m["text"])
-    start = stall if stall is not None else (opened or 0)
-    by = why = None
-    final = False
-    for m in msgs:  # in order, so each episode's final alarm is looked for in that episode's own window
-        w, k = when(m), kind(m)
-        if m["role"] == "architect" and k == "LEAD-STARTED" and w > start:
-            start, by, why, final = w, m, f"LEAD-STARTED #{m['id']} by the architect", False
-        elif m["role"] == "watchdog" and k == "LEAD-SILENT" and NO_MORE_STARTS in m["text"] and w >= start:
-            final = True
-        elif final and m["role"] == "lead" and k == "LEAD ONLINE" and w > start:
-            start, by, why, final = w, m, f"LEAD ONLINE #{m['id']} after the final alarm", False
-    within = msgs if stall is None and by is None else [m for m in msgs if when(m) > start]
-    signs = [when(m) for m in msgs if (kind(m) == "LEAD-STARTED" or (m["role"] == "lead" and kind(m) == "LEAD ONLINE"))
-             and (not decision or when(m) > stall)]
-    return {"start": start, "by": by, "why": why,
-            "sign": max(signs + ([] if decision else [start]), default=0),
-            "talk": max([0] + [when(m) for m in msgs if m["role"] == "lead"]),
-            "alarms": [m for m in within if m["role"] == "watchdog" and kind(m) == "LEAD-SILENT"],
-            "starts": [m for m in within if m["role"] == "watchdog" and kind(m) == "LEAD-STARTED"
-                       and (decision or not decision_start(m))]}
-
-
-def lead_task_configured():
-    """Whether start-lead could fire at all: a token, and a lead-task: line in the pushed PLAYBOOK.md."""
-    if not fire_token():
-        return False
-    try:
-        return bool(lead_task_id(pushed_text(ensure_worktree(), "PLAYBOOK.md")))
-    except StateError:
-        return False
+REMINDER_AFTER = 4  # a reminder once this many silent-afters have passed since the stall's last alarm
+BUZZ_RETRIES = 2  # an alarm whose buzz failed is posted again at the next run, at most this many times per stall
 
 
 def buzz_failed(m):
     return re.search(r"\(buzz failed\b", m["text"]) is not None
 
 
-def alarm_stage(a, ep, texts, takeover, measure=None, prefix="", after=None, idle=None, start_line=None):
-    """A stall's alarms and starts within its episode EP. Alarms don't depend on starts (cold M6b S2-1, S2-2): the
-    first comes once silent-after has passed since MEASURE (when given), a second-start alarm with the second start,
-    a final one when a third start would be due, and a reminder once REMINDER_AFTER silent-afters have passed since
-    the episode's last alarm whose buzz worked. At most ALARM_CAP per episode, of every kind, failed buzzes included;
-    a failed buzz is retried within it. TEXTS has the 'first' (line, text), 'about' (where things stand), 'final'
-    words, 'reminder' (n -> (line, text)), and 'first_says_failure'. A start is due once silent-after has passed since
-    the last sign of a lead (for a takeover, since the lead's last message too) and the episode has fewer than two;
-    a failed or refused one posts nothing, so the next run tries again, and an alarm in the same run says why.
-    IDLE is printed instead of the quiet lines when nothing is posted or started; START_LINE before a start."""
-    now = time.time()
-    every = ep["alarms"]
-    sent = [m for m in every if not buzz_failed(m)]
-    starts, about = ep["starts"], texts["about"]
-    # a takeover also waits for silent-after after the lead's last message of any kind: chatter isn't progress, so it
-    # still alarms, but a lead that still talks isn't displaced (qodo PR #11)
-    last = max(ep["sign"], ep["talk"]) if takeover is not False else ep["sign"]
-    due = not a.no_start and len(starts) < 2 and now - last >= a.silent_after
-    pick, told, says_failure = None, [], False
-    if len(starts) == 1 and due:  # the lead the watchdog started made no progress either: the second, last start
-        phrase = f"the lead started at {iso(parse_time(starts[0]['at']))} made no progress"
-        pick, told = (phrase, f"LEAD-SILENT: {phrase} ({about})"), [m for m in sent if phrase in m["text"]]
-    elif len(starts) >= 2 and now - ep["sign"] >= a.silent_after:  # one last alarm, and no more starts (R2-2)
-        pick = (texts["final"], f"LEAD-SILENT: {texts['final']} ({about})")
-        told = [m for m in sent if NO_MORE_STARTS in m["text"]]
-    elif not sent and (measure is None or now - measure >= a.silent_after):  # the first alarm
-        line, text = texts["first"]
-        if not starts and not a.no_start and not due and lead_task_configured():
-            text += f" (start held off: a lead showed signs at {iso(last)})"  # cold M6b S1-3
-        pick, says_failure = (line, text), texts.get("first_says_failure", False)
-    elif sent and now - max(parse_time(m["at"]) or 0 for m in sent) >= REMINDER_AFTER * a.silent_after:
-        pick, says_failure = texts["reminder"](len(starts)), True
-    quiet = []  # printed unless IDLE stands for them
-    if pick and told:
-        quiet.append(f"quiet: {prefix}LEAD-SILENT #{told[0]['id']} at {told[0]['at']} already reports this stall")
-        pick = None
-    elif pick and len(every) >= ALARM_CAP:
-        quiet.append(f"quiet: {prefix}{ALARM_CAP} alarms already posted for this stall")
-        pick = None
-    elif pick is None and sent:
-        quiet.append(f"quiet: {prefix}LEAD-SILENT #{sent[0]['id']} at {sent[0]['at']} already reports this stall")
-    if idle is not None:
-        if pick is None and not due:
-            print(idle)
-            return
-    else:
-        for line in quiet:
-            print(line)
-
-    def post(why):
-        if pick is None:
-            return
-        line, text = pick
-        if says_failure and why is None and not due and not a.no_start and not lead_task_configured():
-            why = "the lead task isn't configured"
-        if says_failure and why:
-            text += f" (last start failed: {' '.join(str(why).split())[:200]})"
-        print(f"alarm: {line}")
+def stall_alarm(a, since, first, reminder, prefix=""):
+    """The alarms of one stall, which SINCE identifies: its progress time, or a pending DECISION's (None, before any
+    lead joined: the whole room). FIRST and REMINDER are (printed line, posted text). The first alarm comes once.
+    While an alarm's buzz fails, the next run posts it again, at most BUZZ_RETRIES times per stall (finding P); after
+    that, and once one got through, a reminder comes every REMINDER_AFTER x silent-after since the stall's last
+    alarm. The watchdog only alarms; takeovers and the lead after a decision are the architect's (BUILD-STATE
+    2026-11-16, B-5)."""
+    every = alarms_since(a, since, failed=True)
+    if not every:
+        print(f"alarm: {first[0]}")
+        alarm(a, first[1])
+        return
+    last = every[-1]
+    retries = sum(1 for prev in every[:-1] if buzz_failed(prev))  # alarms posted again after a failed buzz
+    if buzz_failed(last) and retries < BUZZ_RETRIES:
+        line, text = reminder if "LEAD-SILENT: still " in last["text"] else first
+        print(f"alarm: {line} (again: the last buzz failed)")
         alarm(a, text)
-
-    if due:
-        if start_line:
-            print(start_line)
-        watchdog_start(a, takeover, after, on_outcome=post)
         return
-    post(None)
-    if a.no_start or idle is not None:
+    wait = REMINDER_AFTER * a.silent_after
+    if time.time() - (parse_time(last["at"]) or 0) >= wait:
+        print(f"alarm: {reminder[0]}")
+        alarm(a, reminder[1])
         return
-    if not starts:
-        print(f"note: no start yet: the last sign of a lead came {span(now - last)} ago, at {iso(last)}, "
-              f"under {span(a.silent_after)}")
-    elif len(starts) == 1:
-        print(f"note: LEAD-STARTED #{starts[0]['id']} at {starts[0]['at']} already started a lead for this stall; a "
-              f"second, last start follows if no sign of a lead comes for {span(a.silent_after)}")
+    sent = [m for m in every if not buzz_failed(m)]
+    if sent:
+        print(f"quiet: {prefix}LEAD-SILENT #{sent[0]['id']} at {sent[0]['at']} already reports this stall")
     else:
-        print(f"note: {len(starts)} leads already started for this stall: alarms only")
+        print(f"quiet: {prefix}{len(every)} alarms already posted for this stall, and none buzzed; a reminder follows "
+              f"{span(wait)} after the last")
 
 
-def waiting_decision(a, values, playbook):
-    """The trusted DECISION-n a parked lead waits on, which makes the room a stall (qodo PR #11, cold M6b S2-2): while
-    the lease is released and room N is the current room, the newest DECISION from the architect or Matthew that is
-    newer than the room's newest trusted lead message and more than DECISION_GRACE old; else None."""
+def pending_decision(a, values, playbook):
+    """The trusted DECISION-n a parked lead waits on that no lead has answered: while the lease is released and room N
+    is the current room, the newest DECISION (from the architect or Matthew) newer than the room's newest trusted lead
+    message, a LEAD ONLINE included, and silent-after old; else None. A LEAD-STARTED after it doesn't count: if no
+    lead joins, the alarm comes (BUILD-STATE 2026-11-16, B-5)."""
     room = current_room(playbook, values)
     if lease_of(values)[0] != "none" or (room and room[0] != a.room):
         return None
@@ -3123,7 +2998,7 @@ def waiting_decision(a, values, playbook):
     now = time.time()
     found = [d for d in msgs if d["id"] > last_lead and d["role"] in ("architect", "human") and
              re.fullmatch(r"DECISION-\d+", message_kind(d["text"]) or "") and
-             now - (parse_time(d["at"]) or now) > DECISION_GRACE]
+             now - (parse_time(d["at"]) or now) >= a.silent_after]
     return found[-1] if found else None
 
 
@@ -3184,17 +3059,10 @@ def prestart_alarm(a):
         print(f"quiet: no lead has joined room {a.room} yet" +
               (f" (opened {span(time.time() - opened)} ago)" if opened is not None else ""))
         return 0
-    ep = stall_episode(a, None, opened)
-    if ep["by"] and time.time() - ep["start"] < a.silent_after:  # a start by hand opened a new episode (cold M6b S1-1)
-        print(f"quiet: no lead has joined room {a.room} yet; LEAD-STARTED #{ep['by']['id']} by the architect at "
-              f"{ep['by']['at']}, under {span(a.silent_after)}")
-        return 0
     nobody = f"no lead has joined room {a.room}"
-    alarm_stage(a, ep, {"first": (f"{nobody} in {PRESTART_HOURS}h (opened {iso(opened)})",
-                                  f"LEAD-SILENT: {nobody} in {PRESTART_HOURS}h"),
-                        "about": nobody, "final": FINAL_ALARM,
-                        "reminder": lambda n: (f"still {nobody}", f"LEAD-SILENT: still {nobody} ({n} takeover starts so far)")},
-                takeover=None, prefix=f"{nobody} yet; ")
+    stall_alarm(a, None, (f"{nobody} in {PRESTART_HOURS}h (opened {iso(opened)})",
+                          f"LEAD-SILENT: {nobody} in {PRESTART_HOURS}h"),
+                (f"still {nobody}", f"LEAD-SILENT: still {nobody}"), prefix=f"{nobody} yet; ")
     return 0
 
 
@@ -3219,22 +3087,17 @@ def cmd_watchdog(a):
     quiet = quiet_reason(a, values, playbook)
     if quiet:
         why, text = quiet
-        # a parked lead (lease released) and Matthew's decision that no lead joined after: a stall of its own, measured
-        # from the DECISION, with the same starts, alarms and cap (qodo PR #11, cold M6b S2-2, S2-3)
-        d = waiting_decision(a, values, playbook) if why == "waiting" else None
+        # a parked lead (lease released) and Matthew's decision that no lead has answered for silent-after: an alarm,
+        # and reminders; the architect starts the lead (BUILD-STATE 2026-11-16, B-5)
+        d = pending_decision(a, values, playbook) if why == "waiting" else None
         if d is None:
             print(f"quiet: {text}")
             return 0
         kind, t = message_kind(d["text"]), parse_time(d["at"])
-        ep = stall_episode(a, t, decision=True)
+        print(f"note: {text}, the lease is released, and no lead has joined since {kind} #{d['id']} at {d['at']}")
         nobody = f"no lead joined after {kind}"
-        alarm_stage(a, ep, {"first": (nobody, f"LEAD-SILENT: {nobody} (step {step})"), "first_says_failure": True,
-                            "about": f"step {step}", "final": f"{nobody}{NO_MORE_STARTS}",
-                            "reminder": lambda n: (f"still {nobody}",
-                                                   f"LEAD-SILENT: still {nobody} ({n} starts so far; step {step})")},
-                    takeover=False, measure=ep["start"], after=kind, idle=f"quiet: {text}",
-                    start_line=f"start: {text}, the lease is released, and {kind} #{d['id']} at {d['at']} has waited "
-                               f"{span(time.time() - t)} with no lead started for it, or none that joined")
+        stall_alarm(a, t, (f"{nobody} ({span(time.time() - t)} ago)", f"LEAD-SILENT: {nobody} (step {step})"),
+                    (f"still {nobody}", f"LEAD-SILENT: still {nobody} (step {step})"))
         return 0
     # progress, not chatter (v1): a step or pr change, a mission branch push, a mission PR's merge. Lease takes,
     # handoffs at the same step, intents, the counter and the cursor don't count, so a lead in a loop alarms
@@ -3245,7 +3108,6 @@ def cmd_watchdog(a):
     if not found:
         return unreadable_state_alarm(a, path, f"{PLAYBOOK_DIR}/MISSIONS.md has no step in its history")
     progress, what = max(found)
-    stall = progress  # which stall this is, for one alarm and the starts per stall
     joined_at_wait = step.strip().lower().startswith(WAITING_FOR_OWNER) and lease_of(values)[0] != "none"
     if joined_at_wait:
         # cold M6b R1-1: measured from the later of the progress and the newest lead LEAD ONLINE, so a lead that has
@@ -3261,22 +3123,16 @@ def cmd_watchdog(a):
             return 0
         print(f"note: waiting_for_owner is yes, but {what} at {iso(progress)} came after it was set at "
               f"{iso(flag[1])}, so it is stale")
-    ep = stall_episode(a, stall)
-    if ep["by"] and ep["start"] > progress:  # a start by hand, or a join after the final alarm, opened a new episode
-        progress, what = ep["start"], ep["why"]
     now = time.time()
     if now - progress < a.silent_after:
         print(f"quiet: progress {span(now - progress)} ago ({what} at {iso(progress)}), "
               f"under {span(a.silent_after)}")
         return 0
     about = f"step {step}, mission {mission}"
-    alarm_stage(a, ep, {"first": (f"no progress for {span(now - progress)} ({what} at {iso(progress)})",
-                                  f"LEAD-SILENT: no progress since {iso(progress)} ({about})"),
-                        "about": about, "final": FINAL_ALARM,
-                        "reminder": lambda n: (f"still no progress since {iso(progress)}",
-                                               f"LEAD-SILENT: still no progress since {iso(progress)} ({n} takeover "
-                                               f"starts so far; {about})")},
-                takeover=lease_of(values)[0] != "none", measure=progress)
+    stall_alarm(a, progress, (f"no progress for {span(now - progress)} ({what} at {iso(progress)})",
+                              f"LEAD-SILENT: no progress since {iso(progress)} ({about})"),
+                (f"still no progress since {iso(progress)}", f"LEAD-SILENT: still no progress since {iso(progress)} "
+                                                             f"({about})"))
     return 0
 
 
@@ -3835,7 +3691,7 @@ def post_quietly(room, role, text, a):
                 return None
 
 
-def start_lead(a, room, role, takeover=False, force=False, after=None, fired=None):
+def start_lead(a, room, role, takeover=False, force=False):
     """Start a lead in ROOM through the lead task, as ROLE: read the configuration, check the guards, POST the join
     line, then post LEAD-STARTED. Returns (exit code, why): 0 started, or maybe started (an unconfirmed LEAD-STARTED;
     why None), 1 a definite failure (try once more), 3 refused, 6 not configured or rejected. TAKEOVER None means
@@ -3870,12 +3726,10 @@ def start_lead(a, room, role, takeover=False, force=False, after=None, fired=Non
     if rejected:
         return EXIT_NOT_CONFIGURED, rejected
     status, answer = fire(task, token, text)
-    by = f"started by {role}" + (f" after {after}" if after else "")
+    by = f"started by {role}"
     if status == 200 and isinstance(answer, dict) and answer.get("type") == "routine_fire":
         url = session_url(answer, token)
         print(f"started: {url}")
-        if fired:
-            fired()
         err = post_quietly(room, role, f"LEAD-STARTED: {url} ({'takeover' if takeover else 'plain'} join line, {by})",
                            a)
         if err:
@@ -3887,8 +3741,6 @@ def start_lead(a, room, role, takeover=False, force=False, after=None, fired=Non
         reason = one_line(answer, token, 200) if status == -1 else \
             "HTTP 200 without routine_fire" if status == 200 else f"HTTP {status}"
         print(f"warning: the lead task may have started a lead ({reason}); recorded as unconfirmed, not retried")
-        if fired:
-            fired()
         err = post_quietly(room, role, f"LEAD-STARTED: unconfirmed ({reason}); a LEAD ONLINE follows if the lead "
                                        f"started ({by})", a)
         if err:
@@ -3924,14 +3776,12 @@ def add_unattended_commands(sub, common):
 
     s = leaf("watchdog", cmd_watchdog, "the watchdog task, as role watchdog: buzz and post LEAD-SILENT when no "
                                        "step or pr change, mission branch push or mission PR merge happened for "
-                                       "DURATION, then start a lead through the lead task, at most twice per "
-                                       "stall; also "
-                                       "start the lead after Matthew's decision to a parked lead; never writes state")
+                                       "DURATION, or when no lead joined for DURATION after Matthew's decision to a "
+                                       "parked lead; a reminder every 4 x DURATION while it lasts; never writes "
+                                       "state or starts leads")
     s.add_argument("room", type=int)
     s.add_argument("--silent-after", type=duration_arg, default=3 * 3600, metavar="DURATION",
                    help="like 3h or 45m (default 3h; drills use a short one)")
-    s.add_argument("--no-start", action="store_true",
-                   help="alarm only, never start a lead (drills, and projects without a lead task)")
     s = leaf("join-line", cmd_join_line, "print the line that starts a lead")
     s.add_argument("room", type=int)
     s.add_argument("--takeover", action="store_true",
