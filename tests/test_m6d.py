@@ -181,9 +181,11 @@ def say(text, role="lead", **env):
 
 
 def stall(step, hours=5):
-    """A fresh stall: the room aged, L1 holding the lease, and STEP recorded HOURS ago. Returns its time."""
+    """A fresh stall: the room aged, L1 holding the lease since before the stall (lease_session last changed then:
+    from L0 to L1), and STEP recorded HOURS ago. Returns its time."""
     age_room()
-    room("lease", "take", "--takeover", check=True)
+    room("lease", "take", "--takeover", check=True, ROOM_SESSION="L0", **ago(hours + 0.4)[1])
+    room("lease", "take", "--takeover", check=True, **ago(hours + 0.2)[1])
     return set_state(f"step={step}", hours=hours)
 
 
@@ -208,20 +210,25 @@ def setup():
 
 # --- B-5: one start per stall
 
-def t_a_takeover_after_the_alarm_with_the_lease_held():
-    stall("build 1")
-    nf, n = len(fires()), len(comments())
-    r = watchdog()
-    assert r.returncode == 0 and "alarm: no progress for 5h" in r.stdout and "started: https://claude.ai/code/" in \
-        r.stdout, out(r)
-    assert r.stdout.index("alarm: ") < r.stdout.index("started: "), "the alarm comes before the fire"
-    assert new_kinds(n) == ["LEAD-SILENT", "LEAD-STARTED"], new_kinds(n)
-    assert text_of(comments()[-1]).endswith("(takeover join line, started by watchdog)")
-    assert [body_of(x) for x in fires()[nf:]] == [JOIN.format(n=1) + TAKEOVER]
-    # the same stall: no second start, after the watchdog's own
-    r = watchdog()
-    assert "already reports this stall" in r.stdout and "is this stall's start" in r.stdout, out(r)
-    assert len(fires()) == nf + 1 and len(comments()) == n + 2
+def t_a_takeover_after_a_lead_pushed_posted_nothing_and_died():
+    # a lead that pushed (progress), posted nothing after it, and died with the lease held: one takeover
+    stall("build 1", hours=8)
+    push_mission(5)
+    try:
+        nf, n = len(fires()), len(comments())
+        r = watchdog()
+        assert r.returncode == 0 and "alarm: no progress for 5h" in r.stdout and "started: https://claude.ai/code/" in \
+            r.stdout, out(r)
+        assert r.stdout.index("alarm: ") < r.stdout.index("started: "), "the alarm comes before the fire"
+        assert new_kinds(n) == ["LEAD-SILENT", "LEAD-STARTED"], new_kinds(n)
+        assert text_of(comments()[-1]).endswith("(takeover join line, started by watchdog)")
+        assert [body_of(x) for x in fires()[nf:]] == [JOIN.format(n=1) + TAKEOVER]
+        # the same stall: no second start, after the watchdog's own
+        r = watchdog()
+        assert "already reports this stall" in r.stdout and "is this stall's start" in r.stdout, out(r)
+        assert len(fires()) == nf + 1 and len(comments()) == n + 2
+    finally:
+        drop_mission()
 
 
 def t_a_plain_start_after_the_alarm_with_the_lease_released():
@@ -304,7 +311,9 @@ def t_pre_start_alarms_and_reminds_without_a_start():
         set_state("status=running")
 
 
-def t_a_takeover_after_a_lead_joined_at_waiting_and_died():
+def t_a_lead_that_joined_at_waiting_alarms_without_a_start():
+    # cold M6d R2-4 (its E3): each lead that joins at waiting for owner and dies is a new stall, measured from its
+    # LEAD ONLINE; starts there would chain without bound, so the watchdog only alarms, and the architect decides
     park(3, "spec 5")
     decision = say("DECISION-3: the third", role="architect", ROOM_SESSION="arch")
     started = say("LEAD-STARTED: https://claude.ai/code/a2 (plain join line, started by architect)", role="architect",
@@ -312,30 +321,37 @@ def t_a_takeover_after_a_lead_joined_at_waiting_and_died():
     room("lease", "take", check=True, ROOM_SESSION="L2")
     joined = say("LEAD ONLINE", ROOM_SESSION="L2")  # then it dies before moving the step on
     backdate(lambda c: c["id"] in (decision, started), 260)
-    backdate(lambda c: c["id"] == joined, 200)  # a new stall, from its LEAD ONLINE (cold M6b R1-1)
-    nf, n = len(fires()), len(comments())
-    r = watchdog()
-    assert f"alarm: no progress for 3h20m (LEAD ONLINE #{joined} at " in r.stdout and "started: " in r.stdout, out(r)
-    assert new_kinds(n) == ["LEAD-SILENT", "LEAD-STARTED"]
-    assert text_of(comments()[-1]).endswith("(takeover join line, started by watchdog)") and len(fires()) == nf + 1
+    backdate(lambda c: c["id"] == joined, 200)
+    nf = len(fires())
+    for session in ("T3", "T4"):
+        n = len(comments())
+        r = watchdog()
+        assert f"alarm: no progress for 3h20m (LEAD ONLINE #{joined} at " in r.stdout and "note: no start: a lead " \
+            "joined at waiting for owner; the architect decides" in r.stdout, out(r)
+        assert new_kinds(n) == ["LEAD-SILENT"] and len(fires()) == nf, new_kinds(n)
+        # the architect starts another lead by hand; it joins and dies at the same step: a new stall
+        room("lease", "take", "--takeover", check=True, ROOM_SESSION=session)
+        alarm_id, joined = comments()[n]["id"], say("LEAD ONLINE", ROOM_SESSION=session)
+        backdate(lambda c: alarm_id <= c["id"] < joined, 215)
+        backdate(lambda c: c["id"] == joined, 200)
 
 
-def t_no_start_when_a_lead_posted_before_the_first_alarm():
-    # cold M6d R1-4, R1-1: a lead that posted within silent-after before the alarm may be working quietly (a long
-    # builder run after its STATUS): no start at that run, nor at any later one; the architect decides
-    stall("build 6")
-    talk = say("STATUS: three builders running in the background")
+def t_no_start_after_a_status_one_minute_after_the_progress():
+    # cold M6d R2-1: the lead pushes, posts a STATUS a minute later and runs a long builder in the foreground; the
+    # first alarm comes 3h20m after the push. It may be working: no start, at that run or any later one
+    t = stall("build 6", hours=200 / 60)
+    talk = say("STATUS: builder for task 3 running in the foreground")
+    backdate(lambda c: c["id"] == talk, 199)
     nf, n = len(fires()), len(comments())
+    life = f"note: no start: a lead showed a sign of life since the stall began (STATUS #{talk} at "
     r = watchdog()
-    assert "alarm: no progress for 5h" in r.stdout and f"note: no start: the lead posted STATUS #{talk} at " in \
-        r.stdout and "it may be working quietly" in r.stdout, out(r)
+    assert "alarm: no progress for 3h20m (step or pr change " in r.stdout and life in r.stdout and \
+        "it may be working; the architect decides" in r.stdout, out(r)
     assert new_kinds(n) == ["LEAD-SILENT"] and len(fires()) == nf
-    first = comments()[n]["id"]
-    backdate(lambda c: c["id"] == talk, 250)  # hours later, nothing new: the same stall, the same first alarm
-    backdate(lambda c: c["id"] == first, 249)
-    r = watchdog()
-    assert "already reports this stall" in r.stdout and f"the lead posted STATUS #{talk}" in r.stdout, out(r)
-    assert len(fires()) == nf and len(comments()) == n + 1
+    for _ in range(2):
+        r = watchdog()
+        assert "already reports this stall" in r.stdout and life in r.stdout and len(fires()) == nf, out(r)
+    assert len(comments()) == n + 1 and iso(t) in text_of(comments()[n])
 
 
 def t_a_definite_failure_is_retried_at_the_next_run():
@@ -448,6 +464,61 @@ def t_start_lead_seen_refuses_once_the_room_moved_on():
     assert len(fires()) == nf
 
 
+# --- after cold review round 2 of M6d
+
+def t_a_start_after_a_handover_at_the_same_step_after_statuses():
+    # cold M6d R2-1: a session that handed over has ended, so its STATUSes before the HANDOFF, the HANDOFF and its
+    # LEAD-STARTED are no sign of life: its successor is what stalled
+    stall("build 70", hours=6)
+    s1, s2 = say("STATUS: task 2 merged"), say("STATUS: retrying task 3")
+    backdate(lambda c: c["id"] == s1, 300)
+    backdate(lambda c: c["id"] == s2, 240)
+    before = comments()[-1]["id"]
+    room("handoff", "1", "--step", "build 70", "--cursor", "none", check=True, **ago(3.9)[1])  # no progress
+    room("start-lead", "1", "lead", check=True)
+    backdate(lambda c: c["id"] > before, 230)
+    nf, n = len(fires()), len(comments())
+    r = watchdog()
+    assert "alarm: no progress for 6h" in r.stdout and "started: https://claude.ai/code/" in r.stdout, out(r)
+    assert new_kinds(n) == ["LEAD-SILENT", "LEAD-STARTED"], new_kinds(n)
+    assert text_of(comments()[-1]).endswith("(plain join line, started by watchdog)") and len(fires()) == nf + 1
+
+
+def t_no_start_after_the_lease_was_taken_with_no_post():
+    # cold M6d R2-1: a lead that took the lease after the stall began, and posted nothing (its posts failed), may be
+    # working
+    stall("build 80")
+    room("lease", "take", "--takeover", check=True, ROOM_SESSION="T6")
+    nf, n = len(fires()), len(comments())
+    r = watchdog()
+    assert "alarm: no progress for 5h" in r.stdout and "note: no start: a lead showed a sign of life since the stall " \
+        "began (the lease taken by T6 at " in r.stdout, out(r)
+    assert new_kinds(n) == ["LEAD-SILENT"] and len(fires()) == nf
+
+
+def t_start_lead_seen_0_in_a_room_with_no_comments():
+    # cold M6d R2-5: at a phase's kickoff the room has no comments yet, so the starter passes --seen 0; a negative ID
+    # is refused
+    made = room("new", "Phase kickoff", check=True).stdout
+    n = re.search(r"room (\d+) in", made).group(1)
+    assert comments(n) == []
+    original = edit_state("PLAYBOOK.md", lambda t: re.sub(r"^room: .*$", f"room: {n}", t, count=1, flags=re.M))
+    room("lease", "take", "--takeover", check=True)
+    set_state("status=done")  # the previous phase is over
+    room("lease", "release", check=True)
+    try:
+        r = room("start-lead", n, "architect", "--seen", "0", ROOM_SESSION="arch")
+        assert r.returncode == 0 and "started: " in r.stdout, out(r)
+        assert [text_of(c).endswith("(plain join line, started by architect)") for c in comments(n)] == [True]
+        r = room("start-lead", n, "architect", "--seen", "-1", ROOM_SESSION="arch")
+        assert r.returncode == 2 and "takes a comment ID, or 0 for a room with no comments" in r.stderr, out(r)
+        assert len(comments(n)) == 1
+    finally:
+        edit_state("PLAYBOOK.md", lambda t: original)
+        room("lease", "take", "--takeover", check=True)
+        set_state("status=running")
+
+
 # --- B-6: reminders while a room waits on Matthew
 
 def t_a_reminder_while_a_request_waits_on_matthew():
@@ -537,26 +608,20 @@ def t_a_start_after_a_handover_whose_successor_never_joined():
     assert text_of(comments()[-1]).endswith("(plain join line, started by watchdog)") and len(fires()) == nf + 1
 
 
-def t_a_start_after_a_handover_whose_successor_joined_and_died():
-    # qodo PR #14 finding 2: the successor joined, then died before any progress: a takeover; when that lead dies too,
-    # it's the same stall, and the watchdog starts no other
+def t_no_start_after_a_handovers_successor_joined_and_died():
+    # cold M6d R2-1: a successor that joined and died showed a sign of life; the watchdog can't tell it from one
+    # running a long builder, so no start, at that run or any later one; the architect decides
     before = handover("build 31")
     room("lease", "take", check=True, ROOM_SESSION="L2")
-    say("LEAD ONLINE", ROOM_SESSION="L2")
+    joined = say("LEAD ONLINE", ROOM_SESSION="L2")
     backdate(lambda c: c["id"] > before, 280)
     nf, n = len(fires()), len(comments())
+    life = f"note: no start: a lead showed a sign of life since the stall began (LEAD ONLINE #{joined} at "
     r = watchdog()
-    assert "alarm: no progress for 5h" in r.stdout and "started: https://claude.ai/code/" in r.stdout, out(r)
-    assert new_kinds(n) == ["LEAD-SILENT", "LEAD-STARTED"], new_kinds(n)
-    assert text_of(comments()[-1]).endswith("(takeover join line, started by watchdog)") and len(fires()) == nf + 1
-    first = comments()[n]["id"]
-    room("lease", "take", "--takeover", check=True, ROOM_SESSION="T3")
-    t3 = say("LEAD ONLINE", ROOM_SESSION="T3")  # the takeover lead joins, then dies too
-    backdate(lambda c: first <= c["id"] < t3, 210)
-    backdate(lambda c: c["id"] == t3, 200)
+    assert "alarm: no progress for 5h" in r.stdout and life in r.stdout, out(r)
+    assert new_kinds(n) == ["LEAD-SILENT"] and len(fires()) == nf, new_kinds(n)
     r = watchdog()
-    assert "already reports this stall" in r.stdout and "is this stall's start" in r.stdout, out(r)
-    assert len(fires()) == nf + 1 and len(comments()) == n + 3
+    assert "already reports this stall" in r.stdout and life in r.stdout and len(fires()) == nf, out(r)
 
 
 def t_no_start_after_a_lead_joined_after_the_alarm_with_no_lead_started():
@@ -572,8 +637,8 @@ def t_no_start_after_a_lead_joined_after_the_alarm_with_no_lead_started():
     backdate(lambda c: c["id"] == first, 260)
     backdate(lambda c: c["id"] == joined, 200)
     r = watchdog()
-    assert "already reports this stall" in r.stdout and f"note: no start: the lead posted LEAD ONLINE #{joined} at " \
-        in r.stdout and f"after this stall's first alarm #{first}: a lead joined or spoke" in r.stdout, out(r)
+    assert "already reports this stall" in r.stdout and "note: no start: a lead showed a sign of life since the " \
+        f"stall began (LEAD ONLINE #{joined} at " in r.stdout, out(r)
     assert len(fires()) == nf and len(comments()) == n + 2
 
 
