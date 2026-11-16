@@ -25,7 +25,7 @@ in Claude chat and cloud sessions, or `gh auth login` on your own machine.
                                            joined after a DECISION; reminders, also while a request waits on
                                            Matthew; one lead start per stall; never writes state
   room.py join-line N [--takeover]         print the line that starts a lead
-  room.py start-lead N ROLE [--takeover] [--force]   start a lead through the lead task and post LEAD-STARTED
+  room.py start-lead N ROLE [--takeover] [--force] [--seen ID]   start a lead through the lead task; LEAD-STARTED
                                            (exit 1 try once more, 3 refused, 6 not configured or rejected)
   room.py lead-task-prompt                 print the prompt of this repo's lead task
   room.py handoff N --step STEP --cursor ID   post HANDOFF, record step and cursor, release the lease, print the join line
@@ -2723,7 +2723,7 @@ def add_gate_commands(sub, common):
 # the state changes around it. Every command here works inside the project's checkout or without one
 # (ROOM_STATE_REMOTE).
 #
-#   watchdog N [--silent-after 3h]   join-line N [--takeover]   start-lead N ROLE [--takeover] [--force]
+#   watchdog N [--silent-after 3h]   join-line N [--takeover]   start-lead N ROLE [--takeover] [--force] [--seen ID]
 #   lead-task-prompt   handoff N --step STEP --cursor ID   reconcile N   budget
 #
 # watchdog, reconcile and budget read the pushed state branch and never write it. The watchdog schedules nothing; it
@@ -3015,30 +3015,55 @@ def lead_task_ready(playbook=None):
     return bool(lead_task_id(playbook))
 
 
-def start_after_alarm(a, since, takeover, playbook=None):
-    """One start per stall (M6d, B-5), after stall_alarm for the same SINCE (None, before any lead joined: the whole
-    room). It starts a lead as the watchdog, with --takeover when TAKEOVER (the lease is held), only when all hold:
-    (1) the stall has a trusted watchdog LEAD-SILENT newer than SINCE, its buzz failed or not, so a start never
-    precedes its alarm; (2) no trusted LEAD-STARTED from any role is newer than SINCE, so a stall gets one start, the
-    architect's or an unconfirmed one included; (3) no trusted lead message of any kind is under silent-after old, so a
-    lead that has just joined, or still talks, is never displaced; (4) the lead task is configured. Exit 1 from
-    start-lead is tried again at the next run, as nothing was posted; 3 and 6 print a note."""
+def start_after_alarm(a, since, takeover, playbook, values, only=None):
+    """One start per stall (M6d, B-5), after stall_alarm for the same SINCE (the progress time, or a pending DECISION's)
+    and the same ONLY. It starts a lead as the watchdog, with --takeover when TAKEOVER (the lease is held), only when
+    all hold, in order:
+    (1) alarmed: the stall has one of its own trusted watchdog LEAD-SILENTs (ONLY picks them) newer than SINCE, its
+        buzz sent or failed; the oldest is the stall's first alarm, so a start never precedes its alarm;
+    (2) one start per stall: no trusted LEAD-STARTED newer than SINCE from anyone but a lead, confirmed or not; a
+        lead's own handover start doesn't count, as its successor is what stalled (cold M6d R1-5, qodo PR #14);
+    (3) nobody was talking: no trusted lead message of any kind newer than the first alarm's time minus silent-after,
+        or posted after it. A lead that posted just before the alarm may be working quietly, and one that posted after
+        it joined: the stall had its start. Both hold for every later run too (cold M6d R1-1, R1-4; qodo PR #14);
+    (4) not halted: the machine block's status for this room isn't paused, stopped or done, whoever holds the lease,
+        as a takeover would set it back to running (cold M6d R1-2);
+    (5) the lead task is configured.
+    Each rule that holds a start off prints a note naming why. Exit 1 from start-lead is tried again at the next run,
+    as nothing was posted; 3 and 6 print a note."""
     msgs = [m for m in map(parse, comments(a.room)) if trusted(m)]
-    now = time.time()
+
+    def when(m):
+        return parse_time(m["at"]) or 0
 
     def newer(m):
-        return since is None or (parse_time(m["at"]) or 0) > since
-    if not any(m["role"] == "watchdog" and message_kind(m["text"]) == "LEAD-SILENT" and newer(m) for m in msgs):
+        return since is None or when(m) > since
+    alarms = [m for m in msgs if m["role"] == "watchdog" and message_kind(m["text"]) == "LEAD-SILENT" and newer(m)
+              and (only is None or only(m))]
+    if not alarms:
         return
-    started = [m for m in msgs if message_kind(m["text"]) == "LEAD-STARTED" and newer(m)]
+    started = [m for m in msgs if message_kind(m["text"]) == "LEAD-STARTED" and m["role"] != "lead" and newer(m)]
     if started:
         print(f"note: LEAD-STARTED #{started[-1]['id']} at {started[-1]['at']} is this stall's start; the watchdog "
               "starts no other")
         return
-    talk = [m for m in msgs if m["role"] == "lead" and now - (parse_time(m["at"]) or 0) < a.silent_after]
+    first = min(alarms, key=lambda m: m["id"])  # comment IDs: posting order, whatever the clocks say
+    cut = when(first) - a.silent_after
+    talk = [m for m in msgs if m["role"] == "lead" and (m["id"] > first["id"] or when(m) > cut)]
     if talk:
-        print(f"note: no start: the lead posted #{talk[-1]['id']} at {talk[-1]['at']}, under {span(a.silent_after)} "
-              "ago")
+        m = talk[-1]
+        said = f"{message_kind(m['text']) or 'a message'} #{m['id']} at {m['at']}"
+        if m["id"] > first["id"]:
+            print(f"note: no start: the lead posted {said}, after this stall's first alarm #{first['id']}: a lead "
+                  "joined or spoke, so the stall had its start")
+        else:
+            print(f"note: no start: the lead posted {said}, within {span(a.silent_after)} before this stall's first "
+                  f"alarm #{first['id']}: it may be working quietly; the architect decides")
+        return
+    own = (values.get("room") or "").strip()
+    elsewhere = own.isdigit() and int(own) > 0 and int(own) != a.room
+    if halted(values) and not elsewhere:  # a status recorded for another room says nothing here, as in start_refusal
+        print(f"note: no start: status is {status_of(values)} (the lease is still held): the architect decides")
         return
     if not lead_task_ready(playbook):
         print("note: no start: the lead task isn't configured (no lead-task: line, or no token)")
@@ -3053,20 +3078,13 @@ def start_after_alarm(a, since, takeover, playbook=None):
         print(f"note: no lead started: {why}")
 
 
-def lease_held():
-    """Whether a session holds the lease on the pushed state branch; False when it can't be read."""
-    try:
-        return lease_holder()[0] != "none"
-    except StateError:
-        return False
-
-
 def waiting_request(a, values, playbook):
-    """The request a parked lead waits on Matthew for (M6d, B-6): while the lease is released and room N is the
-    current room, the room's newest trusted lead ESCALATION-n or MERGE-HOLD-n, unless a trusted DECISION-n (from the
-    architect or Matthew) came after it; else None."""
+    """The request a parked lead waits on Matthew for (M6d, B-6): while the lease is released and room N is recorded
+    as the current room, the room's newest trusted lead ESCALATION-n or MERGE-HOLD-n, unless a trusted DECISION-n
+    (from the architect or Matthew) came after it; else None. Unlike pending_decision, a room that neither PLAYBOOK.md
+    nor the machine block records gets no reminder (qodo PR #14)."""
     room = current_room(playbook, values)
-    if lease_of(values)[0] != "none" or (room and room[0] != a.room):
+    if lease_of(values)[0] != "none" or room is None or room[0] != a.room:
         return None
     msgs = [m for m in map(parse, comments(a.room)) if trusted(m)]
     asks = [m for m in msgs if m["role"] == "lead" and re.fullmatch(r"(?:ESCALATION|MERGE-HOLD)-\d+",
@@ -3103,11 +3121,16 @@ def unreadable_state_alarm(a, path, reason):
         print(f"quiet: state unreadable ({reason}), but progress {span(now - progress)} ago ({what} at "
               f"{iso(progress)}), under {span(a.silent_after)}")
         return 0
-    # only state unreadable alarms report this stall: an ordinary stall alarm says nothing of the state being gone. Its
-    # failed buzzes are retried and its reminders come like any stall's (cold M6b R1-9, R3-4, S4-2; M6d B-6)
+    # only the newest run of state unreadable alarms reports this stall, the ones after its last other alarm: an
+    # ordinary stall alarm says nothing of the state being gone, and an outage that comes back after one gets a new
+    # first alarm (qodo PR #14). Failed buzzes are retried and reminders come like any stall's (cold M6b R1-9, R3-4,
+    # S4-2; M6d B-6)
+    def unreadable(m):
+        return re.search(r"LEAD-SILENT: (?:still )?state unreadable", m["text"]) is not None
+    cut = max((m["id"] for m in alarms_since(a, progress, failed=True) if not unreadable(m)), default=0)
     stall_alarm(a, progress, (f"state unreadable ({reason})", f"LEAD-SILENT: state unreadable ({reason})"),
                 (f"still state unreadable ({reason})", f"LEAD-SILENT: still state unreadable ({reason})"),
-                only=lambda m: re.search(r"LEAD-SILENT: (?:still )?state unreadable", m["text"]) is not None)
+                only=lambda m: unreadable(m) and m["id"] > cut)
     return 0
 
 
@@ -3127,7 +3150,6 @@ def prestart_alarm(a):
     stall_alarm(a, None, (f"{nobody} in {PRESTART_HOURS}h (opened {iso(opened)})",
                           f"LEAD-SILENT: {nobody} in {PRESTART_HOURS}h"),
                 (f"still {nobody}", f"LEAD-SILENT: still {nobody}"), prefix=f"{nobody} yet; ")
-    start_after_alarm(a, None, lease_held())
     return 0
 
 
@@ -3165,16 +3187,22 @@ def cmd_watchdog(a):
                 return 0
             kind = message_kind(ask["text"])
             print(f"note: {text}, the lease is released, and {kind} #{ask['id']} at {ask['at']} has no decision yet")
-            waiting = (f"still waiting for Matthew: {kind} since {iso(t)}",
-                       f"LEAD-SILENT: still waiting for Matthew: {kind} since {iso(t)} (step {step})")
-            stall_alarm(a, t, waiting, waiting)
+            mine = f"LEAD-SILENT: still waiting for Matthew: {kind} since {iso(t)}"
+            waiting = (f"still waiting for Matthew: {kind} since {iso(t)}", f"{mine} (step {step})")
+            # only this request's own reminders count: a state unreadable alarm posted meanwhile doesn't delay it
+            stall_alarm(a, t, waiting, waiting, only=lambda m: m["text"].startswith(mine))
             return 0
         kind, t = message_kind(d["text"]), parse_time(d["at"])
         print(f"note: {text}, the lease is released, and no lead has joined since {kind} #{d['id']} at {d['at']}")
         nobody = f"no lead joined after {kind}"
+        # only this decision's own alarms count: a reminder for another request never stands in for them
+        mine = re.compile(rf"LEAD-SILENT: (?:still )?{re.escape(nobody)}(?!\d)")
+
+        def own(m):
+            return mine.match(m["text"]) is not None
         stall_alarm(a, t, (f"{nobody} ({span(time.time() - t)} ago)", f"LEAD-SILENT: {nobody} (step {step})"),
-                    (f"still {nobody}", f"LEAD-SILENT: still {nobody} (step {step})"))
-        start_after_alarm(a, t, False, playbook)  # plain: the lease is released
+                    (f"still {nobody}", f"LEAD-SILENT: still {nobody} (step {step})"), only=own)
+        start_after_alarm(a, t, False, playbook, values, only=own)  # plain: the lease is released
         return 0
     # progress, not chatter (v1): a step or pr change, a mission branch push, a mission PR's merge. Lease takes,
     # handoffs at the same step, intents, the counter and the cursor don't count, so a lead in a loop alarms
@@ -3210,7 +3238,7 @@ def cmd_watchdog(a):
                               f"LEAD-SILENT: no progress since {iso(progress)} ({about})"),
                 (f"still no progress since {iso(progress)}", f"LEAD-SILENT: still no progress since {iso(progress)} "
                                                              f"({about})"))
-    start_after_alarm(a, progress, lease_of(values)[0] != "none", playbook)
+    start_after_alarm(a, progress, lease_of(values)[0] != "none", playbook, values)
     return 0
 
 
@@ -3769,12 +3797,23 @@ def post_quietly(room, role, text, a):
                 return None
 
 
-def start_lead(a, room, role, takeover=False, force=False):
+def room_moved_on(room, seen):
+    """Why the room moved on after comment SEEN, or None: its first trusted lead message, or trusted LEAD-STARTED from
+    any role, with a larger comment ID (cold M6d R1-1)."""
+    for m in map(parse, comments(room)):
+        if m["id"] > seen and trusted(m) and (m["role"] == "lead" or message_kind(m["text"]) == "LEAD-STARTED"):
+            return (f"the room moved on after #{seen}: {message_kind(m['text']) or 'a message'} #{m['id']} at "
+                    f"{m['at']}; read the room again")
+    return None
+
+
+def start_lead(a, room, role, takeover=False, force=False, seen=None):
     """Start a lead in ROOM through the lead task, as ROLE: read the configuration, check the guards, POST the join
     line, then post LEAD-STARTED. Returns (exit code, why): 0 started, or maybe started (an unconfirmed LEAD-STARTED;
     why None), 1 a definite failure (try once more), 3 refused, 6 not configured or rejected. ROLE is the lead (its
-    handover), the architect, or the watchdog (one start per stall, M6d). A broken read of the state branch or the
-    room raises StateError or GhError."""
+    handover), the architect, or the watchdog (one start per stall, M6d). SEEN, a comment ID: refuse when the room
+    moved on after it (an architect's starter task, which may run hours after it was made). A broken read of the
+    state branch or the room raises StateError or GhError."""
     try:
         path = ensure_worktree()  # fetched
     except StateError:
@@ -3794,6 +3833,8 @@ def start_lead(a, room, role, takeover=False, force=False):
         page = doc_url(SETUP_PAGE, pinned_version(path) if path else None)
         return EXIT_NOT_CONFIGURED, f"not configured: {'; '.join(missing)}. See Set up the lead task: {page}"
     why = start_refusal(room, role, takeover, force, values, playbook, session_id(a))
+    if why is None and seen is not None:
+        why = room_moved_on(room, seen)
     if why:
         return EXIT_REFUSED, f"refused: {why}"
     version = pinned_version(path)
@@ -3833,7 +3874,7 @@ def start_lead(a, room, role, takeover=False, force=False):
 
 
 def cmd_start_lead(a):
-    code, why = start_lead(a, a.room, a.role, a.takeover, a.force)
+    code, why = start_lead(a, a.room, a.role, a.takeover, a.force, a.seen)
     if why:
         print(why, file=sys.stderr)
     return code
@@ -3874,6 +3915,9 @@ def add_unattended_commands(sub, common):
                         "lease is held")
     s.add_argument("--force", action="store_true",
                    help="start even though a LEAD-STARTED under 30 minutes old has no LEAD ONLINE after it")
+    s.add_argument("--seen", type=int, metavar="ID",
+                   help="the room's newest comment ID when the start was decided (the architect's starter tasks): "
+                        "refuse (exit 3) if a lead message, or a LEAD-STARTED from anyone, came after it")
     leaf("lead-task-prompt", cmd_lead_task_prompt, "print the prompt of this repo's lead task, for Matthew to "
                                                    "paste when he creates the task")
     s = leaf("handoff", cmd_handoff, "record step, cursor and intent=none holding the lease, post HANDOFF, then "
