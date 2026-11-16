@@ -188,6 +188,12 @@ def age_watchdog(n="1"):
     backdate(lambda c: "role=watchdog" in c["body"], 600, n)
 
 
+def age_room(n="1"):
+    """Push every message of room N back ten hours, so no LEAD-STARTED or LEAD ONLINE in it is a recent sign of a lead
+    (cold M6b R2-1) and no earlier alarm belongs to the stall a test makes next."""
+    backdate(lambda c: True, 600, n)
+
+
 def opened(n, hours):
     db = load_db()
     db["repos"]["SigorMatt/pet"]["issues"][n]["created_at"] = iso(time.time() - hours * 3600)
@@ -668,7 +674,7 @@ def t_watchdog_starts_the_lead_after_a_decision():
                                            rf"DECISION-1 #{decision} at \S+ has waited 31m with no lead started for "
                                            r"it$", r.stdout, re.M), out(r)
     assert [kind_of(c) for c in comments()[n:]] == ["LEAD-STARTED"], "no LEAD-SILENT for this"
-    assert text_of(comments()[-1]).endswith("(plain join line, started by watchdog)")
+    assert text_of(comments()[-1]).endswith("(plain join line, started by watchdog after DECISION-1)")
     assert [request(x)["body"] for x in fires()[nf:]] == [{"text": JOIN.format(n=1, v="main")}]
     r = watchdog()  # a LEAD-STARTED newer than the decision
     assert r.stdout.strip() == quiet and len(fires()) == nf + 1, out(r)
@@ -1030,6 +1036,34 @@ def t_start_lead_says_when_the_caller_holds_the_lease():
         "again", out(r)
     r = start("lead", ROOM_SESSION="L9")
     refused(r, "refused: the lease is held by L1: a lead is running", before)
+
+
+def t_a_decision_start_is_no_takeover_start():
+    # cold M6b R2-3: the watchdog's start after a decision says so, and doesn't count as one of a stall's two takeovers
+    online()
+    age_room()
+    room("say", "1", "lead", "ESCALATION-7: which icon?", "--no-buzz", check=True)
+    set_state("waiting_for_owner=yes", "step=waiting for owner: spec 30", hours=5)
+    room("lease", "release", check=True)
+    room("say", "1", "architect", "DECISION-7: the cat", check=True, ROOM_SESSION="arch")
+    backdate(lambda c: "DECISION-7" in c["body"], 45)
+    r = watchdog()
+    assert "start: step is waiting for owner: spec 30" in r.stdout, out(r)
+    started = comments()[-1]
+    assert text_of(started).endswith("(plain join line, started by watchdog after DECISION-7)"), text_of(started)
+    # the lead joins, then stops before it moves the step on
+    room("lease", "take", check=True, ROOM_SESSION="L3")
+    room("say", "1", "lead", "LEAD ONLINE", "--no-buzz", check=True, ROOM_SESSION="L3")
+    backdate(lambda c: c["id"] >= started["id"], 200)
+    n = len(comments())
+    r = watchdog()
+    assert "alarm: no progress for 3h20m" in r.stdout and "the lead started at" not in r.stdout, out(r)
+    alarm, takeover = comments()[n:]
+    assert text_of(alarm).startswith("LEAD-SILENT: no progress since "), text_of(alarm)
+    assert text_of(takeover).endswith("(takeover join line, started by watchdog)"), text_of(takeover)
+    room("lease", "take", "--takeover", check=True)
+    set_state("step=build 30")
+    age_room()
 
 
 setup()

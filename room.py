@@ -2945,11 +2945,12 @@ def alarms_since(a, progress, failed=False):
             if failed or not re.search(r"\(buzz failed\b", m["text"])]
 
 
-def watchdog_start(a, takeover):
+def watchdog_start(a, takeover, after=None):
     """start-lead's logic as the watchdog, printing how it went. Its exit code never becomes the watchdog's: 6 and 3
-    are notes, and after 1 the next run tries again. TAKEOVER None: --takeover when the lease is held."""
+    are notes, and after 1 the next run tries again. TAKEOVER None: --takeover when the lease is held. AFTER names
+    the DECISION-n a decision start answers."""
     try:
-        code, why = start_lead(a, a.room, "watchdog", takeover=takeover)
+        code, why = start_lead(a, a.room, "watchdog", takeover=takeover, after=after)
     except (StateError, GhError) as e:  # reading the state or the room broke: transient
         code, why = 1, str(e)
     if code == 1:
@@ -2963,7 +2964,7 @@ def second_start_due(a, since):
     room); the one of them whose lead made no progress, when a second start is due, else None). A second start is
     due with exactly one such LEAD-STARTED once silent-after has passed since the started lead's first trusted LEAD
     ONLINE after it, or since the LEAD-STARTED itself if none followed (cold M6b R1-2)."""
-    starts = watchdog_messages(a, "LEAD-STARTED", since)
+    starts = [m for m in watchdog_messages(a, "LEAD-STARTED", since) if not decision_start(m)]
     if a.no_start or len(starts) != 1:
         return starts, None
     first = starts[0]
@@ -2988,6 +2989,12 @@ def second_alarm_and_start(a, since, first, about, takeover):
         print(f"alarm: {phrase}")
         alarm(a, f"LEAD-SILENT: {phrase} ({about})")
     watchdog_start(a, takeover)
+
+
+def decision_start(m):
+    """Whether LEAD-STARTED message M is the watchdog's start after a decision, which no takeover count includes
+    (cold M6b R2-3)."""
+    return re.search(r"\bafter DECISION-\d+\)", m["text"]) is not None
 
 
 def start_after_alarm(a, starts, takeover):
@@ -3130,7 +3137,7 @@ def cmd_watchdog(a):
         t = parse_time(d["at"])
         print(f"start: {text}, the lease is released, and {message_kind(d['text'])} #{d['id']} at {d['at']} has "
               f"waited {span(time.time() - t)} with no lead started for it")
-        watchdog_start(a, takeover=False)
+        watchdog_start(a, takeover=False, after=message_kind(d["text"]))
         return 0
     # progress, not chatter (v1): a step or pr change, a mission branch push, a mission PR's merge. Lease takes,
     # handoffs at the same step, intents, the counter and the cursor don't count, so a lead in a loop alarms
@@ -3703,7 +3710,7 @@ def post_quietly(room, role, text, a):
         return str(e)
 
 
-def start_lead(a, room, role, takeover=False, force=False):
+def start_lead(a, room, role, takeover=False, force=False, after=None):
     """Start a lead in ROOM through the lead task, as ROLE: read the configuration, check the guards, POST the join
     line, then post LEAD-STARTED. Returns (exit code, why): 0 started (why None), 1 transient (try once more),
     3 refused, 6 not configured or rejected. TAKEOVER None means --takeover when the lease is held (the watchdog's
@@ -3741,7 +3748,7 @@ def start_lead(a, room, role, takeover=False, force=False):
         url = session_url(answer, token)
         print(f"started: {url}")
         err = post_quietly(room, role, f"LEAD-STARTED: {url} ({'takeover' if takeover else 'plain'} join line, "
-                                       f"started by {role})", a)
+                                       f"started by {role}" + (f" after {after})" if after else ")"), a)
         if err:
             print(f"started, but LEAD-STARTED wasn't posted: {one_line(err, token)}")
         return 0, None
