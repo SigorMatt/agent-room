@@ -435,6 +435,7 @@ End.
 
 ## 11. Rules
 
+- **Signs of life:** the watchdog takes over from a lead only when it has posted nothing for the watchdog's silence time (three hours by default) and made no progress (a step change or a mission-branch push). Before a step that may run long with no push, such as a long builder in the foreground, post a `STATUS` saying what runs, so the watchdog sees you are alive.
 - **Context hygiene:** builders reply in at most 10 lines. Verify with checks and `git diff --stat`, not by reading diffs; open a file only when a check fails. Keep state in `MISSIONS.md`, not in your memory. After a compaction, re-read this file and `MISSIONS.md`.
 - **Delegate:** implementing, fixing, investigating code and hard merge conflicts go to builders. You write briefs and answers, run checks, merge, keep records, post and open the PR. Resume a builder for follow-ups; if resuming fails, start a fresh one with the full brief.
 - **State writes:** commit hand edits with `state commit` before `state set`, `state next`, `intent` or `handoff`; they refuse while the worktree has local changes. Exit 3 means the branch moved: run `python3 room.py state sync`, re-read and re-apply. Exit 5 means the lease isn't yours: stand down.

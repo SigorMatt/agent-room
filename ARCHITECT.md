@@ -271,7 +271,7 @@ Explain each buzz in plain terms, in a few lines:
 | `ESCALATION-n` | The lead needs a decision the design doesn't settle | 9.2 |
 | `MERGE-HOLD-n` | A PR is ready but held, with a reason | 9.2 |
 | `NEXT-LEAD-NEEDED` | The lead couldn't start its successor; the message says why | 9.5 |
-| `LEAD-SILENT` | The watchdog saw no lead progress for three hours and, if the lead task is set up, started a takeover lead (a `LEAD-STARTED` follows), at most two per stall. A final one says `no more starts` | 9.5 |
+| `LEAD-SILENT` | The watchdog saw no lead progress for three hours and, if the lead task is set up and no lead has posted lately, started a takeover lead (a `LEAD-STARTED` follows), at most two per stall. A final one says `no more starts`. `no lead joined after DECISION-n` means the leads started for a decision never joined | 9.5 |
 | `PAUSED` / `STOPPED` | The lead paused or halted, as asked, and ended | 9.4 |
 | `DONE` | The phase is complete and the room is closed | 9.7 |
 
@@ -315,7 +315,7 @@ Explain each buzz in plain terms, in a few lines:
    python3 room.py state get lease_session --repo OWNER/NAME
    ```
 
-   Start it as in section 8, steps 9 and 10: the fire action with the normal join line, then `LEAD-STARTED`. If you don't, the watchdog does, at its first run more than 30 minutes after the decision. Its message reads `LEAD-STARTED: … (plain join line, started by watchdog after DECISION-<n>)`: a plain start, not a takeover, and not one of its two takeovers for a stall. A lead that isn't parked sees the decision at its next step boundary.
+   Start it as in section 8, steps 9 and 10: the fire action with the normal join line, then `LEAD-STARTED`. If you don't, the watchdog does, at its first run more than 30 minutes after the decision. Its message reads `LEAD-STARTED: … (plain join line, started by watchdog after DECISION-<n>)`: a plain start, not a takeover, and not one of its two takeovers for a stall. If no lead joins within its silence time of a start for the decision (yours or its own), it starts again, at most two starts of its own per decision. Then it posts one `LEAD-SILENT: no lead joined after DECISION-<n> (step …)` and starts nothing more (9.5). A lead that isn't parked sees the decision at its next step boundary.
 8. Check for the `ACK` (9.6).
 
 A "merge as is" for reason 5 lets the lead merge citing your `DECISION-n`, so name the hold in it.
@@ -389,7 +389,8 @@ Which line:
   ```
 
   If it isn't `none`, the lease is held by a lead whose session was deleted with the task (unless Matthew started that lead in the Code tab, which survives): start a takeover lead by hand through the new task, with the takeover line (below). If it's `none` and the step isn't `waiting for owner: …`, no lead is running: start one with the normal join line. A parked lead needs nothing until Matthew's decision.
-- **`LEAD-SILENT`:** no lead progress for three hours. A lead died, got stuck or never started.
+- **`LEAD-SILENT: no lead joined after DECISION-<n> (…)`:** the leads started for Matthew's decision never joined, and the watchdog starts no more for it. Find out why before starting another: read the room for `LEAD-STARTED` reasons, check the `lead-task:` line, and ask Matthew about the token and his usage. Fix it, then start a lead by hand (below) with the normal join line, or the takeover line if `lease_session` isn't `none`.
+- **`LEAD-SILENT`:** no lead progress for three hours. A lead died, got stuck or never started. Or a live lead is slow: the watchdog alarms on progress (a step change or a mission-branch push), but starts a takeover only when no lead has posted anything, a `STATUS` included, and none has started or joined, within its silence time.
   1. **`LEAD-SILENT: state unreadable (…)`:** the state branch or its block is broken, not the lead, and the watchdog starts no lead after this alarm. Check it: `state sync`, then `python3 room.py state get step --repo OWNER/NAME`. If the branch was deleted, restore it before any lead joins:
      - **Re-push it from any copy that still has it,** preferably: your own state worktree, a lead's, or a fork or local clone of Matthew's. From yours (if GitHub refuses a shallow copy, use another):
 
@@ -405,7 +406,8 @@ Which line:
   4. Read the room again.
      - **A `LEAD ONLINE` after the alarm:** a takeover lead joined. Tell Matthew where it is; nothing else is needed for now. If that lead makes no progress either, the watchdog alarms again (`LEAD-SILENT: the lead started at <time> made no progress …`) and starts a second takeover, its last for this episode.
      - **`LEAD-SILENT: two takeover leads made no progress; no more starts …`:** the watchdog's final alarm for this episode; it starts nothing more. Leads keep failing at that step, so look into why: read the room since the first alarm, the state (section 4) and the mission branch, and tell Matthew what you find. Fix the cause with him; if agent-room itself is at fault, he reports it, as for a pipeline fault (9.2). Then start a takeover lead by hand (below). Your `LEAD-STARTED` opens a new episode, which the watchdog watches again, with up to two takeovers of its own.
-     - **No `LEAD-STARTED` after the alarm** (no lead task, or the watchdog's start was refused or failed): start a takeover lead by hand (below). The watchdog then holds off: it sees your `LEAD-STARTED`, and starts nothing within its silence time of it.
+     - **No `LEAD-STARTED` after the alarm, but a lead message (a `STATUS`, say) after it or within the silence time before it:** a lead is alive but slow, often running a long builder, and the watchdog left it alone. Tell Matthew where it is, and start nothing. If it stays silent, the watchdog takes over at a later run.
+     - **No `LEAD-STARTED` after the alarm, and no recent lead message** (no lead task, or the watchdog's start was refused or failed): start a takeover lead by hand (below). The watchdog then holds off: it sees your `LEAD-STARTED`, and starts nothing within its silence time of it.
      - **A `LEAD-STARTED` with no `LEAD ONLINE` about 30 minutes after it:** start a takeover lead by hand (below).
 
      To start a takeover lead by hand, use the takeover line:
