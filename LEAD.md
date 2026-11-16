@@ -327,10 +327,10 @@ At the end of a mission, or early at a step boundary when your context gets heav
 
    | Exit | Do |
    | --- | --- |
-   | 0 | End |
+   | 0 | End. This includes an unconfirmed start (it timed out, or the answer wasn't recognized), which posts `LEAD-STARTED: unconfirmed (<reason>) …`: never run `start-lead` again after it. A `LEAD ONLINE` follows if the lead started, and the watchdog notices if none does |
    | 3, saying `this session still holds the lease` | Your release didn't go through. Run `python3 room.py lease release`, then `start-lead` again |
    | 3, otherwise (a lead is running or starting) | End |
-   | 1 | Run it once more; if it fails again, as for 6 |
+   | 1 | A definite failure: nothing started. Run it once more; if it fails again, as for 6 |
    | 6 | Post the line below (it buzzes), with the reason `start-lead` printed, then end |
 
    ```bash
@@ -435,6 +435,7 @@ End.
 
 ## 11. Rules
 
+- **Signs of life:** the watchdog takes over from a lead only when it has posted nothing for the watchdog's silence time (three hours by default) and made no progress (a step change or a mission-branch push). Before a step that may run long with no push, such as a long builder in the foreground, post a `STATUS` saying what runs, so the watchdog sees you are alive.
 - **Context hygiene:** builders reply in at most 10 lines. Verify with checks and `git diff --stat`, not by reading diffs; open a file only when a check fails. Keep state in `MISSIONS.md`, not in your memory. After a compaction, re-read this file and `MISSIONS.md`.
 - **Delegate:** implementing, fixing, investigating code and hard merge conflicts go to builders. You write briefs and answers, run checks, merge, keep records, post and open the PR. Resume a builder for follow-ups; if resuming fails, start a fresh one with the full brief.
 - **State writes:** commit hand edits with `state commit` before `state set`, `state next`, `intent` or `handoff`; they refuse while the worktree has local changes. Exit 3 means the branch moved: run `python3 room.py state sync`, re-read and re-apply. Exit 5 means the lease isn't yours: stand down.

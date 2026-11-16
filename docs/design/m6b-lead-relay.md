@@ -62,14 +62,15 @@ Starts a lead through the lead task, as `ROLE` (`lead`, `watchdog` or `architect
    - **Headers:** `Authorization: Bearer <token>`, `anthropic-beta: experimental-cc-routine-2026-04-01` (overridable by `ROOM_FIRE_BETA`), `anthropic-version: 2023-06-01`, and `Content-Type: application/json`.
    - **Body:** `{"text": "<join line>"}`.
    - **Timeout:** 30 seconds.
-   - **Secrecy:** the token never appears in output, errors or room text; scrub it as `buzz` does.
+   - **Secrecy:** the token never appears in output, errors or room text; scrub it as `buzz` does. It reaches `curl` through stdin, never in its argument list, where other processes on the machine could read it (qodo PR #11).
 5. **Read the answer.**
-   - **HTTP 200 with `type` `routine_fire`:** print `started: <claude_code_session_url>`, then post `LEAD-STARTED: <url> (<plain|takeover> join line, started by <ROLE>)` as `ROLE`, with no buzz. Exit 0. If the post fails, print `started, but LEAD-STARTED wasn't posted: <reason>` and still exit 0.
+   - **HTTP 200 with `type` `routine_fire`:** print `started: <claude_code_session_url>`, then post `LEAD-STARTED: <url> (<plain|takeover> join line, started by <ROLE>)` as `ROLE`, with no buzz. Exit 0. The post is retried up to 3 times, since the watchdog and the architect rely on it to hold off another start (qodo PR #11). If it still fails, print `started, but LEAD-STARTED wasn't posted: <reason>` and still exit 0.
+   - **Unconfirmed** (qodo PR #11): the request timed out, or got an HTTP 200 without `routine_fire`. The run may have started, so a retry could start a second lead. Post `LEAD-STARTED: unconfirmed (<reason>); a LEAD ONLINE follows if the lead started (started by <ROLE>)`, with the same retries and no buzz, and exit 0. Like any `LEAD-STARTED`, it holds off further starts: `start-lead`'s 30-minute guard, the watchdog's `silent-after`, and the architect's 30 minutes.
    - **401 or 403:** exit 6, `token rejected (HTTP <code>)`.
    - **404:** exit 6, `lead task <id> not found`.
-   - **429 or any other failure** (network error, timeout, 5xx, a 200 without `routine_fire`): exit 1, with the scrubbed error.
+   - **429 or any other definite failure** (a network error before the request was sent, 5xx): exit 1, with the scrubbed error. Nothing started, so it is safe to try once more.
 
-Exit codes: 0 started, 1 transient (try once more), 3 refused, 6 not configured or rejected.
+Exit codes: 0 started or unconfirmed (never retry), 1 a definite failure (safe to try once more), 3 refused, 6 not configured or rejected (qodo PR #11).
 
 ### Message kinds
 
@@ -87,10 +88,11 @@ Four changes, all covered by tests. `--no-start` turns off both kinds of start (
 1. **A start after a new alarm.**
     - **When:** right after posting a `LEAD-SILENT` for a stall (step 6 of the M4 rules) or for "no lead has joined room N in 12h" (pre-start). Never after a `state unreadable` alarm.
     - **What:** it runs the `start-lead` logic as `watchdog`, with `--takeover` when the lease is held, else plain.
-    - **When a start is due** (cold R1-2, R2-1, R2-2, R2-3). The watchdog judges each stall within an *episode*. An episode begins at the later of the progress time and the newest trusted architect `LEAD-STARTED` (a start by hand opens a new episode). Within the episode, it starts a takeover only when all of these hold:
+    - **When a start is due** (cold R1-2, R2-1, R2-2, R2-3). The watchdog judges each stall within an *episode*. An episode begins at the later of the progress time and the newest trusted architect `LEAD-STARTED` (a start by hand opens a new episode). A trusted lead `LEAD ONLINE` after an episode's final alarm also opens a new one, so a lead started without an architect `LEAD-STARTED` (**Run now** or the Code tab) is watched again (cold S1-2). Within the episode, it starts a takeover only when all of these hold:
         - `silent-after` has passed since the *last sign of a lead*: the latest of the episode's start, any trusted `LEAD-STARTED` (by any role), and any trusted lead `LEAD ONLINE`. A lead that joined by another route, or a start whose request timed out but whose lead came online, holds off the next start.
+        - No trusted lead message of any kind, a `STATUS` included, is within `silent-after`. A live lead that posts is never taken over, though alarms are unchanged: it can still get a `LEAD-SILENT` for no progress (qodo PR #11).
         - The episode has fewer than two watchdog takeover starts. A start the watchdog made after a decision (its `LEAD-STARTED` says `after DECISION-<n>`) doesn't count.
-      The first start of an episode comes with the episode's first alarm. A second start comes with its own alarm, `LEAD-SILENT: the lead started at <time> made no progress (step <step>, mission <mission>)`. After two starts, the next due point posts one last alarm, `LEAD-SILENT: two takeover leads made no progress; no more starts (step <step>, mission <mission>)`, and starts nothing. All of this stays within the three-alarm cap, counted per episode. A failed or refused start posts no `LEAD-STARTED`, so the next run tries again under the same rules. For pre-start, the episode is the whole room.
+      The first start of an episode comes with the episode's first alarm, unless the start isn't due yet because a lead showed signs within `silent-after`. That alarm is still posted, ending ` (start held off: a lead showed signs at <time>)`, and the start follows at a later run, once `silent-after` has passed since that sign (cold S1-3). A second start comes with its own alarm, `LEAD-SILENT: the lead started at <time> made no progress (step <step>, mission <mission>)`. After two starts, the next due point posts one last alarm, `LEAD-SILENT: two takeover leads made no progress; no more starts (step <step>, mission <mission>)`, and starts nothing. All of this stays within the three-alarm cap, counted per episode. A failed or refused start posts no `LEAD-STARTED`, so the next run tries again under the same rules; an unconfirmed one posts `LEAD-STARTED: unconfirmed …`, which holds off the next start like any other (qodo PR #11). For pre-start, the episode is the whole room until a trusted architect `LEAD-STARTED`: as for a stall, the newest one opens a new episode (cold S1-1).
     - **Results:** exit 6 or 3 from `start-lead` prints a note and changes nothing else. Exit 1 prints the error; the next run tries again under the once-per-stall rule.
     - The watchdog's own exit stays 0 unless it fails to read or post.
 2. **A start after Matthew's decision.**
@@ -99,8 +101,9 @@ Four changes, all covered by tests. `--no-start` turns off both kinds of start (
       - the lease is released;
       - the room has a trusted `DECISION-n` (from the architect or from Matthew) newer than the room's newest trusted lead message;
       - that `DECISION-n` is more than 30 minutes old;
-      - no trusted `LEAD-STARTED` is newer than it.
-    - **What:** it starts a plain lead as `watchdog`, posting `LEAD-STARTED: <url> (plain join line, started by watchdog after DECISION-<n>)`. Nobody started the lead that answers the decision, so the watchdog does. It posts no `LEAD-SILENT` for this.
+      - no trusted `LEAD-STARTED` is newer than it, or `silent-after` has passed since the newest one with no trusted lead message after it (qodo PR #11).
+    - **What:** it starts a plain lead as `watchdog`, posting `LEAD-STARTED: <url> (plain join line, started by watchdog after DECISION-<n>)`. Nobody started the lead that answers the decision, or the one started didn't join, so the watchdog does. It posts no `LEAD-SILENT` for these starts.
+    - **Retries and the final alarm** (qodo PR #11): at most two watchdog starts per decision. When a third would be due, it posts one `LEAD-SILENT: no lead joined after DECISION-<n> (step <step>)`, within the three-alarm cap, and starts nothing more for that decision.
     - Otherwise `waiting for owner` stays quiet as before.
 3. **A cap on repeated alarms.** While buzzes fail, a stall gets at most three `LEAD-SILENT` posts, counting the second-start alarm. With three trusted watchdog `LEAD-SILENT`s newer than the progress time, it stays quiet: `quiet: 3 alarms already posted for this stall`. The cap covers `state unreadable` alarms too (cold R1-9). Finding P.
 4. **`waiting for owner` with the lease held** (cold R1-1). A lead that parks releases the lease, so a held lease at that step means a lead joined, maybe after Matthew's decision, and hasn't moved on yet. The watchdog then doesn't stay quiet: it measures from the later of the progress time and the newest trusted lead `LEAD ONLINE`, and alarms and starts a takeover by the usual rules. With the lease released, `waiting for owner` stays quiet as before, apart from the start after a decision.

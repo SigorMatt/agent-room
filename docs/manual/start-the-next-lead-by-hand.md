@@ -30,16 +30,26 @@ Normally you don't: each lead starts the next through the lead task, the watchdo
      Is the lead in room N gone? If so, give me the takeover line.
      ```
 
-   The architect first checks that no lead is still alive: after a `LEAD-SILENT`, the watchdog has usually started a takeover lead already, and the architect gives it about 30 minutes to join. The takeover line ends with "Take over the lease … the previous lead stopped without handing over." The normal one doesn't.
+   The architect first checks that no lead is still alive: after a `LEAD-SILENT`, the watchdog has usually started a takeover lead already, and the architect gives it about 30 minutes to join. The same holds for any `LEAD-STARTED` with no `LEAD ONLINE` after it, including `LEAD-STARTED: unconfirmed (…)`: that lead may still be starting, so nobody starts another within 30 minutes of it. The takeover line ends with "Take over the lease … the previous lead stopped without handing over." The normal one doesn't.
+
+   Before it gives you a line, the architect posts `LEAD-STARTED: by hand …` in the room. The watchdog then holds off while you start the lead, so start it soon after.
 
    The architect may offer to start the lead itself through the lead task. Let it; approve the pop-up if one comes, and skip to "What you should see".
 2. Takeover only: if the old lead's session is still open, archive it.
 3. Start the lead through the lead task: open `https://claude.ai/code/routines`, open the task `agent-room lead SigorMatt/<repo>`, press **Run now**, and paste the line as its text.
 4. Or, with no lead task, in the Code tab: start a new session, repository `SigorMatt/<repo>`, environment `agent-room`. Paste the line and send.
-5. Never delete the lead task. Deleting a task deletes every session it started, the leads included.
+5. Send the architect the new session's link (in a browser, its address), filled in:
+
+   ```text
+   The lead for room N is started: <link>
+   ```
+
+   It posts `LEAD-STARTED` for that session, so the watchdog keeps watching the new lead. If you can't find the link, say so: the architect's earlier `LEAD-STARTED` still covers the start.
+6. Never delete the lead task. Deleting a task deletes every session it started, the leads included.
 
 ## What you should see
 
+- `LEAD-STARTED` from the architect for your session.
 - The lead's first line: "Operating as lead under agent-room `<version>`."
 - `LEAD ONLINE` in the room within about 10 minutes. The lead picks up where the last one stopped. After `PAUSED` or `STOPPED`, it carries on, and doesn't act on the old `PAUSE` or `STOP` again.
 
@@ -49,7 +59,7 @@ Normally you don't: each lead starts the next through the lead task, the watchdo
   - the old lead is gone (a `LEAD-SILENT` nobody answered): you used the normal line. Ask the architect for the takeover line and start again;
   - otherwise a lead is already running, for example a successor that did start. Nothing to do.
 - The lead ends at once without a word: the line wasn't pasted whole. The lead task accepts only an exact join line. Copy it again from the architect.
-- Two leads started by mistake: harmless. Only one takes over; the other ends without changing anything.
+- Two leads started by mistake with the normal line: harmless. Only one gets the lease; the other ends without changing anything. With the takeover line it isn't harmless: the later lead pushes out the earlier one, which stops and loses work it hadn't merged. That's why the architect posts `LEAD-STARTED` first, and nobody starts another lead within 30 minutes of one that hasn't joined yet.
 - Your Claude usage ran out: wait until it resets, or move the project ([Move a project to the other account](move-a-project-to-the-other-account.md)).
 - **Run now** doesn't take the line, or the task is missing: use the Code tab (step 4), and tell the architect.
 - No `LEAD ONLINE` after about 10 minutes: check the session's repository and environment, then tell the architect

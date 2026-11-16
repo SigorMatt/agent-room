@@ -238,13 +238,19 @@ For the first phase and every later one. For a later phase, first add its `### P
    python3 room.py join-line N --repo OWNER/NAME
    ```
 
-   Start it with your scheduled-task tool's fire action (`fire_trigger`): the `lead-task:` ID, with that join line, whole, as its text. Matthew may get an approval pop-up; he's present at kickoff, so ask him to approve it. The result names the new session.
+   Start it with your scheduled-task tool's fire action (`fire_trigger`): the `lead-task:` ID, with that join line, whole, as its text. Matthew may get an approval pop-up; he's present at kickoff, so ask him to approve it. The result names the new session. If the fire action errs in a way that doesn't say whether the run started (a timeout, or an answer you can't read), don't fire again: in step 10 post `LEAD-STARTED: unconfirmed (<reason>); a LEAD ONLINE follows if the lead started (started by architect)` instead, and wait about 30 minutes for `LEAD ONLINE` (9.5). A clear refusal (no permission, task not found) started nothing.
 
-   **Fallback,** if the fire action isn't available or fails: give Matthew the join line. He opens the lead task, presses **Run now** and pastes the line as its text; or he starts a new session in the Code tab on `OWNER/NAME` in the `agent-room` environment, and sends the line.
-10. Post `LEAD-STARTED` for the new lead, with `<session_id>` from the fire action's result. If Matthew started it through the fallback, ask him for the session's link and use that, so the watchdog sees the start too:
+   **Fallback,** if the fire action isn't available or fails: first post `LEAD-STARTED: by hand …` (step 10), then give Matthew the join line. He opens the lead task, presses **Run now** and pastes the line as its text; or he starts a new session in the Code tab on `OWNER/NAME` in the `agent-room` environment, and sends the line.
+10. Post `LEAD-STARTED` for the new lead, with `<session_id>` from the fire action's result. If Matthew started it through the fallback, he sends you the session's link: post it the same way, so the watchdog keeps watching that lead, but only while that lead's `LEAD ONLINE` isn't in the room yet. A `LEAD-STARTED` after its `LEAD ONLINE` would look like a lead still starting, and `start-lead` would refuse the next handover for 30 minutes:
 
     ```bash
     python3 room.py say N architect "LEAD-STARTED: https://claude.ai/code/<session_id> (plain join line, started by architect)" --repo OWNER/NAME
+    ```
+
+    For the fallback, post this before you give Matthew the line, naming how he starts it. The watchdog then sees a sign of a lead at once and holds off, with no gap before his start leaves one:
+
+    ```bash
+    python3 room.py say N architect "LEAD-STARTED: by hand (Matthew starts it with <Run now | the Code tab>; started by architect)" --repo OWNER/NAME
     ```
 
     `LEAD ONLINE` should appear in the room within about 10 minutes, then `PLAN`. If not, Matthew brings you back.
@@ -271,7 +277,7 @@ Explain each buzz in plain terms, in a few lines:
 | `ESCALATION-n` | The lead needs a decision the design doesn't settle | 9.2 |
 | `MERGE-HOLD-n` | A PR is ready but held, with a reason | 9.2 |
 | `NEXT-LEAD-NEEDED` | The lead couldn't start its successor; the message says why | 9.5 |
-| `LEAD-SILENT` | The watchdog saw no lead progress for three hours and, if the lead task is set up, started a takeover lead (a `LEAD-STARTED` follows), at most two per stall. A final one says `no more starts` | 9.5 |
+| `LEAD-SILENT` | The watchdog saw no lead progress for three hours and, if the lead task is set up and no lead has posted lately, started a takeover lead (a `LEAD-STARTED` follows), at most two per stall. A final one says `no more starts`. `no lead joined after DECISION-n` means the leads started for a decision never joined | 9.5 |
 | `PAUSED` / `STOPPED` | The lead paused or halted, as asked, and ended | 9.4 |
 | `DONE` | The phase is complete and the room is closed | 9.7 |
 
@@ -315,7 +321,7 @@ Explain each buzz in plain terms, in a few lines:
    python3 room.py state get lease_session --repo OWNER/NAME
    ```
 
-   Start it as in section 8, steps 9 and 10: the fire action with the normal join line, then `LEAD-STARTED`. If you don't, the watchdog does, at its first run more than 30 minutes after the decision. Its message reads `LEAD-STARTED: … (plain join line, started by watchdog after DECISION-<n>)`: a plain start, not a takeover, and not one of its two takeovers for a stall. A lead that isn't parked sees the decision at its next step boundary.
+   Start it as in section 8, steps 9 and 10: the fire action with the normal join line, then `LEAD-STARTED`. If you don't, the watchdog does, at its first run more than 30 minutes after the decision. Its message reads `LEAD-STARTED: … (plain join line, started by watchdog after DECISION-<n>)`: a plain start, not a takeover, and not one of its two takeovers for a stall. If no lead joins within its silence time of a start for the decision (yours or its own), it starts again, at most two starts of its own per decision. Then it posts one `LEAD-SILENT: no lead joined after DECISION-<n> (step …)` and starts nothing more (9.5). A lead that isn't parked sees the decision at its next step boundary.
 8. Check for the `ACK` (9.6).
 
 A "merge as is" for reason 5 lets the lead merge citing your `DECISION-n`, so name the hold in it.
@@ -364,9 +370,9 @@ Normally nothing is needed: the lead starts its successor, the watchdog starts t
 - Matthew opens the lead task, presses **Run now** and pastes the line as its text;
 - Matthew starts a new session in the Code tab on `OWNER/NAME` in the `agent-room` environment, and sends the line.
 
-Whichever way, post `LEAD-STARTED` for it as in section 8, step 10. The watchdog reads it: it starts no takeover within its silence time of it, and a start of yours opens a new episode, with up to two takeovers of its own if this lead stalls too.
+Whichever way, post `LEAD-STARTED` as in section 8, step 10. For Matthew's two ways, post `LEAD-STARTED: by hand …` before you give him the line, then the session's link when he sends it. The watchdog reads these: it starts no takeover within its silence time of the last one, and a start of yours opens a new episode, with up to two takeovers of its own if this lead stalls too.
 
-The fire action skips `start-lead`'s guards, so check them yourself. Never start a lead while a `LEAD-STARTED` under about 30 minutes old has no `LEAD ONLINE` after it: that lead may still be starting, and a takeover would take the lease from it once it joins.
+The fire action skips `start-lead`'s guards, so check them yourself. Never start a lead while a `LEAD-STARTED` under about 30 minutes old (other than the one you just posted for this start) has no `LEAD ONLINE` after it: that lead may still be starting, and a takeover would take the lease from it once it joins. That includes `LEAD-STARTED: unconfirmed (…)`, which `start-lead` posts when its request timed out or got an answer it didn't recognize: the lead may well have started, so wait for its `LEAD ONLINE`.
 
 Which line:
 
@@ -382,14 +388,16 @@ Which line:
   - `pin <V> isn't accepted by the lead task's prompt`: the `pipeline:` line names a form the prompt rejects, such as a pre-release. Pin a release `vX.Y.Z` or `main` (section 11), then start the lead.
 
   After Matthew recreates the lead task for any reason, redo section 8, step 6 the same way, even though a `lead-task:` line exists.
-- **The lead task was deleted** (Matthew says so, or a start fails with `lead task <ID> not found`), with no buzz: deleting a task deletes the sessions it started, so a lead running from it is gone. First redo section 8, step 6 with Matthew. Then read the lease:
+- **The lead task was deleted** (Matthew says so, or a start fails with `lead task <ID> not found`), with no buzz: deleting a task deletes the sessions it started, so a lead running from it is gone. First redo section 8, step 6 with Matthew. Then read the status and the lease:
 
   ```bash
+  python3 room.py state get status --repo OWNER/NAME
   python3 room.py state get lease_session --repo OWNER/NAME
   ```
 
-  If it isn't `none`, the lease is held by a lead whose session was deleted with the task (unless Matthew started that lead in the Code tab, which survives): start a takeover lead by hand through the new task, with the takeover line (below). If it's `none` and the step isn't `waiting for owner: …`, no lead is running: start one with the normal join line. A parked lead needs nothing until Matthew's decision.
-- **`LEAD-SILENT`:** no lead progress for three hours. A lead died, got stuck or never started.
+  If the status is `paused`, `stopped` or `done` and the lease is `none`, the build was halted or finished: start nothing without Matthew's word (9.4). Otherwise, if the lease isn't `none`, the lease is held by a lead whose session was deleted with the task (unless Matthew started that lead in the Code tab, which survives): start a takeover lead by hand through the new task, with the takeover line (below). If it's `none` and the step isn't `waiting for owner: …`, no lead is running: start one with the normal join line. A parked lead needs nothing until Matthew's decision.
+- **`LEAD-SILENT: no lead joined after DECISION-<n> (…)`:** the leads started for Matthew's decision never joined, and the watchdog starts no more for it. Find out why before starting another: read the room for `LEAD-STARTED` reasons, check the `lead-task:` line, and ask Matthew about the token and his usage. Fix it, then start a lead by hand (below) with the normal join line, or the takeover line if `lease_session` isn't `none`.
+- **`LEAD-SILENT`:** no lead progress for three hours. A lead died, got stuck or never started. Or a live lead is slow: the watchdog alarms on progress (a step change or a mission-branch push), but starts a takeover only when no lead has posted anything, a `STATUS` included, and none has started or joined, within its silence time.
   1. **`LEAD-SILENT: state unreadable (…)`:** the state branch or its block is broken, not the lead, and the watchdog starts no lead after this alarm. Check it: `state sync`, then `python3 room.py state get step --repo OWNER/NAME`. If the branch was deleted, restore it before any lead joins:
      - **Re-push it from any copy that still has it,** preferably: your own state worktree, a lead's, or a fork or local clone of Matthew's. From yours (if GitHub refuses a shallow copy, use another):
 
@@ -401,11 +409,13 @@ Which line:
 
      Then go on with step 2.
   2. Read the room and `python3 room.py state get step --repo OWNER/NAME`. Tell Matthew where the build stopped.
-  3. With the lead task set up, the watchdog started a takeover lead right after the alarm, and posted `LEAD-STARTED`. Its `LEAD ONLINE` usually follows within about 15 minutes, but give it about 30 minutes from the `LEAD-STARTED` before you start another. If that time hasn't passed, schedule `send_later` for then: "Check room N for LEAD ONLINE after LEAD-SILENT." Without `send_later`, ask Matthew to come back then and say "check the room".
+  3. With the lead task set up, the watchdog usually started a takeover lead right after the alarm, and posted `LEAD-STARTED`. If the alarm ends `(start held off: a lead showed signs at <time>)`, it didn't: a lead started or joined within its silence time (`--silent-after` in the watchdog's prompt, 3 hours by default). It starts one at a later run, once that time has passed since the sign. Don't start a takeover by hand meanwhile: never while the last sign of a lead (`LEAD-STARTED` or `LEAD ONLINE`) is under the silence time old. A started lead's `LEAD ONLINE` usually follows within about 15 minutes, but give it about 30 minutes from the `LEAD-STARTED` before you start another. If that time hasn't passed, schedule `send_later` for then: "Check room N for LEAD ONLINE after LEAD-SILENT." Without `send_later`, ask Matthew to come back then and say "check the room".
   4. Read the room again.
      - **A `LEAD ONLINE` after the alarm:** a takeover lead joined. Tell Matthew where it is; nothing else is needed for now. If that lead makes no progress either, the watchdog alarms again (`LEAD-SILENT: the lead started at <time> made no progress …`) and starts a second takeover, its last for this episode.
      - **`LEAD-SILENT: two takeover leads made no progress; no more starts …`:** the watchdog's final alarm for this episode; it starts nothing more. Leads keep failing at that step, so look into why: read the room since the first alarm, the state (section 4) and the mission branch, and tell Matthew what you find. Fix the cause with him; if agent-room itself is at fault, he reports it, as for a pipeline fault (9.2). Then start a takeover lead by hand (below). Your `LEAD-STARTED` opens a new episode, which the watchdog watches again, with up to two takeovers of its own.
-     - **No `LEAD-STARTED` after the alarm** (no lead task, or the watchdog's start was refused or failed): start a takeover lead by hand (below). The watchdog then holds off: it sees your `LEAD-STARTED`, and starts nothing within its silence time of it.
+     - **No `LEAD-STARTED` after the alarm, but a lead message (a `STATUS`, say) after it or within the silence time before it:** a lead is alive but slow, often running a long builder, and the watchdog left it alone. Tell Matthew where it is, and start nothing. If it stays silent, the watchdog takes over at a later run.
+     - **The alarm says `start held off`:** wait for the watchdog's start, as in step 3. Tell Matthew when to expect it.
+     - **No `LEAD-STARTED` after the alarm, no recent lead message, and the last sign of a lead older than the silence time** (no lead task, or the watchdog's start was refused or failed): start a takeover lead by hand (below). The watchdog then holds off: it sees your `LEAD-STARTED`, and starts nothing within its silence time of it.
      - **A `LEAD-STARTED` with no `LEAD ONLINE` about 30 minutes after it:** start a takeover lead by hand (below).
 
      To start a takeover lead by hand, use the takeover line:
