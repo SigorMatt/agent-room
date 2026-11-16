@@ -23,7 +23,11 @@ A third is covered by the same rule: a lead that made progress and died before p
 **Its own alarms:** the decision path counts only `LEAD-SILENT: no lead joined after DECISION-n` and its `still` form. The waiting reminder counts only its own texts for that request, and state unreadable only its newest run (B-6). The ordinary stall counts every watchdog `LEAD-SILENT` newer than its progress, as in M6b, so an alarm from an outage with no progress since stands in for it. A reminder for one request never stands in for a decision's alarm (cold M6d R1-3).
 
 **It starts a lead when all of these hold:**
-1. **Alarmed:** the stall has one of its own trusted watchdog `LEAD-SILENT`s newer than `since`, posted at this run or before, its buzz sent or failed. A start never precedes its alarm.
+1. **At the first alarm only:** this run posted the stall's first alarm: `stall_alarm` found none of the stall's own alarms newer than `since`, and posted one, its buzz sent or failed. The watchdog tries at most one start per stall, in that run, right after the alarm. So:
+   - The alarm, posted before the fire, is the durable record of the attempt. A lost `LEAD-STARTED` can't lead to a second fire (qodo PR #14 finding 1).
+   - A start held off, refused or failed at the first alarm is never retried. The alarm and reminders tell Matthew, and the architect decides.
+   - The watchdog never starts a lead hours after its alarm, when the architect may be starting one (cold M6d R1-1).
+   - A failed alarm post exits 1 before anything is fired, and the next run's alarm is then the first.
 2. **One start per stall:** the room has no trusted `LEAD-STARTED` newer than `since` from anyone but a lead, confirmed or not. A lead's own handover start doesn't count: its successor is what stalled (cold M6d R1-5, qodo PR #14 finding 2).
 3. **No sign of life since `since`:** a sign of life is either of these:
    - a trusted lead message of any kind newer than `since`, from a session that hasn't posted a `HANDOFF`. A session that handed over has ended, so its `HANDOFF`, its `LEAD-STARTED` and a `NEXT-LEAD-NEEDED` don't count, nor anything it posted before them;
@@ -31,8 +35,7 @@ A third is covered by the same rule: a lead that made progress and died before p
 
    So:
    - A lead that posted a `STATUS` after its progress, before a long builder run, is never taken over (cold M6d R2-1, R1-4).
-   - A lead that joined after the stall began, even if all its posts failed, is never taken over (qodo PR #14 finding 1).
-   - Once there is a sign of life, the stall's start stays held off at every later run (cold M6d R1-1).
+   - A lead that joined after the stall began, even if all its posts failed, is never taken over.
 4. **Not halted:** the machine block's status for this room isn't `paused`, `stopped` or `done`, whoever holds the lease. A lead that posted `PAUSED` or `STOPPED` and died before releasing the lease is not taken over: a takeover would set the status back to `running` (cold M6d R1-2).
 5. **Configured:** the lead task is configured (`lead-task:` line and token).
 
@@ -46,13 +49,15 @@ A third is covered by the same rule: a lead that made progress and died before p
 | `start-lead` | The watchdog |
 | --- | --- |
 | 0 (started, or unconfirmed with `LEAD-STARTED` posted) | Prints `started: …`. That is this stall's one start. |
-| 1 (a definite failure, nothing posted) | Prints the error. The next run tries again, because rules 2 and 3 still hold. |
-| 3 or 6 (refused, or not configured) | Prints a note. Nothing else: the alarm and its reminders tell Matthew. A later run starts the lead if the refusal's cause is gone (the lead task configured, say). |
+| 1 (a definite failure, nothing posted) | Prints the error. No retry (rule 1): the alarm and its reminders tell Matthew. |
+| 3 or 6 (refused, or not configured) | Prints a note. No retry: the alarm and its reminders tell Matthew. |
 
-**Order of operations:** the alarm is posted before the start, always, so a failed alarm post exits 1 before anything is fired. The `LEAD-STARTED` post keeps its retries and its de-duplication.
+**Order of operations:** the alarm is posted before the start, in the same run, always, so a failed alarm post exits 1 before anything is fired. The `LEAD-STARTED` post keeps its retries and its de-duplication.
+
+**`silent-after` and the 30-minute window:** a handover's `LEAD-STARTED` is about `silent-after` old at the first alarm. With `silent-after` under 45 minutes (a drill), `start-lead`'s "still starting" window can refuse the one start. The default is 3 hours, and drills use 60 minutes.
 
 **The architect's starts and the watchdog's (cold M6d R1-1):** a stall's start can come from either, and an architect's starter task may run hours after it was created (finding U).
-- The watchdog starts none after the architect's `LEAD-STARTED` (rule 2), or once a lead shows a sign of life (rule 3).
+- The watchdog acts only in the run that posts the stall's first alarm (rule 1), and starts none after the architect's `LEAD-STARTED` (rule 2) or a sign of life (rule 3). So after the first alarm, every start is the architect's: if no watchdog `LEAD-STARTED` follows the first alarm within minutes, none will.
 - **`start-lead --seen ID`:** the architect's starter tasks pass the room's newest comment ID when the architect decided, or `0` when the room has no comments yet (kickoff, cold M6d R2-5). `start-lead` then refuses (exit 3) when the room has a trusted lead message, or a trusted `LEAD-STARTED` from any role, newer than comment ID: `refused: the room moved on after #ID: <kind> #<id> at <time>; read the room again`. So a starter that runs after the watchdog's start, or after a lead joined, starts nothing.
 - **When `--seen` is left out:**
   - A lead's handover doesn't need it.
@@ -60,9 +65,11 @@ A third is covered by the same rule: a lead that made progress and died before p
   - `ARCHITECT.md` 8.4 passes it in every other starter task.
 
 **Known limits:**
-- **A lost `LEAD-STARTED` and no join:** if the fire worked, all three posts of `LEAD-STARTED` failed, and the lead neither posted nor took the lease, the next run starts another. Nothing joined, so that is a second try, not a second lead.
+- **No retry:** a start that failed (an HTTP 5xx, say), was refused or wasn't configured at the first alarm isn't tried again. The architect starts the lead, as in M6b.
+- **A lost `LEAD-STARTED`:** if the fire worked and all three posts failed, the room shows the alarm with no `LEAD-STARTED` after it. A lead's `LEAD ONLINE` follows if it started; the architect's starter task with `--seen` refuses once it does.
 - **Two runs at once:** the watchdog is one scheduled task, every 3 hours (hourly in drills), whose run takes about a minute, so its runs don't overlap. If two did (Matthew runs it by hand during a scheduled run), both could fire within the same seconds. The lease then lets one lead work: a plain lead finds the lease held and ends, and of two takeovers the first loses the lease and stops at its next write (qodo PR #14, finding 3).
 - **A lead that dies after any post since its progress, or a successor that joined and died:** no automatic start (rule 3). The alarm and reminders come as in M6b, and the architect decides.
+- **An alarm from another path standing in:** the ordinary stall counts an earlier state unreadable alarm newer than its progress as its own, and then posts no first alarm of its own, so it makes no start. The architect decides.
 
 **What it means per path:**
 - **An ordinary stall:**
@@ -98,7 +105,7 @@ The watchdog task's prompt doesn't change: room.py does the posting and starting
   - **9.5:**
     - After a `LEAD-SILENT`, first read the status. If it is `paused` or `stopped`, start nothing except on Matthew's word to resume (9.4): a takeover sets the status back to `running` (cold M6d R2-2).
     - Then look for the watchdog's `LEAD-STARTED`. If there is one, wait for its `LEAD ONLINE` (about 30 minutes, the bullet on a recent `LEAD-STARTED`).
-    - If there's none, the watchdog may still start one at a later run: it retries a failed fire, and starts once the lead task is configured. Or it is holding off for good: a lead showed a sign of life since the stall began, the lead joined at `waiting for owner`, or the build is halted. Decide by hand as now. A starter task passes `--seen`, so whichever start comes first is the only one.
+    - If there's none after the stall's first alarm, the watchdog won't start one: it tries only in that run. It held off (a sign of life since the stall began, a lead joined at `waiting for owner`, a halted build), was refused or not configured, or its fire failed. Decide by hand as now. A starter task passes `--seen`, so a lead whose `LEAD-STARTED` was lost but who joined isn't displaced.
     - A second stall alarm or a reminder after the watchdog's start means its lead failed too; the watchdog won't start another for that stall.
     - A lead that posted since its progress is never taken over by the watchdog: the architect decides, as in M6b.
     - For a deliberate takeover of a looping lead that keeps posting, leave out `--seen` (cold M6d R2-3). On a `room moved on` refusal, read the room again: if what moved on is the lead you decided to take over, and Matthew agreed, create the starter without `--seen`.
@@ -124,7 +131,8 @@ All offline, in `tests/test_relay.py` or a new `tests/test_m6d.py`.
 - No start after a sign of life since `since`: a `STATUS` one minute after the progress (cold M6d R2-1), a successor that joined and died, at that run and every later run; and the lease taken after `since` with no post at all.
 - No start while the status is `paused` or `stopped` and the lease is still held.
 - `start-lead --seen ID`: refused after a lead message or any `LEAD-STARTED` newer than ID (the watchdog's start, say); starts when nothing newer came; `--seen 0` in a room with no comments starts.
-- A definite failure is retried at the next run.
+- One try per stall: a definite failure, a refusal, a missing configuration or a hold-off at the first alarm is not retried at any later run, and a later run whose alarm is a reminder or a re-posted failed buzz fires nothing.
+- A lost `LEAD-STARTED` (the fire worked, every post failed): no fire at the next run.
 - Not configured (6) and refused (3) print a note only.
 - A watchdog run never fires more than once.
 - The alarm is posted before the fire; a failed alarm post means no fire.
