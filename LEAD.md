@@ -327,7 +327,7 @@ At the end of a mission, or early at a step boundary when your context gets heav
 
    | Exit | Do |
    | --- | --- |
-   | 0 | End. This includes an unconfirmed start (it timed out, or the answer wasn't recognized), which posts `LEAD-STARTED: unconfirmed (<reason>) …`: never run `start-lead` again after it. A `LEAD ONLINE` follows if the lead started, and the watchdog notices if none does |
+   | 0 | End. This includes an unconfirmed start (it timed out, or the answer wasn't recognized), which posts `LEAD-STARTED: unconfirmed (<reason>) …`: never run `start-lead` again after it. A `LEAD ONLINE` follows if the lead started; if none does, the watchdog alarms and the architect starts one |
    | 3, saying `this session still holds the lease` | Your release didn't go through. Run `python3 room.py lease release`, then `start-lead` again |
    | 3, otherwise (a lead is running or starting) | End |
    | 1 | A definite failure: nothing started. Run it once more; if it fails again, as for 6 |
@@ -415,7 +415,7 @@ End.
 
 **`LEAD-STARTED`:** history: ignore it.
 
-**`LEAD-SILENT`:** the watchdog saw no progress for three hours, and may have started a takeover lead. Post a `STATUS` saying where you are, and make progress. If the takeover lead's `LEAD ONLINE` follows, handle it as above.
+**`LEAD-SILENT`:** the watchdog saw no progress for three hours, and the architect may start a takeover lead. Post a `STATUS` saying where you are, and make progress. If a takeover lead's `LEAD ONLINE` follows, handle it as above.
 
 **Any other comment from Matthew** (`human (<login>)`, a trusted author) is an owner instruction. If it stays within `DESIGN.md` and `PLAYBOOK.md`, follow it, and say what you did in your next `STATUS`. Otherwise escalate (section 8), quoting the comment under **Context**, and act on it only as the `DECISION-n` says.
 
@@ -423,7 +423,7 @@ End.
 
 - Run `python3 room.py budget` at each step boundary while the step is `build`, a cold review or a Qodo round; never at the PR, the gate, close or while waiting for the owner. Exit 6: the mission is over budget, so escalate once; never retry automatically, and don't escalate the budget again while that escalation is open. A `DECISION` that sends the mission back to Build, says merge as is, or grants time restarts the clock (section 9). Exit 1: `mission_started` is missing; set it (5.1).
 - Three attempts per task, counted under "Tasks in flight". A fourth is an escalation. A fresh builder for a parked question after its `DECISION` isn't an attempt (section 9).
-- If Claude usage runs out, you simply stop. The watchdog reports it and starts a takeover lead, which resumes from the recorded step. It tries at most two takeovers per stall, then posts a final alarm and starts nothing more; the architect looks into it and starts the next lead by hand.
+- If Claude usage runs out, you simply stop. The watchdog reports it, and the architect starts a takeover lead, which resumes from the recorded step.
 - A `drill:` line in `PLAYBOOK.md` (reconcile prints it) is a failure drill:
 
   | `drill:` | You |
@@ -435,7 +435,7 @@ End.
 
 ## 11. Rules
 
-- **Signs of life:** the watchdog takes over from a lead only when it has posted nothing for the watchdog's silence time (three hours by default) and made no progress (a step change or a mission-branch push). Before a step that may run long with no push, such as a long builder in the foreground, post a `STATUS` saying what runs, so the watchdog sees you are alive.
+- **Signs of life:** the watchdog alarms when nothing progresses (a step change or a mission-branch push) for three hours, and the architect then decides whether you are alive before starting a takeover. Before a step that may run long with no push, such as a long builder in the foreground, post a `STATUS` saying what runs, so the architect sees you are alive.
 - **Context hygiene:** builders reply in at most 10 lines. Verify with checks and `git diff --stat`, not by reading diffs; open a file only when a check fails. Keep state in `MISSIONS.md`, not in your memory. After a compaction, re-read this file and `MISSIONS.md`.
 - **Delegate:** implementing, fixing, investigating code and hard merge conflicts go to builders. You write briefs and answers, run checks, merge, keep records, post and open the PR. Resume a builder for follow-ups; if resuming fails, start a fresh one with the full brief.
 - **State writes:** commit hand edits with `state commit` before `state set`, `state next`, `intent` or `handoff`; they refuse while the worktree has local changes. Exit 3 means the branch moved: run `python3 room.py state sync`, re-read and re-apply. Exit 5 means the lease isn't yours: stand down.
