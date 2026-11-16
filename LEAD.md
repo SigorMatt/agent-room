@@ -327,7 +327,7 @@ At the end of a mission, or early at a step boundary when your context gets heav
    | Exit | Do |
    | --- | --- |
    | 0 | End |
-   | 3, saying the lease is held by this session | Your release didn't go through. Run `python3 room.py lease release`, then `start-lead` again |
+   | 3, saying `this session still holds the lease` | Your release didn't go through. Run `python3 room.py lease release`, then `start-lead` again |
    | 3, otherwise (a lead is running or starting) | End |
    | 1 | Run it once more; if it fails again, as for 6 |
    | 6 | Post the line below (it buzzes), with the reason `start-lead` printed, then end |
