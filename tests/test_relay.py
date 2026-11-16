@@ -794,6 +794,28 @@ def drop_mission(branch="mission/M1-greet"):
     g("checkout", "-q", "-B", "main", "origin/main")
 
 
+def t_state_unreadable_gets_reminders():
+    # cold M6b R3-4: while the state stays unreadable, a reminder every 4 x silent-after since its last alarm
+    backdate(lambda c: True, 1000)  # earlier alarms belong to other stalls
+    push_mission(14)  # progress 14 hours ago
+    tip = without_state_branch()
+    try:
+        n = len(comments())
+        r = watchdog()
+        assert "alarm: state unreadable (agent-room/state doesn't exist in SigorMatt/pet)" in r.stdout, out(r)
+        assert "already reports this stall" in watchdog().stdout and len(comments()) == n + 1
+        backdate(lambda c: c["id"] > comments()[n - 1]["id"], 730)  # 12h10m later
+        r = watchdog()
+        assert "alarm: still state unreadable" in r.stdout, out(r)
+        assert [text_of(c) for c in comments()[n + 1:]] == ["LEAD-SILENT: still state unreadable (agent-room/state "
+                                                            "doesn't exist in SigorMatt/pet) (buzz sent)"], out(r)
+        assert "already reports this stall" in watchdog().stdout and len(comments()) == n + 2
+    finally:
+        put_state_branch_back(tip)
+        drop_mission()
+    age_watchdog()
+
+
 def t_no_start_after_a_state_unreadable_alarm():
     # cold M6b R1-8: no lead can write state either, so a start would only add a lead that can't work
     push_mission(5)  # progress five hours ago, so the earlier state unreadable alarms belong to another stall
