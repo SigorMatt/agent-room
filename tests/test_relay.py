@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
-"""Tests for M6b, leads started through the lead task: start-lead, lead-task-prompt, LEAD-STARTED, the watchdog's
-starts (after an alarm, after Matthew's decision) and its alarm cap, the HANDOFF paragraph, and preflight's
-lead-task lines. Run: python3 tests/test_relay.py
+"""Tests for M6b, leads started through the lead task: start-lead (by the lead and the architect), lead-task-prompt,
+join-line's pin check, LEAD-STARTED, the HANDOFF paragraph and preflight's lead-task lines; and the watchdog, which
+only alarms (BUILD-STATE 2026-11-16, B-5): stalls, a decision no lead joined after, reminders and failed buzzes.
+Run: python3 tests/test_relay.py
 
 As in test_unattended.py, the project repo is a local bare git repo standing in for GitHub; `gh` is
 fake_gh_state.py (room comments go on to fake_gh.py) and `curl` is fake_curl.py, which answers the lead task's fire
@@ -446,15 +447,16 @@ def t_start_lead_guards():
     room("lease", "take", check=True)
     set_state("status=done")
     room("lease", "release", check=True)
-    for role in ("lead", "watchdog", "architect"):
+    for role in ("lead", "architect"):
         refused(start(role, ROOM_SESSION="arch" if role == "architect" else "L1"), "status is done", before)
+    r = start("watchdog", ROOM_SESSION="wd")  # cold M6b R3-5: the watchdog starts no leads
+    assert r.returncode == 2 and "invalid choice: 'watchdog'" in r.stderr and counts() == before, out(r)
     room("lease", "take", check=True)  # which sets status back to running
     # paused or stopped with the lease released: only the architect resumes
     for status in ("paused", "stopped"):
         set_state(f"status={status}")
         room("lease", "release", check=True)
-        for role in ("lead", "watchdog"):
-            refused(start(role), f"status is {status} and the lease is released: only the architect resumes", before)
+        refused(start("lead"), f"status is {status} and the lease is released: only the architect resumes", before)
         room("lease", "take", check=True)
     set_state("status=paused")
     room("lease", "release", check=True)
@@ -462,15 +464,16 @@ def t_start_lead_guards():
     assert r.returncode == 0 and text_of(comments()[-1]).endswith("(plain join line, started by architect)"), out(r)
     assert tag(comments()[-1]) == ("architect", "arch")
     online()
-    # the lease held: a lead is running; a takeover is the watchdog's or the architect's call
+    # the lease held: a lead is running; a takeover is the architect's call
     room("lease", "take", check=True)
     before = counts()
-    refused(start("lead", ROOM_SESSION="L9"), "refused: the lease is held by L1: a lead is running", before)
-    r = start("watchdog", "--takeover", ROOM_SESSION="wd")
+    refused(start("lead", ROOM_SESSION="L9"), "refused: the lease is held by L1: a lead is running, and a takeover "
+                                              "(--takeover) is the architect's call", before)
+    r = start("architect", "--takeover", ROOM_SESSION="arch")
     assert r.returncode == 0, out(r)
     assert request(fires()[-1])["body"] == {"text": JOIN.format(n=1, v="main") + TAKEOVER}
-    assert text_of(comments()[-1]).endswith("(takeover join line, started by watchdog)") and \
-        tag(comments()[-1]) == ("watchdog", "wd")
+    assert text_of(comments()[-1]).endswith("(takeover join line, started by architect)") and \
+        tag(comments()[-1]) == ("architect", "arch")
     # a recent start with no LEAD ONLINE after it: a lead is still starting
     before = counts()
     r = start("architect", "--takeover", ROOM_SESSION="arch")
@@ -501,13 +504,13 @@ def t_start_lead_post_fails():
     online()
 
 
-def t_watchdog_may_post_lead_started():
-    r = room("say", "1", "watchdog", "LEAD-STARTED: https://claude.ai/code/y (plain join line, started by watchdog)",
-             ROOM_SESSION="wd")
-    assert r.returncode == 0 and "[buzz" not in r.stdout, out(r)
-    r = room("say", "1", "watchdog", "STATUS: not mine", ROOM_SESSION="wd")
-    assert r.returncode == 2 and "only LEAD-SILENT and LEAD-STARTED" in r.stderr, out(r)
-    age_watchdog()
+def t_the_watchdog_posts_only_lead_silent():
+    # cold M6b R3-5: the watchdog starts no leads, so it posts no LEAD-STARTED either
+    n = len(comments())
+    for text in ("LEAD-STARTED: https://claude.ai/code/y (plain join line, started by watchdog)", "STATUS: not mine"):
+        r = room("say", "1", "watchdog", text, ROOM_SESSION="wd")
+        assert r.returncode == 2 and "the watchdog can send only LEAD-SILENT, not " in r.stderr, out(r)
+    assert len(comments()) == n
     online()
 
 
@@ -794,6 +797,28 @@ def drop_mission(branch="mission/M1-greet"):
     g("checkout", "-q", "-B", "main", "origin/main")
 
 
+def t_state_unreadable_gets_reminders():
+    # cold M6b R3-4: while the state stays unreadable, a reminder every 4 x silent-after since its last alarm
+    backdate(lambda c: True, 1000)  # earlier alarms belong to other stalls
+    push_mission(14)  # progress 14 hours ago
+    tip = without_state_branch()
+    try:
+        n = len(comments())
+        r = watchdog()
+        assert "alarm: state unreadable (agent-room/state doesn't exist in SigorMatt/pet)" in r.stdout, out(r)
+        assert "already reports this stall" in watchdog().stdout and len(comments()) == n + 1
+        backdate(lambda c: c["id"] > comments()[n - 1]["id"], 730)  # 12h10m later
+        r = watchdog()
+        assert "alarm: still state unreadable" in r.stdout, out(r)
+        assert [text_of(c) for c in comments()[n + 1:]] == ["LEAD-SILENT: still state unreadable (agent-room/state "
+                                                            "doesn't exist in SigorMatt/pet) (buzz sent)"], out(r)
+        assert "already reports this stall" in watchdog().stdout and len(comments()) == n + 2
+    finally:
+        put_state_branch_back(tip)
+        drop_mission()
+    age_watchdog()
+
+
 def t_no_start_after_a_state_unreadable_alarm():
     # cold M6b R1-8: no lead can write state either, so a start would only add a lead that can't work
     push_mission(5)  # progress five hours ago, so the earlier state unreadable alarms belong to another stall
@@ -966,6 +991,22 @@ def t_an_uncertain_start_is_recorded_not_retried():
 
 
 
+def t_gateway_errors_are_unconfirmed_starts():
+    # cold M6b S2-5, R3-3: a 502 or 504 from a gateway, or a garbled reply, can come after the API fired the run
+    online()
+    for env, reason in ((dict(FAKE_FIRE_STATUS="502", FAKE_FIRE_BODY="Bad Gateway"), "HTTP 502"),
+                        (dict(FAKE_FIRE_STATUS="504", FAKE_FIRE_BODY="Gateway Timeout"), "HTTP 504"),
+                        (dict(FAKE_FIRE_FAIL="Weird server reply", FAKE_FIRE_EXIT="8"), "curl: (8) Weird server reply"),
+                        (dict(FAKE_FIRE_FAIL="Error in the HTTP2 framing layer", FAKE_FIRE_EXIT="16"),
+                         "curl: (16) Error in the HTTP2 framing layer")):
+        nc = len(comments())
+        r = start("architect", "--takeover", ROOM_SESSION="arch", **env)
+        assert r.returncode == 0 and r.stdout.startswith("warning: the lead task may have started a lead"), (env, out(r))
+        assert len(comments()) == nc + 1 and text_of(comments()[-1]) == \
+            f"LEAD-STARTED: unconfirmed ({reason})" + UNCONFIRMED.format(role="architect"), text_of(comments()[-1])
+        online()
+
+
 def t_a_lead_started_that_landed_is_not_posted_twice():
     # cold M6b S2-4: GitHub sometimes creates the comment and then answers 502; the retry first looks for it
     online()
@@ -999,14 +1040,6 @@ def t_a_looping_lead_gets_reminders():
     online()
     set_state("step=build 101")
     age_room()
-
-
-def park(n, what, step):
-    """The lead escalates (five hours ago), records the waiting step and releases the lease."""
-    room("say", "1", "lead", f"ESCALATION-{n}: {what}", "--no-buzz", check=True)
-    backdate(lambda c: f"ESCALATION-{n}:" in c["body"], 300)
-    set_state("waiting_for_owner=yes", f"step=waiting for owner: {step}", hours=5)
-    room("lease", "release", check=True)
 
 
 setup()
