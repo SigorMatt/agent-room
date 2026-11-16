@@ -711,7 +711,7 @@ def t_watchdog_starts_the_lead_after_a_decision():
     r = watchdog()
     assert r.returncode == 0 and re.search(rf"^start: step is waiting for owner: spec 7, the lease is released, and "
                                            rf"DECISION-1 #{decision} at \S+ has waited 31m with no lead started for "
-                                           r"it$", r.stdout, re.M), out(r)
+                                           r"it, or none that joined$", r.stdout, re.M), out(r)
     assert [kind_of(c) for c in comments()[n:]] == ["LEAD-STARTED"], "no LEAD-SILENT for this"
     assert text_of(comments()[-1]).endswith("(plain join line, started by watchdog after DECISION-1)")
     assert [request(x)["body"] for x in fires()[nf:]] == [{"text": JOIN.format(n=1, v="main")}]
@@ -1213,6 +1213,41 @@ def t_an_uncertain_start_is_recorded_not_retried():
     assert "already started a lead for this stall" in r.stdout and len(fires()) == nf + 1, out(r)
     online()
     set_state("step=build 61")
+    age_room()
+
+
+def t_a_decision_start_is_tried_twice_then_alarmed():
+    # qodo PR #11 "A failed post-decision lead leaves the room silent forever": a LEAD-STARTED after the decision
+    # holds off another start only for silent-after; then a second decision start, then one alarm, and no more starts
+    online()
+    age_room()
+    room("say", "1", "lead", "ESCALATION-8: which sound?", "--no-buzz", check=True)
+    set_state("waiting_for_owner=yes", "step=waiting for owner: spec 70", hours=5)
+    room("lease", "release", check=True)  # parked
+    room("say", "1", "architect", "DECISION-8: a bell", check=True, ROOM_SESSION="arch")
+    decision = comments()[-1]["id"]
+    backdate(lambda c: c["id"] == decision, 45)
+    quiet = "quiet: step is waiting for owner: spec 70"
+    nf = len(fires())
+    r = watchdog()
+    assert "start: step is waiting for owner: spec 70" in r.stdout and len(fires()) == nf + 1, out(r)
+    assert text_of(comments()[-1]).endswith("started by watchdog after DECISION-8)")
+    assert watchdog().stdout.strip() == quiet and len(fires()) == nf + 1, "held off while that lead may be joining"
+    backdate(lambda c: c["id"] >= decision, 200)  # that lead never joined
+    r = watchdog()
+    assert "start: " in r.stdout and len(fires()) == nf + 2, out(r)
+    assert text_of(comments()[-1]).endswith("started by watchdog after DECISION-8)")
+    backdate(lambda c: c["id"] >= decision, 200)  # nor did the second
+    n = len(comments())
+    r = watchdog()
+    assert r.returncode == 0 and "alarm: no lead joined after DECISION-8" in r.stdout and len(fires()) == nf + 2, out(r)
+    assert [text_of(c) for c in comments()[n:]] == ["LEAD-SILENT: no lead joined after DECISION-8 (step waiting for "
+                                                    "owner: spec 70) (buzz sent)"], out(r)
+    r = watchdog()  # once
+    assert r.stdout.strip() == quiet and len(comments()) == n + 1 and len(fires()) == nf + 2, out(r)
+    room("lease", "take", check=True)
+    set_state("step=build 70")
+    online()
     age_room()
 
 

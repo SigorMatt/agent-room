@@ -3039,10 +3039,16 @@ def alarm_stage(a, ep, first, about, takeover, prefix=""):
         print(f"note: {len(starts)} leads already started for this stall: alarms only")
 
 
+DECISION_STARTS = 2  # watchdog starts per decision before it alarms instead (qodo PR #11)
+
+
 def pending_decision(a, values, playbook):
-    """The room's trusted DECISION-n (from the architect or Matthew) that waits for a lead nobody started: newer than
-    the room's newest trusted lead message, more than DECISION_GRACE old, with no trusted LEAD-STARTED after it.
-    Only while the lease is released and room N is the current room; None otherwise."""
+    """(what to do, the trusted DECISION-n it's for), or None, for a parked lead: only while the lease is released and
+    room N is the current room. A decision (from the architect or Matthew) newer than the room's newest trusted lead
+    message and more than DECISION_GRACE old needs a lead. With no trusted LEAD-STARTED after it, that's ('start', d).
+    A LEAD-STARTED after it holds off another start only for silent-after after the last sign of a lead (a LEAD
+    ONLINE would be a lead message, newer than the decision); then ('start', d) again, up to DECISION_STARTS
+    watchdog starts for that decision, and then ('alarm', d) once, within the alarm cap (qodo PR #11)."""
     room = current_room(playbook, values)
     if lease_of(values)[0] != "none" or (room and room[0] != a.room):
         return None
@@ -3050,15 +3056,26 @@ def pending_decision(a, values, playbook):
     last_lead = max((m["id"] for m in msgs if m["role"] == "lead"), default=0)
     now = time.time()
     for d in msgs:
-        if d["id"] <= last_lead or d["role"] not in ("architect", "human") or \
-                not re.fullmatch(r"DECISION-\d+", message_kind(d["text"]) or ""):
+        kind = message_kind(d["text"]) or ""
+        if d["id"] <= last_lead or d["role"] not in ("architect", "human") or not re.fullmatch(r"DECISION-\d+", kind):
             continue
         t = parse_time(d["at"])
         if t is None or now - t <= DECISION_GRACE:
             continue
-        if any(m["id"] > d["id"] and message_kind(m["text"]) == "LEAD-STARTED" for m in msgs):
-            continue
-        return d
+        later = [m for m in msgs if m["id"] > d["id"]]
+        started = [m for m in later if message_kind(m["text"]) == "LEAD-STARTED"]
+        if not started:
+            return "start", d
+        if now - max(parse_time(m["at"]) or 0 for m in started) < a.silent_after:
+            return None  # a lead may still be joining
+        if sum(1 for m in started if m["role"] == "watchdog" and f"after {kind})" in m["text"]) < DECISION_STARTS:
+            return "start", d
+        alarms = [m for m in later if m["role"] == "watchdog" and message_kind(m["text"]) == "LEAD-SILENT"]
+        told = [m for m in alarms if f"no lead joined after {kind} " in m["text"]
+                and not re.search(r"\(buzz failed\b", m["text"])]
+        if not told and len(alarms) < ALARM_CAP:
+            return "alarm", d
+        # said already, or the cap is reached: this decision is done; a newer one may still need a lead
     return None
 
 
@@ -3148,14 +3165,19 @@ def cmd_watchdog(a):
     if quiet:
         why, text = quiet
         # a parked lead (lease released) and Matthew's decision with no lead started for it: the watchdog starts one
-        d = pending_decision(a, values, playbook) if why == "waiting" and not a.no_start else None
-        if d is None:
+        act = pending_decision(a, values, playbook) if why == "waiting" and not a.no_start else None
+        if act is None:
             print(f"quiet: {text}")
             return 0
-        t = parse_time(d["at"])
-        print(f"start: {text}, the lease is released, and {message_kind(d['text'])} #{d['id']} at {d['at']} has "
-              f"waited {span(time.time() - t)} with no lead started for it")
-        watchdog_start(a, takeover=False, after=message_kind(d["text"]))
+        what, d = act
+        kind, t = message_kind(d["text"]), parse_time(d["at"])
+        if what == "alarm":  # two starts for it and no lead joined: tell Matthew, start nothing more
+            print(f"alarm: no lead joined after {kind} #{d['id']} at {d['at']}, after {DECISION_STARTS} starts")
+            alarm(a, f"LEAD-SILENT: no lead joined after {kind} (step {step})")
+            return 0
+        print(f"start: {text}, the lease is released, and {kind} #{d['id']} at {d['at']} has waited "
+              f"{span(time.time() - t)} with no lead started for it, or none that joined")
+        watchdog_start(a, takeover=False, after=kind)
         return 0
     # progress, not chatter (v1): a step or pr change, a mission branch push, a mission PR's merge. Lease takes,
     # handoffs at the same step, intents, the counter and the cursor don't count, so a lead in a loop alarms
