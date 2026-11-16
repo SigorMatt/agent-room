@@ -2735,7 +2735,6 @@ WAITING_FOR_OWNER = "waiting for owner"
 QUIET_STATUSES = ("paused", "stopped", "done")
 PROGRESS_KEYS = ("step", "pr")  # the machine-block keys whose change is progress; merge records pr
 PRESTART_HOURS = 12  # a room no lead has joined gets one alarm this long after its issue was opened
-ALARM_CAP = 3  # LEAD-SILENT posts per stall while buzzes fail: the first and two retries (finding P)
 DEFAULT_BUDGET_HOURS = 8
 
 
@@ -2953,14 +2952,14 @@ def buzz_failed(m):
     return re.search(r"\(buzz failed\b", m["text"]) is not None
 
 
-def stall_alarm(a, since, first, reminder, prefix=""):
-    """The alarms of one stall, which SINCE identifies: its progress time, or a pending DECISION's (None, before any
-    lead joined: the whole room). FIRST and REMINDER are (printed line, posted text). The first alarm comes once.
-    While an alarm's buzz fails, the next run posts it again, at most BUZZ_RETRIES times per stall (finding P); after
-    that, and once one got through, a reminder comes every REMINDER_AFTER x silent-after since the stall's last
-    alarm. The watchdog only alarms; takeovers and the lead after a decision are the architect's (BUILD-STATE
-    2026-11-16, B-5)."""
-    every = alarms_since(a, since, failed=True)
+def stall_alarm(a, since, first, reminder, prefix="", only=None):
+    """The alarms of one stall, which SINCE identifies: its progress time, a pending DECISION's or a request's waiting
+    on Matthew (None, before any lead joined: the whole room). FIRST and REMINDER are (printed line, posted text).
+    The first alarm comes once. While an alarm's buzz fails, the next run posts it again, at most BUZZ_RETRIES times
+    per stall (finding P); after that, and once one got through, a reminder comes every REMINDER_AFTER x silent-after
+    since the stall's last alarm. ONLY, if given, picks the alarms that belong to this stall. The
+    watchdog only alarms."""
+    every = [m for m in alarms_since(a, since, failed=True) if only is None or only(m)]
     if not every:
         print(f"alarm: {first[0]}")
         alarm(a, first[1])
@@ -3002,6 +3001,26 @@ def pending_decision(a, values, playbook):
     return found[-1] if found else None
 
 
+def waiting_request(a, values, playbook):
+    """The request a parked lead waits on Matthew for (M6d, B-6): while the lease is released and room N is the
+    current room, the room's newest trusted lead ESCALATION-n or MERGE-HOLD-n, unless a trusted DECISION-n (from the
+    architect or Matthew) came after it; else None."""
+    room = current_room(playbook, values)
+    if lease_of(values)[0] != "none" or (room and room[0] != a.room):
+        return None
+    msgs = [m for m in map(parse, comments(a.room)) if trusted(m)]
+    asks = [m for m in msgs if m["role"] == "lead" and re.fullmatch(r"(?:ESCALATION|MERGE-HOLD)-\d+",
+                                                                     message_kind(m["text"]) or "")]
+    if not asks:
+        return None
+    ask = asks[-1]
+    n = message_kind(ask["text"]).rsplit("-", 1)[1]
+    if any(m["id"] > ask["id"] and m["role"] in ("architect", "human") and message_kind(m["text"]) == f"DECISION-{n}"
+           for m in msgs):
+        return None
+    return ask
+
+
 def alarm(a, text):
     """Buzz first (click: the room), then post TEXT saying how the buzz went, with no buzz of its own."""
     err = buzz_message(a.room, "watchdog", "LEAD-SILENT", {})
@@ -3024,35 +3043,11 @@ def unreadable_state_alarm(a, path, reason):
         print(f"quiet: state unreadable ({reason}), but progress {span(now - progress)} ago ({what} at "
               f"{iso(progress)}), under {span(a.silent_after)}")
         return 0
-    # only an earlier "state unreadable" alarm reports this, and only as the newest alarm: an ordinary stall alarm,
-    # or one after which the state came back, says nothing of the state being gone now
-    every = alarms_since(a, progress, failed=True)
-
-    def unreadable(m):  # a state unreadable alarm, or its reminder
-        return re.search(r"LEAD-SILENT: (?:still )?state unreadable", m["text"]) is not None
-    seen = [m for m in every if not buzz_failed(m)]
-    seen = seen[-1:] if seen and unreadable(seen[-1]) else []
-    # the cap (finding P, cold M6b R1-9) counts the newest run of state unreadable alarms, failed buzzes included,
-    # so an ordinary stall alarm before them doesn't count, and one after them starts a new count
-    run = []
-    for m in reversed(every):
-        if not unreadable(m):
-            break
-        run.append(m)
-    if seen or len(run) >= ALARM_CAP:
-        # reported, or its buzzes kept failing: a reminder every REMINDER_AFTER x silent-after since the last alarm,
-        # while the state stays unreadable (cold M6b R3-4)
-        newest = [m for m in every if unreadable(m)][-1]
-        if now - (parse_time(newest["at"]) or 0) >= REMINDER_AFTER * a.silent_after:
-            print(f"alarm: still state unreadable ({reason})")
-            alarm(a, f"LEAD-SILENT: still state unreadable ({reason})")
-        elif seen:
-            print(f"quiet: LEAD-SILENT #{seen[-1]['id']} at {seen[-1]['at']} already reports this stall")
-        else:
-            print(f"quiet: {ALARM_CAP} alarms already posted for this stall (state unreadable: {reason})")
-        return 0
-    print(f"alarm: state unreadable ({reason})")
-    alarm(a, f"LEAD-SILENT: state unreadable ({reason})")
+    # only state unreadable alarms report this stall: an ordinary stall alarm says nothing of the state being gone. Its
+    # failed buzzes are retried and its reminders come like any stall's (cold M6b R1-9, R3-4, S4-2; M6d B-6)
+    stall_alarm(a, progress, (f"state unreadable ({reason})", f"LEAD-SILENT: state unreadable ({reason})"),
+                (f"still state unreadable ({reason})", f"LEAD-SILENT: still state unreadable ({reason})"),
+                only=lambda m: re.search(r"LEAD-SILENT: (?:still )?state unreadable", m["text"]) is not None)
     return 0
 
 
@@ -3100,7 +3095,18 @@ def cmd_watchdog(a):
         # and reminders; the architect starts the lead (BUILD-STATE 2026-11-16, B-5)
         d = pending_decision(a, values, playbook) if why == "waiting" else None
         if d is None:
-            print(f"quiet: {text}")
+            # a request still waiting on Matthew: a reminder once REMINDER_AFTER x silent-after has passed since it,
+            # in case its own buzz was lost, then every as long again; no start: Matthew decides (M6d, B-6)
+            ask = waiting_request(a, values, playbook) if why == "waiting" else None
+            t = parse_time(ask["at"]) if ask else None
+            if t is None or time.time() - t < REMINDER_AFTER * a.silent_after:
+                print(f"quiet: {text}")
+                return 0
+            kind = message_kind(ask["text"])
+            print(f"note: {text}, the lease is released, and {kind} #{ask['id']} at {ask['at']} has no decision yet")
+            waiting = (f"still waiting for Matthew: {kind} since {iso(t)}",
+                       f"LEAD-SILENT: still waiting for Matthew: {kind} since {iso(t)} (step {step})")
+            stall_alarm(a, t, waiting, waiting)
             return 0
         kind, t = message_kind(d["text"]), parse_time(d["at"])
         print(f"note: {text}, the lease is released, and no lead has joined since {kind} #{d['id']} at {d['at']}")

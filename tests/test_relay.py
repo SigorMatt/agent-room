@@ -640,7 +640,7 @@ def t_decision_pending_alarms_and_starts_nothing():
     assert text_of(comments()[-1]) == "LEAD-SILENT: still no lead joined after DECISION-1 (step waiting for owner: " \
         "spec 7) (buzz sent)", out(r)
     # a lead message ends that wait; an untrusted decision is none; Matthew's own counts; a lead joining ends it
-    room("say", "1", "lead", "ESCALATION-3: and the farewell?", "--no-buzz", check=True)
+    room("say", "1", "lead", "STATUS: applying DECISION-1", "--no-buzz", check=True)  # not a request (M6d, B-6)
     backdate(lambda c: True, 1000)  # all of that came before the next decision
     human_says("1", "DECISION-2: go on", login="mallory")
     backdate(lambda c: "DECISION-2" in c["body"], 200)
