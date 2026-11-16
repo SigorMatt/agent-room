@@ -1274,6 +1274,43 @@ def t_a_lead_that_still_talks_is_not_taken_over():
     age_room()
 
 
+# --- fixes after the scoped cold review
+
+def t_prestart_a_start_by_hand_after_the_final_alarm_is_watched_again():
+    # cold M6b S1-1: before any lead joins, the architect's LEAD-STARTED opens a new episode too
+    assert "room 5 in SigorMatt/pet" in room("new", "Phase 5", check=True).stdout
+    original = edit_state("PLAYBOOK.md", lambda t: re.sub(r"^room: .*$", "room: 5", t, count=1, flags=re.M))
+    set_state("status=done")  # phase 1 is over
+    room("lease", "release", check=True)
+    try:
+        opened("5", 13)
+        nf = len(fires())
+        assert "started: https://claude.ai/code/" in watchdog(n="5").stdout  # the first start; it never comes online
+        backdate(lambda c: True, 200, "5")
+        assert "started: https://claude.ai/code/" in watchdog(n="5").stdout  # the second
+        backdate(lambda c: True, 200, "5")
+        r = watchdog(n="5")
+        assert "alarm: two takeover leads made no progress; no more starts" in r.stdout and len(fires()) == nf + 2, \
+            out(r)
+        backdate(lambda c: True, 300, "5")
+        room("say", "5", "architect", "LEAD-STARTED: https://claude.ai/code/p3 (plain join line, started by architect)",
+             check=True, ROOM_SESSION="arch")
+        by_hand = comments("5")[-1]["id"]
+        r = watchdog(n="5")  # a new episode: measured from that start
+        assert re.search(rf"^quiet: no lead has joined room 5 yet; LEAD-STARTED #{by_hand} by the architect at \S+, "
+                         r"under 3h00m$", r.stdout, re.M) and len(fires()) == nf + 2, out(r)
+        backdate(lambda c: c["id"] == by_hand, 200, "5")  # the third lead never comes online either
+        n = len(comments("5"))
+        r = watchdog(n="5")
+        assert "alarm: no lead has joined room 5 in 12h" in r.stdout and "started: https://claude.ai/code/" in \
+            r.stdout and len(fires()) == nf + 3, out(r)
+        assert [kind_of(c) for c in comments("5")[n:]] == ["LEAD-SILENT", "LEAD-STARTED"]
+    finally:
+        edit_state("PLAYBOOK.md", lambda t: original)
+        room("lease", "take", check=True)
+    age_room()
+
+
 setup()
 for name, fn in list(globals().items()):
     if name.startswith("t_"):

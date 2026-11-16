@@ -2968,7 +2968,8 @@ def decision_start(m):
 def stall_episode(a, stall, opened=None):
     """The stall's episode (cold M6b R2-1), as {start, by, alarms, starts, sign}. It begins at the later of STALL, the
     progress time, and the newest trusted architect LEAD-STARTED (BY, if that is later): a start by hand opens a new
-    episode. For pre-start (STALL None) the episode is the whole room, opened at OPENED. ALARMS are the episode's
+    episode, before any lead has joined too (cold M6b S1-1). For pre-start (STALL None) the episode is otherwise the
+    whole room, opened at OPENED. ALARMS are the episode's
     trusted watchdog LEAD-SILENTs, STARTS its watchdog takeover LEAD-STARTEDs (a decision start isn't one), and SIGN
     the time of the last sign of a lead: the latest of the episode's start, any trusted LEAD-STARTED (any role) and
     any trusted lead LEAD ONLINE, so a lead that joined by another route holds off the next start."""
@@ -2979,12 +2980,12 @@ def stall_episode(a, stall, opened=None):
 
     def kind(m):
         return message_kind(m["text"])
-    by = None
-    if stall is None:
+    hand = [m for m in msgs if m["role"] == "architect" and kind(m) == "LEAD-STARTED" and
+            (stall is None or when(m) > stall)]
+    by = max(hand, key=lambda m: (when(m), m["id"])) if hand else None
+    if by is None and stall is None:
         start, within = opened or 0, msgs
     else:
-        hand = [m for m in msgs if m["role"] == "architect" and kind(m) == "LEAD-STARTED" and when(m) > stall]
-        by = max(hand, key=lambda m: (when(m), m["id"])) if hand else None
         start = when(by) if by else stall
         within = [m for m in msgs if when(m) > start]
     signs = [when(m) for m in msgs if kind(m) == "LEAD-STARTED" or (m["role"] == "lead" and kind(m) == "LEAD ONLINE")]
@@ -3140,7 +3141,12 @@ def prestart_alarm(a):
         print(f"quiet: no lead has joined room {a.room} yet" +
               (f" (opened {span(time.time() - opened)} ago)" if opened is not None else ""))
         return 0
-    alarm_stage(a, stall_episode(a, None, opened),
+    ep = stall_episode(a, None, opened)
+    if ep["by"] and time.time() - ep["start"] < a.silent_after:  # a start by hand opened a new episode (cold M6b S1-1)
+        print(f"quiet: no lead has joined room {a.room} yet; LEAD-STARTED #{ep['by']['id']} by the architect at "
+              f"{ep['by']['at']}, under {span(a.silent_after)}")
+        return 0
+    alarm_stage(a, ep,
                 (f"no lead has joined room {a.room} in {PRESTART_HOURS}h (opened {iso(opened)})",
                  f"LEAD-SILENT: no lead has joined room {a.room} in {PRESTART_HOURS}h"),
                 f"no lead has joined room {a.room}", takeover=None, prefix=f"no lead has joined room {a.room} yet; ")
