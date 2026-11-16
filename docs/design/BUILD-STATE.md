@@ -20,6 +20,7 @@ The build of the agent-room pipeline v1, as designed in [`v1.md`](v1.md). A fres
 | M6 | Dress rehearsal on `pet-todo` (build lead plays the architect) | Done: phase 1 of pet-todo complete (#2, #3, #4), `DONE` buzz received; findings L to P; waiting on Matthew's decision on successor starts |
 | M6b | Leads started through the lead task's API trigger (`start-lead`), parking while waiting on Matthew, an alarm-only watchdog with reminders (option 1 below; watchdog starts deferred, B-5) | Done (#11): 3 cold rounds, 4 scoped reviews, 5 Qodo fetches; B-5 and B-6 deferred |
 | M6c | Rehearsal of M6b on pet-todo phase 2 (build lead plays the architect) | Done: phase 2 complete (pet-todo #6, #7, #8), two unattended `start-lead` handovers, takeover by starter task; findings T, U, V |
+| M6d | The watchdog starts one takeover per stall (B-5, redesigned simply) and reminds Matthew of a room waiting on him (B-6) (spec `m6d-watchdog.md`) | In progress |
 | M7 | Matthew's owner run, then tag `v1.0.0` | Not started |
 
 ## Pre-approved fallbacks (Matthew, 2026-11-14)
@@ -83,7 +84,7 @@ Results of the eleven assumptions in `v1.md` ("To verify"). Evidence lives in is
 - **S. An agent can edit only the scheduled tasks it created.** `update_trigger` on a task Matthew made in the web UI fails ("created via http_api, not by an agent"), so he edits the lead task himself, and the architect gives him the prompt text.
 - **T. An agent can't fire a task Matthew created in the web UI either** (`fire_trigger` fails: "Agents can only fire routines they created"). So the architect can't start the lead task with a fire action. It creates a one-time *starter task* in the `agent-room` environment that runs `room.py start-lead N architect` (Matthew approves the creation), as M6c's first lead was started on 2026-11-16.
 - **U. An approval pop-up can wait for hours, and a one-time task whose start time has passed can't be created** (`run_once_at must be in the future`). The M6c takeover starter waited about 4 hours for Matthew and then failed, and a second request was needed. So starter tasks run 10 minutes ahead, the architect announces the pop-up, and it recreates the task at once if the time passed (`ARCHITECT.md` 8.4).
-- **V. Every scheduled-task run has a `PushNotification` tool, whatever the task's push setting** (probes 8a and 8b, issue #4: "Mobile push requested"). Its message, wrapped in `<routine_summary>`, goes to Matthew's phone through the Claude app; the notification is titled with the session's first words. Whether it arrives mid-run or only when the run ends is being checked with Matthew; if mid-run, it can replace ntfy (no shared-IP limits, no topic secret).
+- **V. Every scheduled-task run has a `PushNotification` tool, whatever the task's push setting** (probes 8a and 8b, issue #4: "Mobile push requested"). But its pushes don't reach Matthew's phone mid-run: he saw only a notification when a run ended, titled with the session's first words. So it can't replace ntfy, and the paid ntfy plan stays the owner to-do.
 - **C. A new repo may be completely empty** (`pet-todo` has no commits). Preflight detects this, and the architect's kickoff creates the first commit on `main`; no protection can exist yet, so this is safe.
 
 ## Decisions taken during the build
@@ -100,6 +101,7 @@ Results of the eleven assumptions in `v1.md` ("To verify"). Evidence lives in is
 | 2026-11-15 | Matthew buys a paid ntfy plan (owner to-do above) | Finding M: the free plan loses buzzes on shared cloud IPs |
 | 2026-11-15 | Leads start through one lead task per project with an API trigger (option 1), chosen by Matthew after probes 6 and 7 | No approvals, no machine to run, immediate starts; the alternatives stay listed under "Successor-start options" |
 | 2026-11-16 | The watchdog in M6b only alarms, with a 12-hour reminder while a stall lasts and an alarm when no lead joins after a `DECISION`; it starts no leads. Takeovers and the lead after a decision are started by the architect (fire action), as before M6b but without the Code tab. Automatic watchdog starts are deferred (B-5) | Three cold reviews of the watchdog's start rules (R2-1, S2-1, S3-4: all high) each found new interactions between starts, alarms and the decision path; the handover start, which matters most, stays automatic |
+| 2026-11-16 | Matthew: build B-5 and B-6 before M7 (M6d) | B-5 with a deliberately small rule (one start per stall, after its alarm) so it can be verified |
 
 ## Assumptions while Matthew was away (from 2026-11-15 01:24)
 
