@@ -104,12 +104,17 @@ Your session may have no background commands and no scheduling tools (a session 
 
 3. Subagents: start them in the background if the Agent tool offers that, then end your turn; you are woken as each one finishes. If it doesn't, run them one at a time in the foreground, and post a `STATUS` before each one: `python3 room.py say N lead "STATUS: builder for <task> running in the foreground"`.
 4. Never end a turn while you hold the lease, unless a subagent you started is still running. You end for good only by standing down, handing over, parking, `PAUSED`, `STOPPED` or `DONE`, or as a drill says (section 10).
-5. **Park** when you wait only on Matthew. Record it so the watchdog stays quiet, and release the lease:
-   ```bash
-   python3 room.py state set waiting_for_owner=yes step="waiting for owner: <step>"
-   python3 room.py lease release
-   ```
-   Then end. The lead started after his `DECISION` continues.
+5. **Park** when you wait only on Matthew.
+   - First check the buzz of the `ESCALATION-<n>` or `MERGE-HOLD-<n>` you wait on. If it printed `[buzz failed: …]`, Matthew may not know a decision is needed, and the watchdog stays quiet at a parked room. Retry once, with a buzz; if that fails too, park anyway:
+     ```bash
+     python3 room.py say N lead "STATUS: the buzz for <KIND>-<n> failed (<reason>): Matthew, a decision is needed in room N" --buzz
+     ```
+   - Then record it so the watchdog stays quiet, and release the lease:
+     ```bash
+     python3 room.py state set waiting_for_owner=yes step="waiting for owner: <step>"
+     python3 room.py lease release
+     ```
+   - Then end. The lead started after his `DECISION` continues.
 6. Nothing wakes you to read the room. So read it before each `state set step=…`, after each foreground wait, such as a subagent run in the foreground, and whenever a subagent's result wakes you, before you act on that result. Handle what came first (section 9). That is how you see `PAUSE`, `STOP` and `CHANGE-n` mid-mission, during Build too:
    ```bash
    python3 room.py read N lead
@@ -446,4 +451,4 @@ End.
 - **Files under `.claude/`:** you and your builders write any project file under `.claude/` through Python in the shell, never with the file tool, whose approval prompt there would stall an unattended session.
 - **Secrets:** never post secrets, tokens, environment contents or the ntfy topic. Never print or post a `ROOM_FIRE_TOKEN…` variable; `start-lead` reads it itself.
 - **Messages:** under about 300 words, pointing to commits, PRs, files and findings instead of pasting.
-- **`[buzz failed: …]`:** the message is posted. Mention the failure in your next `STATUS`; don't retry.
+- **`[buzz failed: …]`:** the message is posted. Mention the failure in your next `STATUS`; don't retry. The exception is an `ESCALATION` or `MERGE-HOLD` before you park: retry its buzz once (section 3, step 5).
