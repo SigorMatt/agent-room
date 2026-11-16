@@ -3655,7 +3655,7 @@ def session_url(answer, token):
     return "(no session URL in the answer)"
 
 
-def start_refusal(room, role, takeover, force, values, playbook):
+def start_refusal(room, role, takeover, force, values, playbook, sid=None):
     """Why start-lead won't start a lead in ROOM as ROLE, or None (M6b's guards, in order)."""
     found = current_room(playbook, values)
     if found and found[0] != room:
@@ -3672,6 +3672,8 @@ def start_refusal(room, role, takeover, force, values, playbook):
         if status in ("paused", "stopped") and role != "architect":
             return f"status is {status} and the lease is released: only the architect resumes, on Matthew's word"
     if holder != "none" and not takeover:
+        if holder == sid:  # e.g. a handoff whose release failed (cold M6b R2-4)
+            return "this session still holds the lease: run lease release, then start-lead again"
         return (f"the lease is held by {holder}: a lead is running, and a takeover (--takeover) is the watchdog's or "
                 "the architect's call")
     if not force:
@@ -3725,7 +3727,7 @@ def start_lead(a, room, role, takeover=False, force=False):
         return EXIT_NOT_CONFIGURED, f"not configured: {'; '.join(missing)}. See Set up the lead task: {page}"
     if takeover is None:
         takeover = lease_of(values)[0] != "none"
-    why = start_refusal(room, role, takeover, force, values, playbook)
+    why = start_refusal(room, role, takeover, force, values, playbook, session_id(a))
     if why:
         return EXIT_REFUSED, f"refused: {why}"
     version = pinned_version(path)

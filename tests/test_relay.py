@@ -448,7 +448,7 @@ def t_start_lead_guards():
     # the lease held: a lead is running; a takeover is the watchdog's or the architect's call
     room("lease", "take", check=True)
     before = counts()
-    refused(start("lead"), "refused: the lease is held by L1: a lead is running", before)
+    refused(start("lead", ROOM_SESSION="L9"), "refused: the lease is held by L1: a lead is running", before)
     r = start("watchdog", "--takeover", ROOM_SESSION="wd")
     assert r.returncode == 0, out(r)
     assert request(fires()[-1])["body"] == {"text": JOIN.format(n=1, v="main") + TAKEOVER}
@@ -1014,6 +1014,20 @@ def t_join_line_preflight_and_handoff_refuse_a_pin_the_prompt_rejects():
         assert r.returncode == 0 and "✓ state branch has PLAYBOOK.md and DESIGN.md, pinned to v1.2.3" in r.stdout, out(r)
     finally:
         edit_state("PLAYBOOK.md", lambda t: original)
+
+
+# --- fixes after cold review round 2
+
+def t_start_lead_says_when_the_caller_holds_the_lease():
+    # cold M6b R2-4: a lead whose release failed must tell its own lease from a running lead's
+    online()
+    before = counts()
+    r = start("lead")  # L1 holds the lease
+    refused(r, "", before)
+    assert r.stderr.strip() == "refused: this session still holds the lease: run lease release, then start-lead " \
+        "again", out(r)
+    r = start("lead", ROOM_SESSION="L9")
+    refused(r, "refused: the lease is held by L1: a lead is running", before)
 
 
 setup()
