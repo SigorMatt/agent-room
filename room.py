@@ -1518,6 +1518,8 @@ def cmd_preflight(a):
             if not value:
                 check("✗", f"state branch: PLAYBOOK.md has no pipeline version: add `pipeline: vX.Y.Z` to "
                            f"PLAYBOOK.md{who}")
+            elif re.fullmatch(r"v\d+(\.\d+)*(-[\w.]+)?", value) and pin_rejected(value):
+                check("✗", f"state branch: {pin_rejected(value)}{who}")  # a pre-release pin (cold M6b R1-6)
             elif re.fullmatch(r"v\d+(\.\d+)*(-[\w.]+)?", value):
                 check("✓", f"state branch has PLAYBOOK.md and DESIGN.md, pinned to {value}")
             elif value == "main":
@@ -3220,7 +3222,13 @@ def join_line(room, takeover=False, version=None):
 
 
 def cmd_join_line(a):
-    print(join_line(a.room, a.takeover))
+    version = pinned_version()
+    text = join_line(a.room, a.takeover, version=version)
+    rejected = pin_rejected(version, text)  # the architect fires this line: the lead task would end at once
+    if rejected:
+        print(rejected, file=sys.stderr)
+        return EXIT_NOT_CONFIGURED
+    print(text)
 
 
 def cmd_handoff(a):
@@ -3274,9 +3282,16 @@ def cmd_handoff(a):
         print(f"HANDOFF is posted; run '{ME} lease release' again", file=sys.stderr)
         return 1
     print(f"recorded step {step}, cursor {cursor}, intent none; lease released by {sid}")
+    version = pinned_version(path)
+    text = join_line(a.room, version=version)
+    rejected = pin_rejected(version, text)  # the handoff is done either way; only the line would be useless
     print(f"Start the successor: {ME} start-lead {a.room} lead --repo {REPO}. If it exits 6, or 1 twice: "
-          f"{ME} say {a.room} lead 'NEXT-LEAD-NEEDED: ...' --repo {REPO}. The join line, for a start by hand:")
-    print(join_line(a.room, version=pinned_version(path)))
+          f"{ME} say {a.room} lead 'NEXT-LEAD-NEEDED: ...' --repo {REPO}." +
+          ("" if rejected else " The join line, for a start by hand:"))
+    if rejected:
+        print(rejected, file=sys.stderr)
+    else:
+        print(text)
 
 
 def is_merged(p):
@@ -3558,6 +3573,14 @@ def prompt_form():
     return re.compile(form + f"(?:{re.escape(TAKEOVER_SENTENCE)})?")
 
 
+def pin_rejected(version, text=None):
+    """Why the lead task's prompt would reject the join line pinned to VERSION (TEXT, else a sample join line), or
+    None. start-lead, join-line, handoff and preflight all check pins here (cold M6b R1-6)."""
+    if prompt_form().fullmatch(text if text is not None else join_text(1, version)):
+        return None
+    return f"pin {version} isn't accepted by the lead task's prompt: pin main or a release vX.Y.Z"
+
+
 def lead_task_id(playbook):
     """The lead task's ID from PLAYBOOK.md's `lead-task:` line, or None."""
     m = LEAD_TASK.search(playbook or "")
@@ -3707,8 +3730,9 @@ def start_lead(a, room, role, takeover=False, force=False):
         return EXIT_REFUSED, f"refused: {why}"
     version = pinned_version(path)
     text = join_line(room, takeover, version=version)
-    if not prompt_form().fullmatch(text):  # a pre-release pin: the started session would end at once (cold M6b R1-6)
-        return EXIT_NOT_CONFIGURED, f"pin {version} isn't accepted by the lead task's prompt"
+    rejected = pin_rejected(version, text)  # a pre-release pin: the started session would end at once (cold M6b R1-6)
+    if rejected:
+        return EXIT_NOT_CONFIGURED, rejected
     status, answer = fire(task, token, text)
     if status == 200 and isinstance(answer, dict) and answer.get("type") == "routine_fire":
         url = session_url(answer, token)
