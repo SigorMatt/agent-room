@@ -14,17 +14,24 @@ A lead that doesn't recognise the notice may treat a stopped builder as a failed
 
 ## `LEAD.md`
 
-A new item in section 3 (Waiting): **"After a container restart."** When a notice says the container restarted:
+A new item in section 3 (Waiting): **"After a container restart."** When a notice says the container restarted (the stopped subagents' work matters: builders never push, so their commits are only on local branches in this container):
 
-1. **Nothing else moved.** The lease, the state and the room are as they were, so don't take the lease again or re-post anything. Read the room (`python3 room.py read N lead`) and handle it as at any wake (section 9).
-2. **For each stopped builder or reviewer:**
-   - Look at its worktree with `git -C <worktree> status --short` and `git -C <worktree> log --oneline -3`. Its commits are kept; its uncommitted edits may be partial.
-   - Resume it by sending it a message, using the ID the notice gives. Say that the container restarted, that its uncommitted edits are still in its worktree, and that it should review them, finish its task and report as briefed.
-   - If resuming fails (no transcript), start a fresh one with the full brief. It gets its own new worktree, so add the stopped builder's worktree path and what is there: its commits on its branch, and any uncommitted edits. The fresh builder may look at them and take over what is sound, or ignore them.
+1. **Already ended?** If the session already made its last post (`HANDOFF`, `PAUSED`, `STOPPED`, a park, or a drill's end), the notice changes nothing: resume nothing, post nothing, end again (section 6, step 4; section 11; cold M6e R1-4).
+2. **Read the room first** (`python3 room.py read N lead`); don't take the lease again or re-post anything. Until resumed, the stopped subagents count as running (cold M6e R1-1).
+   - **A `STOP`:** handle it as section 9 says; the stopped subagents stay stopped.
+   - **Anything else, a `PAUSE` included:** points 3 to 5 first, then handle the room as at any wake (section 9). A `PAUSE` then lets the resumed builders finish like running builders, before `PAUSED`.
+3. **Resume each stopped subagent,** of any kind (builder, cold reviewer, Qodo reader, planner, auditor), by message with the ID the notice gives (cold M6e R1-3):
+   - **A builder:** first look at its worktree, recorded under "Tasks in flight" (5.2 step 1 records each builder's worktree path, from the Agent tool's result or `git worktree list`; cold M6e R1-5), with `git -C <worktree> status --short` and `git -C <worktree> log --oneline -3`. Its commits are kept; its uncommitted edits may be partial. The message says that the container restarted, that its uncommitted edits are still in its worktree, and that it should review them, finish its task and report as briefed.
+   - **Any other subagent:** "the container restarted; continue and report as briefed" (cold M6e R1-2).
+   - **If resuming fails** (no transcript), a fresh one follows its own step's rules (cold M6e R1-2):
+     - **A builder:** the full brief. It gets its own new worktree, so the brief adds the stopped builder's worktree path and what is there (its commits on its branch, and any uncommitted edits), which it may look at and take over where sound, or ignore. It adds the stopped builder's last follow-up, if any: a `QUESTION`'s answer, or the failed check's last 10 lines, as in section 9 step 5 (cold M6e R1-7). The fresh builder's ID replaces the stopped one's under "Tasks in flight", committed with `state commit` (cold M6e R1-6).
+     - **A cold reviewer:** the cold brief and nothing else (5.3 step 2): none of the stopped reviewer's notes or partial report.
+     - **A Qodo reader:** its brief. When it reports, every fetch either reader archived is committed (5.5 step 3), so the fetches stay numbered 1 to k.
+     - **A planner or an auditor:** its brief.
    - None of this counts as a failed attempt (5.2, step 4).
-3. **A stopped wait or check** (a suite run, a Qodo wait) is run again.
-4. **Then post a `STATUS`:** `STATUS: container restarted; resumed <what>`. It is also a sign of life (section 11).
-5. **Redo nothing already done.** Whatever was posted, pushed or merged before the restart stands. Check the room and the branch before acting, as after a compaction.
+4. **The lead's own stopped commands are run again:** a suite run, `room.py wait`, a check. A Qodo reader is a subagent: it is resumed (point 3), not run again (cold M6e R1-3).
+5. **Then post a `STATUS`:** `STATUS: container restarted; resumed <what>`. It is also a sign of life (section 11).
+6. **Redo nothing already done.** Whatever was posted, pushed or merged before the restart stands. Before acting, check the room, `state get step`, the mission branch and any recorded intent, with `reconcile` and its hint as in section 2 step 8 (cold M6e R1-8).
 
 In section 11, the "Delegate" rule ("Resume a builder for follow-ups; if resuming fails, start a fresh one with the full brief") gets a pointer to the new item.
 
