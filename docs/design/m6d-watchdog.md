@@ -10,7 +10,9 @@ The watchdog's alarm logic (`stall_alarm`, called for pre-start, a pending decis
 
 **It starts a lead when all of these hold:**
 1. **Alarmed:** the stall already has a trusted watchdog `LEAD-SILENT` newer than `since` (any room alarm, for pre-start). This may be the one just posted, and it's counted even if its buzz failed. A start never precedes its alarm.
-2. **One start per stall:** the room has no trusted `LEAD-STARTED` from any role newer than `since` (any `LEAD-STARTED` at all, for pre-start). A start by the architect counts too, and so does an unconfirmed one.
+2. **One start per stall:** both of these hold.
+   - The room has no trusted `LEAD-STARTED` from the architect or the watchdog newer than `since` (none at all, for pre-start). An unconfirmed one counts. A lead's own handover start doesn't: its successor is what stalled (qodo PR #14, finding 2).
+   - No trusted lead `LEAD ONLINE` is newer than the stall's first alarm. A lead that joined after the alarm was this stall's start, by the watchdog, the architect or Matthew by hand, even if its `LEAD-STARTED` was never posted (qodo PR #14, finding 1).
 3. **Nobody is talking:** the room has no trusted lead message of any kind (`LEAD ONLINE`, `STATUS` and so on) newer than now minus `silent-after`. A lead that has just joined, or is still talking, is never displaced. A lead that loops while talking keeps getting alarms and reminders, and the architect decides.
 4. **Configured:** the lead task is configured (`lead-task:` line and token).
 
@@ -29,8 +31,12 @@ The watchdog's alarm logic (`stall_alarm`, called for pre-start, a pending decis
 
 **Order of operations:** the alarm is posted before the start, always, so a failed alarm post exits 1 before anything is fired. The `LEAD-STARTED` post keeps its retries and its de-duplication.
 
+**Known limits:**
+- **A lost `LEAD-STARTED` and no join:** if the fire worked, all three posts of `LEAD-STARTED` failed, and the lead never joined, the next run starts another. Nothing joined, so that is a second try, not a second lead.
+- **Two runs at once:** the watchdog is one hourly scheduled task whose run takes about a minute, so its runs don't overlap. If two did (Matthew runs it by hand during a scheduled run), both could fire within the same seconds. The lease then lets one lead work: a plain lead finds the lease held and ends, and of two takeovers the first loses the lease and stops at its next write (qodo PR #14, finding 3).
+
 **What it means per path:**
-- **An ordinary stall** (the lease held by a dead lead, or released after a handover whose successor never came): one takeover or plain start after the first alarm. If that lead also dies before progress, it's the same stall: reminders, no second start.
+- **An ordinary stall** (the lease held by a dead lead, or released after a handover whose successor never came or joined and died): one takeover or plain start after the first alarm. If that lead also dies before progress, it's the same stall: reminders, no second start.
 - **A lead that joined at `waiting for owner` and died** (cold M6b R1-1): `since` is that lead's `LEAD ONLINE`, a new stall, so one takeover is allowed.
 - **A pending `DECISION`:** if the architect started no lead, the watchdog starts one plain lead after its "no lead joined after DECISION-n" alarm, which comes `silent-after` after the decision. If the architect's start failed, its `LEAD-STARTED` counts, and the watchdog only reminds.
 - **Pre-start:** after the 12-hour alarm, one plain start if no `LEAD-STARTED` exists in the room.
@@ -43,12 +49,13 @@ The watchdog task's prompt doesn't change: room.py does the posting and starting
 - **When it applies:**
   - the step starts with `waiting for owner`;
   - the lease is released (a parked lead);
+  - room N is recorded as the current room, in `PLAYBOOK.md` or the machine block (a room nothing records gets no reminder, qodo PR #14, finding 6);
   - the room's newest trusted lead request, an `ESCALATION-n` or `MERGE-HOLD-n`, has no trusted `DECISION-n` after it.
-- **What it posts:** once `REMINDER_AFTER` × `silent-after` (12 hours by default) has passed since that request, `LEAD-SILENT: still waiting for Matthew: <KIND>-<n> since <time> (step <step>)`. It does this through `stall_alarm`, with `since` = the request's time and that text as both first and reminder, so it repeats every 12 hours under the same failed-buzz retry rules.
+- **What it posts:** once `REMINDER_AFTER` × `silent-after` (12 hours by default) has passed since that request, `LEAD-SILENT: still waiting for Matthew: <KIND>-<n> since <time> (step <step>)`. It does this through `stall_alarm`, with `since` = the request's time and that text as both first and reminder, so it repeats every 12 hours under the same failed-buzz retry rules. Only its own reminders for that request count as this stall's alarms; a state unreadable alarm posted while it waited doesn't delay it (qodo PR #14, finding 5).
 - **No start:** Matthew must decide.
 - **Why:** this catches a request whose own buzz was lost (ntfy's limit, cold M6b R3-8 and S4-4), and an owner who forgot.
 
-**State unreadable:** a `still state unreadable` reminder whose buzz failed is posted again at the next run, at most `BUZZ_RETRIES` times, like other reminders (cold M6b S4-2). Simplest is to route that alarm through `stall_alarm` too, keeping its texts.
+**State unreadable:** a `still state unreadable` reminder whose buzz failed is posted again at the next run, at most `BUZZ_RETRIES` times, like other reminders (cold M6b S4-2). Simplest is to route that alarm through `stall_alarm` too, keeping its texts. As before M6d, only the newest run of state unreadable alarms counts, the ones after the stall's last other alarm: an outage that comes back after an ordinary alarm gets a new first alarm (qodo PR #14, finding 4).
 
 ## Docs
 
@@ -69,7 +76,8 @@ All offline, in `tests/test_relay.py` or a new `tests/test_m6d.py`.
 **B-5:**
 - A start after the alarm, in each path: stall with the lease held (takeover), stall with the lease released (plain), decision, pre-start, and a lead that joined at waiting and died.
 - No start without an alarm.
-- No second start for the same stall: after a watchdog start, an architect start, or an unconfirmed start.
+- No second start for the same stall: after a watchdog start, an architect start, an unconfirmed start, or a lead that joined after the alarm with no `LEAD-STARTED` posted.
+- A start after a handover whose successor never joined, and after one whose successor joined and died.
 - No start while any lead message is under `silent-after` old.
 - A definite failure is retried at the next run.
 - Not configured (6) and refused (3) print a note only.
@@ -80,4 +88,6 @@ All offline, in `tests/test_relay.py` or a new `tests/test_m6d.py`.
 - The waiting reminder comes at 12 hours, repeats, and retries a failed buzz.
 - No reminder once a `DECISION` came, or while the lease is held.
 - No start on this path.
-- The state-unreadable reminder retry.
+- The state-unreadable reminder retry, and a new first alarm for an outage that comes back after an ordinary alarm.
+- A state unreadable alarm during the wait doesn't delay the waiting reminder.
+- No reminder when no room is recorded.
