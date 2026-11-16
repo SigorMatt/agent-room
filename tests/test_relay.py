@@ -724,6 +724,7 @@ def t_watchdog_starts_the_lead_after_a_decision():
     # the started lead joins, escalates again and parks; Matthew's own decision counts
     online()
     room("say", "1", "lead", "ESCALATION-2: and the farewell?", "--no-buzz", check=True)
+    age_room()  # all that came before the decision
     human_says("1", "DECISION-2: go on")
     backdate(lambda c: "DECISION-2" in c["body"], 45)
     r = watchdog()
@@ -1235,16 +1236,16 @@ def t_a_decision_start_is_tried_twice_then_alarmed():
     assert "start: step is waiting for owner: spec 70" in r.stdout and len(fires()) == nf + 1, out(r)
     assert text_of(comments()[-1]).endswith("started by watchdog after DECISION-8)")
     assert watchdog().stdout.strip() == quiet and len(fires()) == nf + 1, "held off while that lead may be joining"
-    backdate(lambda c: c["id"] >= decision, 200)  # that lead never joined
+    after_decision(decision, 200)  # that lead never joined
     r = watchdog()
     assert "start: " in r.stdout and len(fires()) == nf + 2, out(r)
     assert text_of(comments()[-1]).endswith("started by watchdog after DECISION-8)")
-    backdate(lambda c: c["id"] >= decision, 200)  # nor did the second
+    after_decision(decision, 200)  # nor did the second
     n = len(comments())
     r = watchdog()
     assert r.returncode == 0 and "alarm: no lead joined after DECISION-8" in r.stdout and len(fires()) == nf + 2, out(r)
-    assert [text_of(c) for c in comments()[n:]] == ["LEAD-SILENT: no lead joined after DECISION-8 (step waiting for "
-                                                    "owner: spec 70) (buzz sent)"], out(r)
+    assert [text_of(c) for c in comments()[n:]] == ["LEAD-SILENT: no lead joined after DECISION-8; no more starts (step "
+                                                    "waiting for owner: spec 70) (buzz sent)"], out(r)
     r = watchdog()  # once
     assert r.stdout.strip() == quiet and len(comments()) == n + 1 and len(fires()) == nf + 2, out(r)
     room("lease", "take", check=True)
@@ -1389,6 +1390,153 @@ def t_a_lead_started_that_landed_is_not_posted_twice():
     assert r.returncode == 0 and "wasn't posted" not in r.stdout, out(r)
     assert [kind_of(c) for c in comments()[nc:]] == ["LEAD-STARTED"], [text_of(c) for c in comments()[nc:]]
     online()
+
+
+def t_a_looping_lead_gets_reminders():
+    # cold M6b S2-1: alarms don't depend on starts; a lead that keeps posting STATUS without progress is never taken
+    # over, but it gets the first alarm and then a reminder every 4 x silent-after
+    online()
+    backdate(lambda c: True, 1000)  # older than this stall, so it is one episode
+    t = set_state("step=build 100", hours=14)  # L1 holds the lease, and loops
+    room("say", "1", "lead", "STATUS: builder for task 3 running in the foreground", "--no-buzz", check=True)
+    nf, n = len(fires()), len(comments())
+    r = watchdog()
+    assert "alarm: no progress for 14h" in r.stdout and len(fires()) == nf, out(r)
+    [first] = comments()[n:]
+    assert "(start held off: a lead showed signs at " in text_of(first), text_of(first)
+    assert "already reports this stall" in watchdog().stdout and len(comments()) == n + 1
+    backdate(lambda c: c["id"] == first["id"], 730)  # 12h10m ago
+    room("say", "1", "lead", "STATUS: still running", "--no-buzz", check=True)
+    n = len(comments())
+    r = watchdog()
+    assert "alarm: still no progress since " in r.stdout and len(fires()) == nf, out(r)
+    assert [text_of(c) for c in comments()[n:]] == [f"LEAD-SILENT: still no progress since {iso(t)} (0 takeover starts "
+                                                    f"so far; step build 100, mission M1) (buzz sent)"], out(r)
+    online()
+    set_state("step=build 101")
+    age_room()
+
+
+def t_each_episode_judges_its_own_final_alarm():
+    # cold M6b S2-6: a second final alarm belongs to the second episode, so it isn't taken as reported by the first
+    # episode's; within that episode's cap of three, its failed buzz can't be re-posted, and the watchdog says so
+    online()
+    age_room()
+    sa = ("--silent-after", "1h")
+    set_state("step=build 110", hours=20)
+    n0 = len(comments())
+    assert "started: https://claude.ai/code/" in watchdog(*sa).stdout
+    first = comments()[n0]["id"]
+    backdate(lambda c: c["id"] >= first, 70)
+    assert "started: https://claude.ai/code/" in watchdog(*sa).stdout
+    backdate(lambda c: c["id"] >= first, 70)
+    assert "alarm: two takeover leads made no progress; no more starts" in watchdog(*sa).stdout
+    final1 = comments()[-1]["id"]
+    backdate(lambda c: c["id"] >= first, 300)
+    room("lease", "take", "--takeover", check=True, ROOM_SESSION="T9")  # Matthew's Run now: no LEAD-STARTED
+    room("say", "1", "lead", "LEAD ONLINE", "--no-buzz", check=True, ROOM_SESSION="T9")
+    t9 = comments()[-1]["id"]
+    backdate(lambda c: c["id"] == t9, 240)
+    r = watchdog(*sa)
+    assert f"alarm: no progress for 4h00m (LEAD ONLINE #{t9} after the final alarm" in r.stdout and \
+        "started: https://claude.ai/code/" in r.stdout, out(r)
+    backdate(lambda c: c["id"] > t9, 170)
+    r = watchdog(*sa)
+    assert "alarm: the lead started at " in r.stdout and "started: https://claude.ai/code/" in r.stdout, out(r)
+    backdate(lambda c: c["id"] > t9, 100)
+    r = watchdog(*sa, ROOM_NTFY_TOPIC=None)
+    assert "alarm: two takeover leads made no progress; no more starts" in r.stdout, out(r)
+    assert text_of(comments()[-1]).endswith("(buzz failed: ROOM_NTFY_TOPIC is not set)")
+    n = len(comments())
+    r = watchdog(*sa)
+    assert f"LEAD-SILENT #{final1} " not in r.stdout and "quiet: 3 alarms already posted for this stall" in \
+        r.stdout and len(comments()) == n, out(r)
+    room("lease", "take", "--takeover", check=True)
+    online()
+    set_state("step=build 111")
+    age_room()
+
+
+def after_decision(decision, minutes):
+    """Backdate the decision and what came after it: the decision MINUTES + 60 ago, the rest MINUTES ago, so each start
+    stays after its decision, as in a real room."""
+    backdate(lambda c: c["id"] == decision, minutes + 60)
+    backdate(lambda c: c["id"] > decision, minutes)
+
+
+def park(n, what, step):
+    """The lead escalates (five hours ago), records the waiting step and releases the lease."""
+    room("say", "1", "lead", f"ESCALATION-{n}: {what}", "--no-buzz", check=True)
+    backdate(lambda c: f"ESCALATION-{n}:" in c["body"], 300)
+    set_state("waiting_for_owner=yes", f"step=waiting for owner: {step}", hours=5)
+    room("lease", "release", check=True)
+
+
+def t_a_failing_decision_start_is_alarmed():
+    # cold M6b S2-2: a decision start that fails posts nothing, so the decision path's own alarms say so
+    online()
+    backdate(lambda c: True, 1000)  # older than this decision, so it is one episode
+    park(9, "which colour scheme?", "spec 120")
+    human_says("1", "DECISION-9: dark")  # Matthew, on GitHub
+    decision = comments()[-1]["id"]
+    backdate(lambda c: c["id"] == decision, 45)
+    nf, n = len(fires()), len(comments())
+    r = watchdog(ROOM_FIRE_TOKEN_PET=None)
+    assert "note: no lead started: not configured" in r.stdout and len(comments()) == n, out(r)
+    backdate(lambda c: c["id"] == decision, 800)  # silent-after has passed since the decision
+    r = watchdog(ROOM_FIRE_TOKEN_PET=None)
+    [first] = comments()[n:]
+    assert text_of(first).startswith("LEAD-SILENT: no lead joined after DECISION-9 (step waiting for owner: spec 120) "
+                                     "(last start failed: not configured: neither ROOM_FIRE_TOKEN_PET nor "
+                                     "ROOM_FIRE_TOKEN is set") and text_of(first).endswith("(buzz sent)"), out(r)
+    r = watchdog(FAKE_FIRE_STATUS="503", FAKE_FIRE_BODY="overloaded")
+    assert "start failed: lead task not started: HTTP 503" in r.stdout and len(comments()) == n + 1, out(r)
+    backdate(lambda c: c["id"] == first["id"], 730)
+    r = watchdog(FAKE_FIRE_STATUS="503", FAKE_FIRE_BODY="overloaded")
+    assert [text_of(c) for c in comments()[n + 1:]] == [
+        "LEAD-SILENT: still no lead joined after DECISION-9 (0 starts so far; step waiting for owner: spec 120) "
+        "(last start failed: lead task not started: HTTP 503: overloaded) (buzz sent)"], out(r)
+    assert len(fires()) == nf + 2, "the 503s; no token, no request"
+    room("lease", "take", check=True)
+    set_state("step=build 120")
+    online()
+    age_room()
+
+
+def t_a_start_by_hand_after_a_decision_final_is_watched():
+    # cold M6b S2-3: after the decision path's final alarm, the architect's start by hand opens a new episode
+    online()
+    age_room()
+    park(10, "which typeface?", "spec 130")
+    quiet = "quiet: step is waiting for owner: spec 130"
+    room("say", "1", "architect", "DECISION-10: a serif", check=True, ROOM_SESSION="arch")
+    decision = comments()[-1]["id"]
+    backdate(lambda c: c["id"] == decision, 45)
+    nf = len(fires())
+    assert "start: " in watchdog().stdout
+    after_decision(decision, 200)
+    r = watchdog()
+    assert "alarm: the lead started at " in r.stdout and "start: " in r.stdout, out(r)
+    after_decision(decision, 200)
+    r = watchdog()
+    assert "alarm: no lead joined after DECISION-10; no more starts" in r.stdout and len(fires()) == nf + 2, out(r)
+    assert watchdog().stdout.strip() == quiet
+    backdate(lambda c: c["id"] >= decision, 300)
+    room("say", "1", "architect", "LEAD-STARTED: https://claude.ai/code/d3 (plain join line, started by architect)",
+         check=True, ROOM_SESSION="arch")
+    by_hand = comments()[-1]["id"]
+    assert watchdog().stdout.strip() == quiet, "a new episode, held off for silent-after"
+    backdate(lambda c: c["id"] == by_hand, 200)  # that lead never joined either
+    n = len(comments())
+    r = watchdog()
+    assert "alarm: no lead joined after DECISION-10" in r.stdout and len(fires()) == nf + 3, out(r)
+    assert [text_of(c) for c in comments()[n:]][0] == ("LEAD-SILENT: no lead joined after DECISION-10 (step waiting "
+                                                       "for owner: spec 130) (buzz sent)"), out(r)
+    assert text_of(comments()[-1]).endswith("(plain join line, started by watchdog after DECISION-10)")
+    room("lease", "take", check=True)
+    set_state("step=build 130")
+    online()
+    age_room()
 
 
 setup()
