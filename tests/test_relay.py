@@ -184,8 +184,9 @@ def backdate(pred, minutes, n="1"):
 
 
 def age_watchdog(n="1"):
-    """Push the watchdog's messages back ten hours, so they belong to an earlier stall."""
-    backdate(lambda c: "role=watchdog" in c["body"], 600, n)
+    """Push every message of room N back ten hours, so the watchdog's belong to an earlier stall, and no LEAD-STARTED
+    or LEAD ONLINE is a recent sign of a lead (cold M6b R2-1)."""
+    backdate(lambda c: True, 600, n)
 
 
 def age_room(n="1"):
@@ -523,6 +524,7 @@ def t_handoff_then_start_lead():
 # --- watchdog
 
 def t_watchdog_takeover_after_an_alarm():
+    age_watchdog()  # the handoff's start and its lead's LEAD ONLINE are signs of a lead: let them age
     set_state("step=build 1", hours=5)
     nf, nb, before = len(fires()), len(buzzes()), state_sha()
     r = watchdog()
@@ -564,11 +566,11 @@ def t_watchdog_retries_a_failed_start():
     assert r.returncode == 0 and "alarm: no progress for 5h" in r.stdout, out(r)
     assert "start failed: lead task not started: HTTP 503: overloaded; the next run tries again" in r.stdout, out(r)
     assert len(comments()) == nc + 1 and kind_of(comments()[-1]) == "LEAD-SILENT"
-    r = watchdog()  # the stall is reported, but no lead was started for it: try again
+    r = watchdog()  # no lead came online meanwhile: try again
     assert "already reports this stall" in r.stdout and "started: https://claude.ai/code/" in r.stdout, out(r)
     assert kind_of(comments()[-1]) == "LEAD-STARTED" and len(fires()) == nf + 2
     assert "already started a lead for this stall" in watchdog().stdout and len(fires()) == nf + 2
-    # exit 6 and 3 are notes, and change nothing else
+    # exit 6 is a note, and changes nothing else
     age_watchdog()
     set_state("step=build 4", hours=5)
     nc = len(comments())
@@ -576,15 +578,47 @@ def t_watchdog_retries_a_failed_start():
     assert r.returncode == 0 and "note: no lead started: not configured: neither ROOM_FIRE_TOKEN_PET" in r.stdout, \
         out(r)
     assert len(comments()) == nc + 1 and len(fires()) == nf + 2, "the alarm only"
-    room("say", "1", "architect", "LEAD-STARTED: https://claude.ai/code/z (takeover join line, started by architect)",
+
+
+def t_watchdog_never_displaces_a_lead_that_joined_another_way():
+    # cold M6b R2-1: after a failed or refused start, a lead that joined by another route (the architect's start by
+    # hand, Matthew in the Code tab, or a start whose request timed out) holds off the next start for silent-after
+    age_watchdog()
+    set_state("step=build 40", hours=5)
+    nf = len(fires())
+    r = watchdog(FAKE_FIRE_STATUS="503", FAKE_FIRE_BODY="overloaded")
+    assert "alarm: no progress for 5h" in r.stdout and "start failed" in r.stdout, out(r)
+    # the architect starts a takeover by hand (ARCHITECT.md 9.5), and it joins: a new episode, measured from the start
+    room("say", "1", "architect", "LEAD-STARTED: https://claude.ai/code/h (takeover join line, started by architect)",
          check=True, ROOM_SESSION="arch")
+    by_hand = comments()[-1]["id"]
+    room("lease", "take", "--takeover", check=True, ROOM_SESSION="T4")
+    room("say", "1", "lead", "LEAD ONLINE", "--no-buzz", check=True, ROOM_SESSION="T4")
+    n = len(comments())
     r = watchdog()
-    assert r.returncode == 0 and "note: no lead started: refused: LEAD-STARTED #" in r.stdout and \
-        "a lead is still starting" in r.stdout, out(r)
-    assert len(fires()) == nf + 2
-    online()  # the architect's lead came; it then stalls too
+    assert r.returncode == 0 and re.search(rf"^quiet: progress \d+s ago \(LEAD-STARTED #{by_hand} by the architect at "
+                                           r"\S+\), under 3h00m$", r.stdout, re.M), out(r)
+    assert len(fires()) == nf + 1 and len(comments()) == n, "no start, no alarm"
+    # a lead that joined with no LEAD-STARTED at all (the first start's request timed out, or the Code tab)
+    room("lease", "take", "--takeover", check=True)
+    age_watchdog()
+    set_state("step=build 41", hours=5)
+    nf = len(fires())
+    r = watchdog(FAKE_FIRE_FAIL="Operation timed out after 30001 milliseconds")
+    assert "alarm: no progress for 5h" in r.stdout and "start failed" in r.stdout, out(r)
+    room("lease", "take", "--takeover", check=True, ROOM_SESSION="T5")
+    room("say", "1", "lead", "LEAD ONLINE", "--no-buzz", check=True, ROOM_SESSION="T5")
+    joined = comments()[-1]["id"]
     r = watchdog()
-    assert "started: https://claude.ai/code/" in r.stdout and len(fires()) == nf + 3, out(r)
+    assert "already reports this stall" in r.stdout and "note: no start yet: the last sign of a lead came " in \
+        r.stdout, out(r)
+    assert len(fires()) == nf + 1
+    backdate(lambda c: c["id"] == joined, 200)  # that lead has made no progress for silent-after: take it over
+    r = watchdog()
+    assert "started: https://claude.ai/code/" in r.stdout and len(fires()) == nf + 2, out(r)
+    assert text_of(comments()[-1]).endswith("(takeover join line, started by watchdog)")
+    room("lease", "take", "--takeover", check=True)
+    online()
 
 
 def t_watchdog_no_start():
@@ -895,6 +929,7 @@ def t_waiting_for_owner_with_the_lease_held():
     room("say", "1", "architect", "DECISION-6: serif", check=True, ROOM_SESSION="arch")
     room("say", "1", "architect", "LEAD-STARTED: https://claude.ai/code/b (plain join line, started by architect)",
          check=True, ROOM_SESSION="arch")
+    by_hand = comments()[-1]["id"]
     # the started lead joins, then stops before it moves the step on
     room("lease", "take", check=True, ROOM_SESSION="L2")
     room("say", "1", "lead", "LEAD ONLINE", "--no-buzz", check=True, ROOM_SESSION="L2")
@@ -905,7 +940,7 @@ def t_waiting_for_owner_with_the_lease_held():
         "running" in r.stdout, out(r)
     assert re.search(rf"^quiet: progress \d+s ago \(LEAD ONLINE #{joined} at \S+\), under 3h00m$", r.stdout, re.M), out(r)
     assert counts() == before
-    backdate(lambda c: c["id"] == joined, 200)
+    backdate(lambda c: c["id"] >= by_hand, 200)  # the start by hand and the join, 3h20m ago
     r = watchdog()
     assert r.returncode == 0 and f"alarm: no progress for 3h20m (LEAD ONLINE #{joined} at " in r.stdout, out(r)
     alarm, started = comments()[-2:]
@@ -950,7 +985,8 @@ def t_a_second_start_when_the_started_lead_makes_no_progress():
     r = watchdog()  # no second start right after it joined
     assert "already reports this stall" in r.stdout and "already started a lead for this stall" in r.stdout, out(r)
     assert len(fires()) == nf + 1
-    backdate(lambda c: c["id"] == t1, 200)
+    backdate(lambda c: c["id"] >= first["id"], 200)  # its start and its join, 3h20m ago
+    first = next(c for c in comments() if c["id"] == first["id"])
     n = len(comments())
     r = watchdog()
     phrase = f"the lead started at {first['created_at']} made no progress"
