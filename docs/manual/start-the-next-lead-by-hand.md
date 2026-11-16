@@ -36,10 +36,18 @@ Normally you don't: each lead starts the next through the lead task, the watchdo
 2. Takeover only: if the old lead's session is still open, archive it.
 3. Start the lead through the lead task: open `https://claude.ai/code/routines`, open the task `agent-room lead SigorMatt/<repo>`, press **Run now**, and paste the line as its text.
 4. Or, with no lead task, in the Code tab: start a new session, repository `SigorMatt/<repo>`, environment `agent-room`. Paste the line and send.
-5. Never delete the lead task. Deleting a task deletes every session it started, the leads included.
+5. Send the architect the new session's link (in a browser, its address), filled in:
+
+   ```text
+   The lead for room N is started: <link>
+   ```
+
+   It posts `LEAD-STARTED` for that session, so the watchdog keeps watching the new lead. If you can't find the link, say so: the architect's earlier `LEAD-STARTED` still covers the start.
+6. Never delete the lead task. Deleting a task deletes every session it started, the leads included.
 
 ## What you should see
 
+- `LEAD-STARTED` from the architect for your session.
 - The lead's first line: "Operating as lead under agent-room `<version>`."
 - `LEAD ONLINE` in the room within about 10 minutes. The lead picks up where the last one stopped. After `PAUSED` or `STOPPED`, it carries on, and doesn't act on the old `PAUSE` or `STOP` again.
 
