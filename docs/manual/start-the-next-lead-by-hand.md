@@ -4,10 +4,10 @@
 
 ## When to use it
 
-Normally you don't: each lead starts the next through the lead task, the watchdog starts a takeover lead, and the architect starts the lead after your decision. Start one yourself when the architect asks you to:
+Normally you don't: each lead starts the next through the lead task, and the architect starts the lead after your decision and any takeover lead, through the same task. Start one yourself when the architect asks you to, because it can't:
 
 - After `NEXT-LEAD-NEEDED`, `PAUSED` or `STOPPED`, or to resume after an upgrade or an account move: the **normal join line**.
-- When the old lead is gone without handing over, and no takeover lead joined: the **takeover line**. Only when the architect gives you one: after a `LEAD-SILENT` that no lead answered ([Answer a buzz](answer-a-buzz.md)).
+- When the old lead is gone without handing over: the **takeover line**. Only when the architect gives you one: after a `LEAD-SILENT` that no lead answered ([Answer a buzz](answer-a-buzz.md)).
 
 ## What you need first
 
@@ -30,9 +30,9 @@ Normally you don't: each lead starts the next through the lead task, the watchdo
      Is the lead in room N gone? If so, give me the takeover line.
      ```
 
-   The architect first checks that no lead is still alive: after a `LEAD-SILENT`, the watchdog has usually started a takeover lead already, and the architect gives it about 30 minutes to join. The same holds for any `LEAD-STARTED` with no `LEAD ONLINE` after it, including `LEAD-STARTED: unconfirmed (…)`: that lead may still be starting, so nobody starts another within 30 minutes of it. The takeover line ends with "Take over the lease … the previous lead stopped without handing over." The normal one doesn't.
+   The architect first checks that no lead is still alive, from the lease and the lead's latest messages. It also waits while any `LEAD-STARTED` under 30 minutes old has no `LEAD ONLINE` after it, including `LEAD-STARTED: unconfirmed (…)`: that lead may still be starting, so nobody starts another within 30 minutes of it. The takeover line ends with "Take over the lease … the previous lead stopped without handing over." The normal one doesn't.
 
-   Before it gives you a line, the architect posts `LEAD-STARTED: by hand …` in the room. The watchdog then holds off while you start the lead, so start it soon after.
+   Before it gives you a line, the architect posts `LEAD-STARTED: by hand …` in the room, so the room shows your start at once. Start it soon after.
 
    The architect may offer to start the lead itself through the lead task. Let it; approve the pop-up if one comes, and skip to "What you should see".
 2. Takeover only: if the old lead's session is still open, archive it.
@@ -44,7 +44,7 @@ Normally you don't: each lead starts the next through the lead task, the watchdo
    The lead for room N is started: <link>
    ```
 
-   It posts `LEAD-STARTED` for that session, so the watchdog keeps watching the new lead. If you can't find the link, say so: the architect's earlier `LEAD-STARTED` still covers the start.
+   It posts `LEAD-STARTED` for that session, so the room records which session is the new lead. If you can't find the link, say so: the architect's earlier `LEAD-STARTED` still covers the start.
 6. Never delete the lead task. Deleting a task deletes every session it started, the leads included.
 
 ## What you should see

@@ -6,7 +6,7 @@
 
 Once per project, at its first kickoff, when the architect asks. Again only if you move the project to your other account.
 
-The lead task is a scheduled task that starts each lead. The lead before starts it at a handover, the watchdog for a takeover, and the architect at kickoff and after your decision. Without it, you start every lead yourself.
+The lead task is a scheduled task that starts each lead. The lead before starts it at a handover, and the architect at kickoff, after your decision and for a takeover. Without it, you start every lead yourself.
 
 Do this on a computer, in a browser. Only the web page makes the trigger and its token.
 

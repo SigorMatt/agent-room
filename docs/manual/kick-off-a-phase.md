@@ -19,7 +19,7 @@ When a phase's playbook is approved and its environment needs are set. For the f
    Kick off phase <p>.
    ```
 
-2. The architect opens the room (a GitHub issue labelled `agent-room`), creates the watchdog (a scheduled task that buzzes you if no lead makes progress for three hours), and runs preflight.
+2. The architect opens the room (a GitHub issue labelled `agent-room`), creates the watchdog (a scheduled task that only buzzes you: when no lead makes progress for three hours, or none joins after your decision, with a reminder every 12 hours), and runs preflight.
    - Fix whatever it asks ([Fix preflight](fix-preflight.md)). If it asks you to turn on "Automatically delete head branches", see [Create the repo](create-the-repo.md), step 3.
    - If it says the watchdog's runs will ask for approval: open the scheduled task named `agent-room watchdog SigorMatt/<repo> room N` in the Claude app, and switch on **Automatically approve**.
 3. At a project's first kickoff only, it asks you to set up the lead task, and gives you the task's prompt. Do it on a computer: [Set up the lead task](set-up-the-lead-task.md). Later phases reuse the task.

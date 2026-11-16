@@ -33,7 +33,7 @@
    Resume the lead in room N.
    ```
 
-   It starts a lead through the lead task with the normal join line, not the takeover line. Approve the pop-up if one comes. Only the architect resumes: the watchdog and the leads never start a lead while the build is paused or stopped. If it can't, it gives you the line: [Start the next lead by hand](start-the-next-lead-by-hand.md).
+   It starts a lead through the lead task with the normal join line, not the takeover line. Approve the pop-up if one comes. Only the architect resumes: no lead starts another while the build is paused or stopped, and the watchdog starts none at all. If it can't, it gives you the line: [Start the next lead by hand](start-the-next-lead-by-hand.md).
 
 ## What you should see
 
@@ -49,5 +49,5 @@
   check the room
   ```
 
-  It tells you where the lead is. If the lead is stuck, the watchdog's `LEAD-SILENT` follows with a takeover lead, which handles your `PAUSE` or `STOP` first.
+  It tells you where the lead is. If the lead is stuck, the watchdog's `LEAD-SILENT` follows, and the architect starts a takeover lead, which handles your `PAUSE` or `STOP` first.
 - After `STOP`, the lead lists something as unknown, such as a helper's unfinished work: nothing that wasn't pushed reaches GitHub, and the next lead starts from what was pushed.
