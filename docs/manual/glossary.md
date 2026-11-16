@@ -18,7 +18,7 @@ To look up a word used in the manuals, the room or a session.
    - **Lead:** a Claude Code cloud session that builds one mission, then hands over to the next lead. It runs helpers (builders and reviewers) and merges.
    - **Builder:** a helper of the lead that writes code in its own private copy. It never posts or pushes.
    - **Cold reviewer, Qodo reader, Auditor, Planner:** fresh helpers of the lead that review the code, read Qodo's review, check the review tables, and plan the missions.
-   - **Watchdog:** a scheduled task, every three hours per active phase. It buzzes `LEAD-SILENT` when no lead has made progress for three hours, or no lead has joined three hours after your decision, with a reminder every 12 hours while that lasts, and while a request waits on your decision. After a stall's alarm it starts one lead itself, at most one per stall, if no lead has posted for three hours; the architect starts the rest.
+   - **Watchdog:** a scheduled task, every three hours per active phase. It buzzes `LEAD-SILENT` when no lead has made progress for three hours, or no lead has joined three hours after your decision, with a reminder every 12 hours while that lasts, and while a request waits on your decision. Before the phase's first lead joins, it only alarms. After that, following a stall's alarm, it starts one lead itself, at most one per stall, unless a lead posted in the three hours before the alarm or the build is paused or stopped; the architect starts the rest.
    - **Lead task:** one scheduled task per project, with an API trigger, that starts each lead. You create it once ([Set up the lead task](set-up-the-lead-task.md)). The lead and the architect start it with a join line.
    - **Room:** a GitHub issue labelled `agent-room` in the project repo, one per phase, where the architect and the lead talk.
    - **Buzz:** an ntfy push to your phone. It carries the message kind, the project and the room number, never the content.
@@ -33,7 +33,7 @@ To look up a word used in the manuals, the room or a session.
    - **Merge hold:** a pull request the lead won't merge without you (`MERGE-HOLD-n`).
    - **Decision, change:** the architect's answer to an escalation or hold (`DECISION-n`), and a design change mid-phase (`CHANGE-n`).
    - **ACK:** the lead's receipt for a decision or change.
-   - **Starter task:** a one-time scheduled task the architect creates to start one lead through the lead task, named `agent-room start lead SigorMatt/<repo> room N`. Approve it when it appears; a late approval may need a second one. It switches itself off after running; never delete it.
+   - **Starter task:** a one-time scheduled task the architect creates to start one lead through the lead task, named `agent-room start lead SigorMatt/<repo> room N`. Approve it when it appears; a late approval may need a second one. If a lead started or spoke after the architect decided, it starts nothing (`refused: the room moved on …`). It switches itself off after running; never delete it.
    - **Join line:** the line that starts a lead: the text the lead task is started with, or what you paste into a new Code session.
    - **Takeover line:** a join line that may replace a lead that stopped without handing over. The architect uses it after a `LEAD-SILENT` when the lead is gone; you, only when the architect gives you one.
    - **Lease:** the record of which session is the lead, so only one lead acts at a time.
