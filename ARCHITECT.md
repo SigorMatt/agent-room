@@ -388,13 +388,14 @@ Which line:
   - `pin <V> isn't accepted by the lead task's prompt`: the `pipeline:` line names a form the prompt rejects, such as a pre-release. Pin a release `vX.Y.Z` or `main` (section 11), then start the lead.
 
   After Matthew recreates the lead task for any reason, redo section 8, step 6 the same way, even though a `lead-task:` line exists.
-- **The lead task was deleted** (Matthew says so, or a start fails with `lead task <ID> not found`), with no buzz: deleting a task deletes the sessions it started, so a lead running from it is gone. First redo section 8, step 6 with Matthew. Then read the lease:
+- **The lead task was deleted** (Matthew says so, or a start fails with `lead task <ID> not found`), with no buzz: deleting a task deletes the sessions it started, so a lead running from it is gone. First redo section 8, step 6 with Matthew. Then read the status and the lease:
 
   ```bash
+  python3 room.py state get status --repo OWNER/NAME
   python3 room.py state get lease_session --repo OWNER/NAME
   ```
 
-  If it isn't `none`, the lease is held by a lead whose session was deleted with the task (unless Matthew started that lead in the Code tab, which survives): start a takeover lead by hand through the new task, with the takeover line (below). If it's `none` and the step isn't `waiting for owner: …`, no lead is running: start one with the normal join line. A parked lead needs nothing until Matthew's decision.
+  If the status is `paused`, `stopped` or `done` and the lease is `none`, the build was halted or finished: start nothing without Matthew's word (9.4). Otherwise, if the lease isn't `none`, the lease is held by a lead whose session was deleted with the task (unless Matthew started that lead in the Code tab, which survives): start a takeover lead by hand through the new task, with the takeover line (below). If it's `none` and the step isn't `waiting for owner: …`, no lead is running: start one with the normal join line. A parked lead needs nothing until Matthew's decision.
 - **`LEAD-SILENT: no lead joined after DECISION-<n> (…)`:** the leads started for Matthew's decision never joined, and the watchdog starts no more for it. Find out why before starting another: read the room for `LEAD-STARTED` reasons, check the `lead-task:` line, and ask Matthew about the token and his usage. Fix it, then start a lead by hand (below) with the normal join line, or the takeover line if `lease_session` isn't `none`.
 - **`LEAD-SILENT`:** no lead progress for three hours. A lead died, got stuck or never started. Or a live lead is slow: the watchdog alarms on progress (a step change or a mission-branch push), but starts a takeover only when no lead has posted anything, a `STATUS` included, and none has started or joined, within its silence time.
   1. **`LEAD-SILENT: state unreadable (…)`:** the state branch or its block is broken, not the lead, and the watchdog starts no lead after this alarm. Check it: `state sync`, then `python3 room.py state get step --repo OWNER/NAME`. If the branch was deleted, restore it before any lead joins:
