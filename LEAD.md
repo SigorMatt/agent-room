@@ -420,7 +420,7 @@ End.
 
 **`LEAD-STARTED`:** history: ignore it.
 
-**`LEAD-SILENT`:** the watchdog saw no progress for three hours, and the watchdog (once per stall, and only if you posted nothing in the three hours before its alarm) or the architect may start a takeover lead. Post a `STATUS` saying where you are, and make progress. If a takeover lead's `LEAD ONLINE` follows, handle it as above.
+**`LEAD-SILENT`:** the watchdog saw no progress for three hours, and the architect may start a takeover lead; the watchdog does only if no lead posted anything since the last progress. Post a `STATUS` saying where you are, and make progress. If a takeover lead's `LEAD ONLINE` follows, handle it as above.
 
 **Any other comment from Matthew** (`human (<login>)`, a trusted author) is an owner instruction. If it stays within `DESIGN.md` and `PLAYBOOK.md`, follow it, and say what you did in your next `STATUS`. Otherwise escalate (section 8), quoting the comment under **Context**, and act on it only as the `DECISION-n` says.
 
@@ -428,7 +428,7 @@ End.
 
 - Run `python3 room.py budget` at each step boundary while the step is `build`, a cold review or a Qodo round; never at the PR, the gate, close or while waiting for the owner. Exit 6: the mission is over budget, so escalate once; never retry automatically, and don't escalate the budget again while that escalation is open. A `DECISION` that sends the mission back to Build, says merge as is, or grants time restarts the clock (section 9). Exit 1: `mission_started` is missing; set it (5.1).
 - Three attempts per task, counted under "Tasks in flight". A fourth is an escalation. A fresh builder for a parked question after its `DECISION` isn't an attempt (section 9).
-- If Claude usage runs out, you simply stop. The watchdog reports it and starts one takeover lead (or the architect does), which resumes from the recorded step.
+- If Claude usage runs out, you simply stop. The watchdog reports it, and the architect starts a takeover lead (or the watchdog, if you posted nothing since your last progress), which resumes from the recorded step.
 - A `drill:` line in `PLAYBOOK.md` (reconcile prints it) is a failure drill:
 
   | `drill:` | You |
@@ -440,7 +440,7 @@ End.
 
 ## 11. Rules
 
-- **Signs of life:** the watchdog alarms when nothing progresses (a step change or a mission-branch push) for three hours. It starts a takeover at most once per stall, and never for a lead that posted anything in the three hours before its alarm, or since; then the architect decides whether you are alive. Before a step that may run long with no push, such as a long builder in the foreground, post a `STATUS` saying what runs: that keeps the watchdog from taking you over, and shows the architect you are alive.
+- **Signs of life:** the watchdog alarms when nothing progresses (a step change or a mission-branch push) for three hours. It starts a takeover at most once per stall, and only if no lead has posted anything since that progress, nor taken the lease; otherwise the architect decides whether you are alive. So any post since your progress keeps the watchdog from taking you over. Before a step that may run long with no push, such as a long builder in the foreground, post a `STATUS` saying what runs: it protects you, and shows the architect you are alive.
 - **Context hygiene:** builders reply in at most 10 lines. Verify with checks and `git diff --stat`, not by reading diffs; open a file only when a check fails. Keep state in `MISSIONS.md`, not in your memory. After a compaction, re-read this file and `MISSIONS.md`.
 - **Delegate:** implementing, fixing, investigating code and hard merge conflicts go to builders. You write briefs and answers, run checks, merge, keep records, post and open the PR. Resume a builder for follow-ups; if resuming fails, start a fresh one with the full brief.
 - **State writes:** commit hand edits with `state commit` before `state set`, `state next`, `intent` or `handoff`; they refuse while the worktree has local changes. Exit 3 means the branch moved: run `python3 room.py state sync`, re-read and re-apply. Exit 5 means the lease isn't yours: stand down.

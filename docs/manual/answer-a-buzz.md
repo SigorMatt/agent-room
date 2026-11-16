@@ -84,7 +84,7 @@ The lead merged the last mission, checked every criterion, posted `DONE`, closed
 
 ### `LEAD-SILENT`: no progress for three hours
 
-The watchdog saw nothing move. A lead died, got stuck or ran out of Claude usage, or the next one never started. Or a lead is alive but slow, or looping: posting without getting anywhere. After the alarm, the watchdog starts one lead itself, at most one per stall: a `LEAD-STARTED … started by watchdog` follows. It doesn't if a lead posted anything in the three hours before the alarm (a lead that posted a `STATUS` before a long step may still be working), if a lead was already started for this stall, or while the build is paused or stopped. The architect works out the rest, and starts a takeover lead if one is still needed.
+The watchdog saw nothing move. A lead died, got stuck or ran out of Claude usage, or the next one never started. Or a lead is alive but slow, or looping: posting without getting anywhere. After the alarm, the watchdog starts one lead itself, at most one per stall, but only for a lead that never came: a handover's successor that never joined, the lead after your decision that nobody started, or a lead that died right after its progress without posting. A `LEAD-STARTED … started by watchdog` follows. It doesn't once a lead has shown a sign of life since the stall began (posted anything, such as the `STATUS` after a push, or taken the lease): that lead may still be working. Nor does it for a lead that joined while waiting for your decision, or while the build is paused or stopped. The architect works out the rest, and starts a takeover lead if one is still needed.
 
 Other texts:
 
@@ -111,7 +111,7 @@ Other texts:
    - **The architect starts it** with a starter task: approve its pop-up when it appears (a late approval may need a second one). A `LEAD-STARTED` follows about 10 minutes later. That's all: don't start a lead yourself.
    - **Or, if it can't, it posts `LEAD-STARTED: by hand …` and gives you the takeover line.** Start the lead soon after. The line ends with "Take over the lease … the previous lead stopped without handing over." Start a lead with it ([Start the next lead by hand](start-the-next-lead-by-hand.md)), then send the architect the new session's link, so it posts `LEAD-STARTED`. Use a takeover line only when the architect gives you one.
 
-   If the watchdog starts a lead first, the architect's starter task finds it and starts nothing (its run says `refused: the room moved on after #…`), so you never get two. Either way, if the old lead's session is still open, archive it. If the new lead stalls too, the next alarm or reminder brings you back here; the watchdog doesn't start a second lead for the same stall.
+   If the watchdog starts a lead first, the architect's starter task finds it and starts nothing (its run says `refused: the room moved on after #…`), so you never get two. Either way, if the old lead's session is still open, archive it. If the new lead stalls too, the next alarm or reminder brings you back here; the watchdog doesn't start a second lead for the same stall, nor any for a lead that joined while waiting for your decision.
 
 ## What you should see
 
