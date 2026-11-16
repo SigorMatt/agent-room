@@ -45,7 +45,7 @@ Here <N> is a number, and <V> is main or a version such as v1.0.0, the same in b
 
 ### `start-lead N ROLE [--takeover] [--force]`
 
-Starts a lead through the lead task, as `ROLE` (`lead`, `watchdog` or `architect`). In order:
+Starts a lead through the lead task, as `ROLE` (`lead` or `architect`; the watchdog starts no leads, cold R3-5). In order:
 
 1. **Read the configuration.**
    - The task ID comes from the `lead-task:` line of the pushed `PLAYBOOK.md` (`^lead-task:[ \t]*(trig_[A-Za-z0-9]+)`).
@@ -91,7 +91,7 @@ Its rules, all covered by tests:
     - **`waiting for owner` with the lease held** is a normal stall (cold R1-1). A lead that parks releases the lease, so a held lease at that step means a lead joined, maybe after Matthew's decision, and hasn't moved on. It measures from the later of the progress time and the newest trusted lead `LEAD ONLINE`.
     - With the lease released, `waiting for owner` stays quiet, apart from the decision alarm.
 2. **A decision alarm.** At `waiting for owner` with the lease released, a trusted `DECISION-n` (from the architect or from Matthew) newer than the room's newest trusted lead message is *pending*. Once `silent-after` has passed since it with no lead joining, it posts `LEAD-SILENT: no lead joined after DECISION-<n> (step <step>)`. A `LEAD-STARTED` doesn't silence it: only a lead that joins does.
-3. **Reminders.** While a stall or a pending decision lasts, it posts a reminder once 4 × `silent-after` (12h by default) has passed since the last alarm: `LEAD-SILENT: still no progress since <time> (…)`, or `LEAD-SILENT: still no lead joined after DECISION-<n> (…)`, naming the step and mission.
+3. **Reminders.** While a stall or a pending decision lasts, it posts a reminder once 4 × `silent-after` (12h by default) has passed since the last alarm: `LEAD-SILENT: still no progress since <time> (…)`, or `LEAD-SILENT: still no lead joined after DECISION-<n> (…)`, naming the step and mission. A `state unreadable` alarm gets the same reminder: `LEAD-SILENT: still state unreadable (<reason>)` (cold R3-5).
 4. **Failed buzzes.** An alarm whose buzz failed is posted again at the next run, at most twice per stall (finding P, cold R1-9). That covers `state unreadable` alarms too.
 
 There are no episodes, no `start held off`, no second-start or final alarms, and no `--no-start`. The watchdog's exit stays 0 unless it fails to read or post.
