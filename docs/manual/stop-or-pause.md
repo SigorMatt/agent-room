@@ -33,12 +33,12 @@
    Resume the lead in room N.
    ```
 
-   It starts a lead with a starter task, with the normal join line, not the takeover line. Approve the task's pop-up. Only the architect resumes: no lead starts another while the build is paused or stopped, and the watchdog starts none there either. If it can't, it gives you the line: [Start the next lead by hand](start-the-next-lead-by-hand.md).
+   It starts a lead with a starter task, with the normal join line, not the takeover line. Approve the task's pop-up. Only the architect resumes: no lead starts another while the build is paused or stopped, and the watchdog starts none either, even if the old lead still holds the lease. If it can't, it gives you the line: [Start the next lead by hand](start-the-next-lead-by-hand.md).
 
 ## What you should see
 
 - The buzz when the lead finishes its current step; one helper can take a while. The message names the mission and step, and what is merged and pushed. After `STOP`, also anything the lead couldn't verify.
-- The watchdog stays quiet while the build is paused or stopped.
+- The watchdog stays quiet while the build is paused or stopped, and never starts a lead then, whoever holds the lease.
 - When you resume: `LEAD-STARTED`, then `LEAD ONLINE`, and the new lead carries on from the saved step. It doesn't pause or stop again on the old message.
 
 ## If you don't

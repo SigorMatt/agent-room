@@ -420,7 +420,7 @@ End.
 
 **`LEAD-STARTED`:** history: ignore it.
 
-**`LEAD-SILENT`:** the watchdog saw no progress for three hours, and the watchdog (once per stall) or the architect may start a takeover lead. Post a `STATUS` saying where you are, and make progress. If a takeover lead's `LEAD ONLINE` follows, handle it as above.
+**`LEAD-SILENT`:** the watchdog saw no progress for three hours, and the watchdog (once per stall, and only if you posted nothing in the three hours before its alarm) or the architect may start a takeover lead. Post a `STATUS` saying where you are, and make progress. If a takeover lead's `LEAD ONLINE` follows, handle it as above.
 
 **Any other comment from Matthew** (`human (<login>)`, a trusted author) is an owner instruction. If it stays within `DESIGN.md` and `PLAYBOOK.md`, follow it, and say what you did in your next `STATUS`. Otherwise escalate (section 8), quoting the comment under **Context**, and act on it only as the `DECISION-n` says.
 
@@ -440,7 +440,7 @@ End.
 
 ## 11. Rules
 
-- **Signs of life:** the watchdog alarms when nothing progresses (a step change or a mission-branch push) for three hours. It starts a takeover only if no lead has posted anything within that time, at most once per stall; otherwise the architect decides whether you are alive. Before a step that may run long with no push, such as a long builder in the foreground, post a `STATUS` saying what runs, so the watchdog and the architect see you are alive.
+- **Signs of life:** the watchdog alarms when nothing progresses (a step change or a mission-branch push) for three hours. It starts a takeover at most once per stall, and never for a lead that posted anything in the three hours before its alarm, or since; then the architect decides whether you are alive. Before a step that may run long with no push, such as a long builder in the foreground, post a `STATUS` saying what runs: that keeps the watchdog from taking you over, and shows the architect you are alive.
 - **Context hygiene:** builders reply in at most 10 lines. Verify with checks and `git diff --stat`, not by reading diffs; open a file only when a check fails. Keep state in `MISSIONS.md`, not in your memory. After a compaction, re-read this file and `MISSIONS.md`.
 - **Delegate:** implementing, fixing, investigating code and hard merge conflicts go to builders. You write briefs and answers, run checks, merge, keep records, post and open the PR. Resume a builder for follow-ups; if resuming fails, start a fresh one with the full brief.
 - **State writes:** commit hand edits with `state commit` before `state set`, `state next`, `intent` or `handoff`; they refuse while the worktree has local changes. Exit 3 means the branch moved: run `python3 room.py state sync`, re-read and re-apply. Exit 5 means the lease isn't yours: stand down.
