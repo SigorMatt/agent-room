@@ -409,8 +409,10 @@ def t_start_lead_rejected_or_failed():
          "lead task not started: HTTP 429: 30 fires an hour"),
         (dict(FAKE_FIRE_STATUS="500", FAKE_FIRE_BODY="upstream broke near Bearer %TOKEN%"), 1,
          "lead task not started: HTTP 500: upstream broke near Bearer ***"),
-        (dict(FAKE_FIRE_BODY='{"type": "error"}'), 1,
-         'lead task not started: HTTP 200 without routine_fire: {"type": "error"}'),
+        (dict(FAKE_FIRE_STATUS="400", FAKE_FIRE_BODY='{"error": {"message": "bad text"}}'), 1,
+         "lead task not started: HTTP 400: bad text"),
+        (dict(FAKE_FIRE_FAIL="Could not resolve host: api.anthropic.com", FAKE_FIRE_EXIT="6"), 1,
+         "lead task not started: curl: (6) Could not resolve host: api.anthropic.com"),
         (dict(FAKE_FIRE_FAIL="Failed to connect to api.anthropic.com port 443: Connection refused (%TOKEN%)"), 1,
          "lead task not started: curl: (7) Failed to connect to api.anthropic.com port 443: Connection refused (***)"),
     )
@@ -602,12 +604,12 @@ def t_watchdog_never_displaces_a_lead_that_joined_another_way():
     assert r.returncode == 0 and re.search(rf"^quiet: progress \d+s ago \(LEAD-STARTED #{by_hand} by the architect at "
                                            r"\S+\), under 3h00m$", r.stdout, re.M), out(r)
     assert len(fires()) == nf + 1 and len(comments()) == n, "no start, no alarm"
-    # a lead that joined with no LEAD-STARTED at all (the first start's request timed out, or the Code tab)
+    # a lead that joined with no LEAD-STARTED at all (the first start couldn't connect; Matthew used the Code tab)
     room("lease", "take", "--takeover", check=True)
     age_watchdog()
     set_state("step=build 41", hours=5)
     nf = len(fires())
-    r = watchdog(FAKE_FIRE_FAIL="Operation timed out after 30001 milliseconds")
+    r = watchdog(FAKE_FIRE_FAIL="Failed to connect to api.anthropic.com port 443")
     assert "alarm: no progress for 5h" in r.stdout and "start failed" in r.stdout, out(r)
     room("lease", "take", "--takeover", check=True, ROOM_SESSION="T5")
     room("say", "1", "lead", "LEAD ONLINE", "--no-buzz", check=True, ROOM_SESSION="T5")
@@ -1177,6 +1179,41 @@ def t_lead_started_is_posted_again_after_a_failed_post():
     assert r.returncode == 0 and "started, but LEAD-STARTED wasn't posted: " in r.stdout and "502" in r.stdout, out(r)
     assert len(comments()) == nc and open(counter).read() == "...", "three tries in all"
     online()
+
+
+UNCONFIRMED = "; a LEAD ONLINE follows if the lead started (started by {role})"
+
+
+def t_an_uncertain_start_is_recorded_not_retried():
+    # qodo PR #11 "A retry can start two leads": a timeout, a lost reply or a 200 without routine_fire may have
+    # started a lead, so start-lead records an unconfirmed LEAD-STARTED and exits 0 instead of 1 (try once more)
+    online()
+    for env, reason in ((dict(FAKE_FIRE_FAIL="Operation timed out after 30001 milliseconds with 0 bytes received",
+                              FAKE_FIRE_EXIT="28"),
+                         "curl: (28) Operation timed out after 30001 milliseconds with 0 bytes received"),
+                        (dict(FAKE_FIRE_FAIL="Recv failure: Connection reset by peer", FAKE_FIRE_EXIT="56"),
+                         "curl: (56) Recv failure: Connection reset by peer"),
+                        (dict(FAKE_FIRE_BODY='{"type": "error"}'), "HTTP 200 without routine_fire")):
+        nf, nc = len(fires()), len(comments())
+        r = start("architect", "--takeover", ROOM_SESSION="arch", **env)
+        assert r.returncode == 0 and r.stdout.startswith("warning: the lead task may have started a lead"), (env, out(r))
+        assert len(fires()) == nf + 1 and len(comments()) == nc + 1, out(r)
+        assert text_of(comments()[-1]) == f"LEAD-STARTED: unconfirmed ({reason})" + UNCONFIRMED.format(role="architect")
+        secret_free(r)
+        online()
+    # the watchdog's unconfirmed start is a sign of a lead: nothing fires again for silent-after
+    age_room()
+    set_state("step=build 60", hours=5)
+    nf = len(fires())
+    r = watchdog(FAKE_FIRE_FAIL="Operation timed out after 30001 milliseconds", FAKE_FIRE_EXIT="28")
+    assert "alarm: no progress for 5h" in r.stdout and "warning: the lead task may have started a lead" in r.stdout, \
+        out(r)
+    assert text_of(comments()[-1]).endswith(UNCONFIRMED.format(role="watchdog")) and len(fires()) == nf + 1
+    r = watchdog()
+    assert "already started a lead for this stall" in r.stdout and len(fires()) == nf + 1, out(r)
+    online()
+    set_state("step=build 61")
+    age_room()
 
 
 setup()

@@ -3623,9 +3623,14 @@ def one_line(text, token, limit=300):
     return " ".join(scrub(str(text), (token,)).split())[:limit]
 
 
+UNSURE_CURL_EXITS = {18, 28, 52, 55, 56, 92}  # curl gave up after the request may have reached the API: timed out,
+# a partial, empty or lost reply, a broken send or stream. Any other curl failure (no DNS, no connection) is definite.
+
+
 def fire(task, token, text):
     """POST {"text": TEXT} to lead task TASK's fire endpoint. Returns (HTTP status, answer): the parsed JSON body,
-    else its text; or (0, why) when curl itself failed. Never raises; no error holds the token or curl's argv."""
+    else its text; or (0, why) when curl failed before the request could reach the API, and (-1, why) when it failed
+    after, so a lead may have started (qodo PR #11). Never raises; no error holds the token or curl's argv."""
     base = (os.environ.get("ROOM_FIRE_URL", "").strip() or FIRE_URL).rstrip("/")
     beta = os.environ.get("ROOM_FIRE_BETA", "").strip() or FIRE_BETA
     # the token goes through stdin, as a curl config line, never in argv where any process can read it (qodo PR #11)
@@ -3638,11 +3643,12 @@ def fire(task, token, text):
         r = subprocess.run(cmd, input=f'header = "Authorization: Bearer {quoted}"\n', capture_output=True, text=True,
                            errors="replace", timeout=FIRE_TIMEOUT + 5)
     except subprocess.TimeoutExpired:  # its text would hold the whole argv, token included
-        return 0, f"curl timed out after {FIRE_TIMEOUT}s"
+        return -1, f"curl timed out after {FIRE_TIMEOUT}s"
     except OSError as e:  # its text can hold a file name; strerror doesn't
         return 0, f"could not run curl: {e.strerror or type(e).__name__}"
     if r.returncode != 0:
-        return 0, one_line(r.stderr.strip(), token) or f"curl exited {r.returncode}"
+        why = one_line(r.stderr.strip(), token) or f"curl exited {r.returncode}"
+        return (-1 if r.returncode in UNSURE_CURL_EXITS else 0), why
     body, _, status = r.stdout.rpartition("\n")
     if not status.strip().isdigit():
         return 0, "curl gave no HTTP status"
@@ -3731,8 +3737,9 @@ def post_quietly(room, role, text, a):
 
 def start_lead(a, room, role, takeover=False, force=False, after=None):
     """Start a lead in ROOM through the lead task, as ROLE: read the configuration, check the guards, POST the join
-    line, then post LEAD-STARTED. Returns (exit code, why): 0 started (why None), 1 transient (try once more),
-    3 refused, 6 not configured or rejected. TAKEOVER None means --takeover when the lease is held (the watchdog's
+    line, then post LEAD-STARTED. Returns (exit code, why): 0 started, or maybe started (an unconfirmed LEAD-STARTED;
+    why None), 1 a definite failure (try once more), 3 refused, 6 not configured or rejected. TAKEOVER None means
+    --takeover when the lease is held (the watchdog's
     choice). A broken read of the state branch or the room raises StateError or GhError."""
     try:
         path = ensure_worktree()  # fetched
@@ -3763,13 +3770,24 @@ def start_lead(a, room, role, takeover=False, force=False, after=None):
     if rejected:
         return EXIT_NOT_CONFIGURED, rejected
     status, answer = fire(task, token, text)
+    by = f"started by {role}" + (f" after {after}" if after else "")
     if status == 200 and isinstance(answer, dict) and answer.get("type") == "routine_fire":
         url = session_url(answer, token)
         print(f"started: {url}")
-        err = post_quietly(room, role, f"LEAD-STARTED: {url} ({'takeover' if takeover else 'plain'} join line, "
-                                       f"started by {role}" + (f" after {after})" if after else ")"), a)
+        err = post_quietly(room, role, f"LEAD-STARTED: {url} ({'takeover' if takeover else 'plain'} join line, {by})",
+                           a)
         if err:
             print(f"started, but LEAD-STARTED wasn't posted: {one_line(err, token)}")
+        return 0, None
+    if status == -1 or status == 200:
+        # the outcome is unknown: a lead may have started, so a retry could start a second one (qodo PR #11). Record
+        # it as unconfirmed: the watchdog then counts it as a sign of a lead, and a LEAD ONLINE follows if one started
+        reason = one_line(answer, token, 200) if status == -1 else "HTTP 200 without routine_fire"
+        print(f"warning: the lead task may have started a lead ({reason}); recorded as unconfirmed, not retried")
+        err = post_quietly(room, role, f"LEAD-STARTED: unconfirmed ({reason}); a LEAD ONLINE follows if the lead "
+                                       f"started ({by})", a)
+        if err:
+            print(f"LEAD-STARTED wasn't posted: {one_line(err, token)}")
         return 0, None
     if status in (401, 403):
         return EXIT_NOT_CONFIGURED, f"token rejected (HTTP {status})"
@@ -3778,8 +3796,7 @@ def start_lead(a, room, role, takeover=False, force=False, after=None):
     if status == 0:
         return 1, f"lead task not started: {answer}"
     detail = answer_detail(answer, token)
-    what = f"HTTP {status}" if status != 200 else "HTTP 200 without routine_fire"
-    return 1, f"lead task not started: {what}" + (f": {detail}" if detail else "")
+    return 1, f"lead task not started: HTTP {status}" + (f": {detail}" if detail else "")
 
 
 def cmd_start_lead(a):
