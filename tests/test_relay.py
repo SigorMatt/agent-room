@@ -996,10 +996,12 @@ def t_a_second_start_when_the_started_lead_makes_no_progress():
     assert text_of(alarm2) == f"LEAD-SILENT: {phrase} (step build 20, mission M1) (buzz sent)", text_of(alarm2)
     assert text_of(second).endswith("(takeover join line, started by watchdog)") and tag(second)[0] == "watchdog"
     assert [request(x)["body"]["text"].endswith(TAKEOVER) for x in fires()[nf:]] == [True, True]
-    # after two starts, alarms only
-    backdate(lambda c: c["id"] == second["id"], 200)
+    # after two starts, starts no more (cold M6b R2-2: one last alarm says so)
     r = watchdog()
     assert "note: 2 leads already started for this stall: alarms only" in r.stdout and len(fires()) == nf + 2, out(r)
+    backdate(lambda c: c["id"] >= alarm2["id"], 200)
+    r = watchdog()
+    assert "alarm: two takeover leads made no progress; no more starts" in r.stdout and len(fires()) == nf + 2, out(r)
     # a started lead that never joins: the second start comes silent-after after its LEAD-STARTED
     room("lease", "take", "--takeover", check=True)
     age_watchdog()
@@ -1099,6 +1101,43 @@ def t_a_decision_start_is_no_takeover_start():
     assert text_of(takeover).endswith("(takeover join line, started by watchdog)"), text_of(takeover)
     room("lease", "take", "--takeover", check=True)
     set_state("step=build 30")
+    age_room()
+
+
+def t_after_two_takeovers_one_last_alarm_then_a_start_by_hand_opens_a_new_episode():
+    # cold M6b R2-2: after two takeover starts, the next due point posts one last alarm and starts nothing; the
+    # architect's start by hand opens a new episode, so a third lead that fails too is alarmed and taken over again
+    age_room()
+    set_state("step=build 50", hours=10)
+    nf = len(fires())
+    assert "started: https://claude.ai/code/" in watchdog().stdout
+    backdate(lambda c: c["id"] >= comments()[-1]["id"], 200)  # that lead never came
+    n = len(comments())
+    assert "started: https://claude.ai/code/" in watchdog().stdout and len(fires()) == nf + 2
+    backdate(lambda c: c["id"] >= comments()[n]["id"], 200)  # nor did the second
+    n = len(comments())
+    r = watchdog()
+    assert r.returncode == 0 and "alarm: two takeover leads made no progress; no more starts" in r.stdout, out(r)
+    assert [text_of(c) for c in comments()[n:]] == ["LEAD-SILENT: two takeover leads made no progress; no more starts "
+                                                    "(step build 50, mission M1) (buzz sent)"], out(r)
+    assert len(fires()) == nf + 2
+    r = watchdog()  # once
+    assert "already reports this stall" in r.stdout and len(comments()) == n + 1 and len(fires()) == nf + 2, out(r)
+    # the architect understands the cause and starts a third lead by hand: a new episode, measured from that start
+    backdate(lambda c: True, 300)  # all of the above came before it
+    room("say", "1", "architect", "LEAD-STARTED: https://claude.ai/code/t3 (takeover join line, started by architect)",
+         check=True, ROOM_SESSION="arch")
+    by_hand = comments()[-1]["id"]
+    r = watchdog()
+    assert re.search(rf"^quiet: progress \d+s ago \(LEAD-STARTED #{by_hand} by the architect", r.stdout, re.M), out(r)
+    backdate(lambda c: c["id"] >= by_hand, 200)  # the third lead fails the same way
+    n = len(comments())
+    r = watchdog()
+    assert f"alarm: no progress for 3h20m (LEAD-STARTED #{by_hand} by the architect at " in r.stdout and \
+        "started: https://claude.ai/code/" in r.stdout, out(r)
+    assert [kind_of(c) for c in comments()[n:]] == ["LEAD-SILENT", "LEAD-STARTED"] and len(fires()) == nf + 3
+    online()
+    set_state("step=build 51")
     age_room()
 
 

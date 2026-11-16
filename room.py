@@ -3020,6 +3020,10 @@ def alarm_stage(a, ep, first, about, takeover, prefix=""):
         post(phrase, f"LEAD-SILENT: {phrase} ({about})", [m for m in sent if phrase in m["text"]])
         watchdog_start(a, takeover)
         return
+    if len(starts) >= 2 and now - ep["sign"] >= a.silent_after:  # cold M6b R2-2: one last alarm, and no more starts
+        final = "two takeover leads made no progress; no more starts"
+        post(final, f"LEAD-SILENT: {final} ({about})", [m for m in sent if final in m["text"]])
+        return
     post(*first, sent)
     if a.no_start:
         return
