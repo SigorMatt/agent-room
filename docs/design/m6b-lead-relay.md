@@ -62,7 +62,7 @@ Starts a lead through the lead task, as `ROLE` (`lead`, `watchdog` or `architect
    - **Headers:** `Authorization: Bearer <token>`, `anthropic-beta: experimental-cc-routine-2026-04-01` (overridable by `ROOM_FIRE_BETA`), `anthropic-version: 2023-06-01`, and `Content-Type: application/json`.
    - **Body:** `{"text": "<join line>"}`.
    - **Timeout:** 30 seconds.
-   - **Secrecy:** the token never appears in output, errors or room text; scrub it as `buzz` does.
+   - **Secrecy:** the token never appears in output, errors or room text; scrub it as `buzz` does. It reaches `curl` through stdin, never in its argument list, where other processes on the machine could read it (qodo PR #11).
 5. **Read the answer.**
    - **HTTP 200 with `type` `routine_fire`:** print `started: <claude_code_session_url>`, then post `LEAD-STARTED: <url> (<plain|takeover> join line, started by <ROLE>)` as `ROLE`, with no buzz. Exit 0. The post is retried up to 3 times, since the watchdog and the architect rely on it to hold off another start (qodo PR #11). If it still fails, print `started, but LEAD-STARTED wasn't posted: <reason>` and still exit 0.
    - **Unconfirmed** (qodo PR #11): the request timed out, or got an HTTP 200 without `routine_fire`. The run may have started, so a retry could start a second lead. Post `LEAD-STARTED: unconfirmed (<reason>); a LEAD ONLINE follows if the lead started (started by <ROLE>)`, with the same retries and no buzz, and exit 0. Like any `LEAD-STARTED`, it holds off further starts: `start-lead`'s 30-minute guard, the watchdog's `silent-after`, and the architect's 30 minutes.
