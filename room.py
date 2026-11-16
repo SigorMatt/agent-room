@@ -105,7 +105,7 @@ BUZZ_KINDS = {"ESCALATION", "MERGE-HOLD", "NEXT-LEAD-NEEDED", "PAUSED", "STOPPED
 LEAD_CANNOT = {"DECISION", "CHANGE", "PAUSE", "STOP"}
 ARCHITECT_CANNOT = {"PLAN", "LEAD ONLINE", "STATUS", "ESCALATION", "MERGE-HOLD", "HANDOFF",
                     "NEXT-LEAD-NEEDED", "PAUSED", "STOPPED", "DONE"}  # and every ACK
-WATCHDOG_CAN = {"LEAD-SILENT", "LEAD-STARTED"}
+WATCHDOG_CAN = {"LEAD-SILENT"}  # it only alarms (BUILD-STATE 2026-11-16, B-5)
 POSTING_ROLES = ("lead", "architect", "watchdog")  # anyone else may read, never post
 
 REPO = None         # set in main()
@@ -256,7 +256,7 @@ def guard_error(role, kind):
     if role == "architect" and (base in ARCHITECT_CANNOT or re.match(r"ACK\b", base or "")):
         return f"the architect cannot send {kind}; that is for the lead"
     if role == "watchdog" and base not in WATCHDOG_CAN:
-        return f"the watchdog can send only LEAD-SILENT and LEAD-STARTED, not {kind or 'a message without a kind'}"
+        return f"the watchdog can send only LEAD-SILENT, not {kind or 'a message without a kind'}"
     return None
 
 
@@ -2927,7 +2927,7 @@ def outside_progress(values=None, missions=None):
 
 
 def watchdog_messages(a, kind, progress):
-    """The room's trusted watchdog messages of KIND (LEAD-SILENT, LEAD-STARTED) newer than PROGRESS (all, if None),
+    """The room's trusted watchdog messages of KIND (LEAD-SILENT, its only kind) newer than PROGRESS (all, if None),
     oldest first."""
     out = []
     for m in map(parse, comments(a.room, iso(progress) if progress is not None else None)):
@@ -3517,7 +3517,7 @@ STARTING_FOR = 30 * 60  # a LEAD-STARTED this recent with no LEAD ONLINE after i
                         # minutes, the window ARCHITECT.md gives the architect: cold M6b R1-7, R2-1)
 LEAD_TASK = re.compile(r"^lead-task:[ \t]*(trig_[A-Za-z0-9]+)", re.M)
 SETUP_PAGE = "docs/manual/set-up-the-lead-task.md"
-START_ROLES = ("lead", "watchdog", "architect")
+START_ROLES = ("lead", "architect")  # the watchdog starts no leads (BUILD-STATE 2026-11-16, B-5)
 EXIT_REFUSED, EXIT_NOT_CONFIGURED = 3, 6
 LEAD_TASK_PROMPT = (
     "You are a lead session of the agent-room pipeline for {repo}. This run was started with your join line as its "
@@ -3650,8 +3650,7 @@ def start_refusal(room, role, takeover, force, values, playbook, sid=None):
     if holder != "none" and not takeover:
         if holder == sid:  # e.g. a handoff whose release failed (cold M6b R2-4)
             return "this session still holds the lease: run lease release, then start-lead again"
-        return (f"the lease is held by {holder}: a lead is running, and a takeover (--takeover) is the watchdog's or "
-                "the architect's call")
+        return f"the lease is held by {holder}: a lead is running, and a takeover (--takeover) is the architect's call"
     if not force:
         msgs = [m for m in map(parse, comments(room)) if trusted(m)]
         online = max((m["id"] for m in msgs if m["role"] == "lead" and message_kind(m["text"]) == "LEAD ONLINE"),
@@ -3703,9 +3702,9 @@ def post_quietly(room, role, text, a):
 def start_lead(a, room, role, takeover=False, force=False):
     """Start a lead in ROOM through the lead task, as ROLE: read the configuration, check the guards, POST the join
     line, then post LEAD-STARTED. Returns (exit code, why): 0 started, or maybe started (an unconfirmed LEAD-STARTED;
-    why None), 1 a definite failure (try once more), 3 refused, 6 not configured or rejected. TAKEOVER None means
-    --takeover when the lease is held (the watchdog's
-    choice). A broken read of the state branch or the room raises StateError or GhError."""
+    why None), 1 a definite failure (try once more), 3 refused, 6 not configured or rejected. ROLE is the lead (its
+    handover) or the architect; the watchdog starts no leads. A broken read of the state branch or the room raises
+    StateError or GhError."""
     try:
         path = ensure_worktree()  # fetched
     except StateError:
@@ -3724,8 +3723,6 @@ def start_lead(a, room, role, takeover=False, force=False):
     if missing:
         page = doc_url(SETUP_PAGE, pinned_version(path) if path else None)
         return EXIT_NOT_CONFIGURED, f"not configured: {'; '.join(missing)}. See Set up the lead task: {page}"
-    if takeover is None:
-        takeover = lease_of(values)[0] != "none"
     why = start_refusal(room, role, takeover, force, values, playbook, session_id(a))
     if why:
         return EXIT_REFUSED, f"refused: {why}"
@@ -3746,7 +3743,7 @@ def start_lead(a, room, role, takeover=False, force=False):
         return 0, None
     if status == -1 or status in UNSURE_STATUSES:
         # the outcome is unknown: a lead may have started, so a retry could start a second one (qodo PR #11). Record
-        # it as unconfirmed: the watchdog then counts it as a sign of a lead, and a LEAD ONLINE follows if one started
+        # it as unconfirmed, so a by-hand start waits for it, and a LEAD ONLINE follows if one started
         reason = one_line(answer, token, 200) if status == -1 else \
             "HTTP 200 without routine_fire" if status == 200 else f"HTTP {status}"
         print(f"warning: the lead task may have started a lead ({reason}); recorded as unconfirmed, not retried")
