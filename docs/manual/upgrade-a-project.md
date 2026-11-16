@@ -51,7 +51,7 @@ A new agent-room release is out and you want a project to use it. Releases are t
    Resume the lead in room N.
    ```
 
-   It starts one through the lead task; approve the pop-up if one comes. If it can't, it gives you the line ([Start the next lead by hand](start-the-next-lead-by-hand.md)). The new lead runs its own migration steps.
+   It starts one with a starter task; approve its pop-up. If it can't, it gives you the line ([Start the next lead by hand](start-the-next-lead-by-hand.md)). The new lead runs its own migration steps.
 
 ## What you should see
 
