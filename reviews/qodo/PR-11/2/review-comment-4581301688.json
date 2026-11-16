@@ -1,0 +1,71 @@
+{
+  "url": "https://api.github.com/repos/SigorMatt/agent-room/pulls/comments/4581301688",
+  "pull_request_review_id": 5914203249,
+  "id": 4581301688,
+  "node_id": "PRRC_kwDOVVYvuc8AAAABEREduA",
+  "diff_hunk": "@@ -2988,28 +3166,47 @@ def cmd_watchdog(a):\n     if not found:\n         return unreadable_state_alarm(a, path, f\"{PLAYBOOK_DIR}/MISSIONS.md has no step in its history\")\n     progress, what = max(found)\n-    if (values.get(\"waiting_for_owner\") or \"\").strip().lower() == \"yes\":\n+    stall = progress  # which stall this is, for one alarm and the starts per stall\n+    joined_at_wait = step.strip().lower().startswith(WAITING_FOR_OWNER) and lease_of(values)[0] != \"none\"\n+    if joined_at_wait:\n+        # cold M6b R1-1: measured from the later of the progress and the newest lead LEAD ONLINE, so a lead that has\n+        # just joined gets no alarm; the waiting_for_owner flag, set when the last lead parked, doesn't mute it\n+        online = newest_lead_online(a)\n+        if online and online[0] > progress:\n+            progress, what = online[0], f\"LEAD ONLINE #{online[1]}\"\n+    if (values.get(\"waiting_for_owner\") or \"\").strip().lower() == \"yes\" and not joined_at_wait:\n         # it mutes only while nothing has progressed since the commit that set it; after that it is stale\n         flag = last_change(path, lambda k: k == \"waiting_for_owner\")\n         if flag is None or progress <= flag[1]:\n             print(\"quiet: waiting_for_owner is yes\" + (f\" (set at {iso(flag[1])}, no progress since)\" if flag else \"\"))\n             return 0\n         print(f\"note: waiting_for_owner is yes, but {what} at {iso(progress)} came after it was set at \"\n               f\"{iso(flag[1])}, so it is stale\")\n+    ep = stall_episode(a, stall)\n+    if ep[\"by\"] and ep[\"start\"] > progress:  # a start by hand opened a new episode: measured from it\n+        progress, what = ep[\"start\"], f\"LEAD-STARTED #{ep['by']['id']} by the architect\"\n     now = time.time()\n     if now - progress < a.silent_after:\n         print(f\"quiet: progress {span(now - progress)} ago ({what} at {iso(progress)}), \"\n               f\"under {span(a.silent_after)}\")\n         return 0\n-    seen = alarms_since(a, progress)  # one alarm per stall\n-    if seen:\n-        print(f\"quiet: LEAD-SILENT #{seen[0]['id']} at {seen[0]['at']} already reports this stall\")\n-        return 0\n-    print(f\"alarm: no progress for {span(now - progress)} ({what} at {iso(progress)})\")\n-    alarm(a, f\"LEAD-SILENT: no progress since {iso(progress)} (step {step}, mission {mission})\")\n+    alarm_stage(a, ep, (f\"no progress for {span(now - progress)} ({what} at {iso(progress)})\",\n+                        f\"LEAD-SILENT: no progress since {iso(progress)} (step {step}, mission {mission})\"),\n+                f\"step {step}, mission {mission}\", takeover=lease_of(values)[0] != \"none\")",
+  "path": "room.py",
+  "commit_id": "3b98290d2452bbbc80ddf922331e440e4b2f236e",
+  "original_commit_id": "cde42bac28cebb6f54ade74bed236467aef6e605",
+  "user": {
+    "login": "qodo-code-review[bot]",
+    "id": 151058649,
+    "node_id": "BOT_kgDOCQD42Q",
+    "avatar_url": "https://avatars.githubusercontent.com/in/484649?v=4",
+    "gravatar_id": "",
+    "url": "https://api.github.com/users/qodo-code-review%5Bbot%5D",
+    "html_url": "https://github.com/apps/qodo-code-review",
+    "followers_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/followers",
+    "following_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/following{/other_user}",
+    "gists_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/gists{/gist_id}",
+    "starred_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/starred{/owner}{/repo}",
+    "subscriptions_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/subscriptions",
+    "organizations_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/orgs",
+    "repos_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/repos",
+    "events_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/events{/privacy}",
+    "received_events_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/received_events",
+    "type": "Bot",
+    "user_view_type": "public",
+    "site_admin": false
+  },
+  "body": "<img src=\"https://img.shields.io/badge/Medium-634FD1?style=flat-square\" height=\"20px\" alt=\"Remediation recommended\">\n\n6\\. Watchdog can take over from a working lead <code>🐞 Bug</code> <code>☼ Reliability</code>\n\n<pre>\n<b><i>cmd_watchdog</i></b> passes <b><i>takeover=lease_of(values)[0] != &quot;none&quot;</i></b> to <b><i>alarm_stage</i></b>, which calls\n<b><i>watchdog_start</i></b> as soon as <b><i>silent_after</i></b> has passed since the last LEAD-STARTED or LEAD ONLINE.\nNothing checks whether the lease holder is still alive. Progress counts only step and pr changes,\nmission-branch pushes and merges, so a live lead whose builders run past three hours with no merge\nis enough to trigger it. The takeover lead runs <b><i>lease take --takeover</i></b> and the working lead loses\nthe lease mid-build. Before this PR the watchdog only alarmed, and the architect checked whether the\nlead was alive before giving out a takeover line.\n</pre>\n\n\n<details>\n<summary><strong>Agent Prompt</strong></summary>\n\n```\n## Issue description\nThe watchdog starts a takeover lead as soon as `silent_after` has passed with no step, pr or branch progress. It does this even when the lease holder is alive and waiting on long-running builders, and the takeover takes the lease from a working lead.\n\n## Fix Focus Areas\n- room.py[2997-3039]\n- room.py[3185-3196]\n\n## Recommended Fix\nCount the lease holder's recent trusted lead messages (for example any lead STATUS or other lead message from the lease holder's session) as a sign of a lead in `stall_episode`'s `sign`, or delay the first takeover start until one alarm interval after the first LEAD-SILENT. That gives a live lead the chance to answer with a STATUS, as LEAD.md asks. Add a test where the holder posts a STATUS after the alarm: the watchdog should not start a takeover.\n```\n\n<code>ⓘ Copy this prompt and use it to remediate the issue with your preferred AI generation tools</code>\n</details>\n\n[Dismiss ↗](https://app.qodo.ai/findings/42dd4705-8671-4c77-a008-0f46c9491078?action=dismiss&origin=git) | [View ↗](https://app.qodo.ai/findings/42dd4705-8671-4c77-a008-0f46c9491078)",
+  "created_at": "2026-11-16T01:55:12Z",
+  "updated_at": "2026-11-16T01:55:12Z",
+  "html_url": "https://github.com/SigorMatt/agent-room/pull/11#discussion_r4581301688",
+  "pull_request_url": "https://api.github.com/repos/SigorMatt/agent-room/pulls/11",
+  "_links": {
+    "self": {
+      "href": "https://api.github.com/repos/SigorMatt/agent-room/pulls/comments/4581301688"
+    },
+    "html": {
+      "href": "https://github.com/SigorMatt/agent-room/pull/11#discussion_r4581301688"
+    },
+    "pull_request": {
+      "href": "https://api.github.com/repos/SigorMatt/agent-room/pulls/11"
+    }
+  },
+  "reactions": {
+    "url": "https://api.github.com/repos/SigorMatt/agent-room/pulls/comments/4581301688/reactions",
+    "total_count": 0,
+    "+1": 0,
+    "-1": 0,
+    "laugh": 0,
+    "hooray": 0,
+    "confused": 0,
+    "heart": 0,
+    "rocket": 0,
+    "eyes": 0
+  },
+  "start_line": 3254,
+  "original_start_line": 3193,
+  "start_side": "RIGHT",
+  "line": 3256,
+  "original_line": 3195,
+  "side": "RIGHT",
+  "author_association": "NONE",
+  "original_position": 390,
+  "position": 450,
+  "subject_type": "line",
+  "is_copilot_code_review": false,
+  "copilot_code_review_sources": []
+}
