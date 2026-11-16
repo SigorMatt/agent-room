@@ -61,6 +61,7 @@ A third is covered by the same rule: a lead that made progress and died before p
 - **A plain start: `start-lead --seen ID`.** The architect's plain starter tasks (the lead after a `DECISION`, a resume, kickoff) pass the room's newest comment ID when the architect decided, or `0` when the room has no comments yet (kickoff, cold M6d R2-5). `start-lead` then refuses (exit 3) when the room has a trusted lead message, or a trusted `LEAD-STARTED` from any role, newer than comment ID: `refused: the room moved on after #ID: <kind> #<id> at <time>; read the room again`. So a starter that runs after the watchdog's start, or after a lead joined, starts nothing.
 - **A takeover: `start-lead --takeover --replacing SESSION`.** A takeover replaces one lead: the session that held the lease when the architect decided (`state get lease_session`). `start-lead` refuses (exit 3) unless the lease is still held by SESSION: `refused: the lease is now <held by X | released>, not held by SESSION; read the room again`. So a late takeover starter starts nothing once that lead handed over, or the watchdog's or anyone's lead took the lease. It still starts while the lead it replaces keeps posting, which is the point of taking over a looping lead (cold M6d R3-1, which replaces R2-3's no-`--seen` exception). A takeover passes `--replacing`, not `--seen`.
 - **Neither:** a lead's handover; the watchdog. `ARCHITECT.md` 8.4 passes one of them in every starter task.
+- **A recovered lead:** `--replacing` refuses once the lease moved, not once the replaced lead made progress. A takeover starter runs about 10 minutes after the architect decided, so a lead silent for hours that recovers inside those minutes is the remaining window. A starter recreated after a late approval (finding U) is a new decision: the architect reads the room, the step and the mission branch again first, and recreates it only if the lead is still silent (cold M6d R4-1).
 - **A halted build:** `start-lead --takeover` refuses, for any role, while this room's status is `paused` or `stopped`, because the takeover lead's `lease take --takeover` would set it back to `running`. On Matthew's word to resume, the architect adds `--force` (cold M6d R3-3, R2-2: the docs alone kept missing a path).
 
 **Known limits:**
@@ -90,7 +91,7 @@ The watchdog task's prompt doesn't change: room.py does the posting and starting
   - the step starts with `waiting for owner`;
   - the lease is released (a parked lead);
   - room N is recorded as the current room, in `PLAYBOOK.md` or the machine block (a room nothing records gets no reminder, qodo PR #14, finding 6);
-  - the room has a trusted lead request, an `ESCALATION-n` or `MERGE-HOLD-n`, with no trusted `DECISION-n` after it. The oldest such open request is reminded about, so an older one left open after a newer one was answered still gets its reminder (cold M6d R3-2).
+  - the room has a trusted lead request, an `ESCALATION-n` or `MERGE-HOLD-n`, with no trusted `DECISION-n` after it. The newest such open request is reminded about: an older one left open after a newer one was answered still gets its reminder (cold M6d R3-2), and a stale old request that a later decision made moot doesn't hide the one the lead parked on (cold M6d R4-2).
 - **What it posts:** once `REMINDER_AFTER` × `silent-after` (12 hours by default) has passed since that request, `LEAD-SILENT: still waiting for Matthew: <KIND>-<n> since <time> (step <step>)`. It does this through `stall_alarm`, with `since` = the request's time and that text as both first and reminder, so it repeats every 12 hours under the same failed-buzz retry rules. Only its own reminders for that request count as this stall's alarms; a state unreadable alarm posted while it waited doesn't delay it (qodo PR #14, finding 5).
 - **No start:** Matthew must decide.
 - **Why:** this catches a request whose own buzz was lost (ntfy's limit, cold M6b R3-8 and S4-4), and an owner who forgot.
@@ -99,7 +100,7 @@ The watchdog task's prompt doesn't change: room.py does the posting and starting
 
 ## Docs
 
-- **`LEAD.md`:** the watchdog may start a lead only where none showed a sign of life since the stall began: any post after your progress, a `STATUS` before a long step included, keeps it from taking you over.
+- **`LEAD.md`:** the watchdog may start a lead only where none showed a sign of life since the stall began: any post after your progress, a `STATUS` before a long step included, keeps it from taking you over. So after every step change, and after starting builders (in the foreground or the background), the lead posts a `STATUS` (cold M6d R4-4).
 - **`ARCHITECT.md`:**
   - **9.5:**
     - After a `LEAD-SILENT`, first read the status. If it is `paused` or `stopped`, start nothing except on Matthew's word to resume (9.4): a takeover sets the status back to `running` (cold M6d R2-2).
@@ -142,7 +143,7 @@ All offline, in `tests/test_relay.py` or a new `tests/test_m6d.py`.
 **B-6:**
 - The waiting reminder comes at 12 hours, repeats, and retries a failed buzz.
 - No reminder once a `DECISION` came, or while the lease is held.
-- An older request still open after a newer one was answered gets its reminder.
+- An older request still open after a newer one was answered gets its reminder; with a stale older request and a newer open one, the newer one is named.
 - No start on this path.
 - The state-unreadable reminder retry, and a new first alarm for an outage that comes back after an ordinary alarm.
 - A state unreadable alarm during the wait doesn't delay the waiting reminder.
