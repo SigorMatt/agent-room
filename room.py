@@ -3548,7 +3548,8 @@ def cmd_budget(a):
 FIRE_URL = "https://api.anthropic.com"
 FIRE_BETA = "experimental-cc-routine-2026-04-01"
 FIRE_TIMEOUT = 30  # seconds for the whole request
-STARTING_FOR = 20 * 60  # a LEAD-STARTED this recent with no LEAD ONLINE after it: a lead is still starting
+STARTING_FOR = 30 * 60  # a LEAD-STARTED this recent with no LEAD ONLINE after it: a lead is still starting (30
+                        # minutes, the window ARCHITECT.md gives the architect: cold M6b R1-7, R2-1)
 LEAD_TASK = re.compile(r"^lead-task:[ \t]*(trig_[A-Za-z0-9]+)", re.M)
 SETUP_PAGE = "docs/manual/set-up-the-lead-task.md"
 START_ROLES = ("lead", "watchdog", "architect")
@@ -3797,7 +3798,7 @@ def add_unattended_commands(sub, common):
                    help="the takeover join line, for a lead that stopped without handing over; needed while the "
                         "lease is held")
     s.add_argument("--force", action="store_true",
-                   help="start even though a LEAD-STARTED under 20 minutes old has no LEAD ONLINE after it")
+                   help="start even though a LEAD-STARTED under 30 minutes old has no LEAD ONLINE after it")
     leaf("lead-task-prompt", cmd_lead_task_prompt, "print the prompt of this repo's lead task, for Matthew to "
                                                    "paste when he creates the task")
     s = leaf("handoff", cmd_handoff, "record step, cursor and intent=none holding the lease, post HANDOFF, then "

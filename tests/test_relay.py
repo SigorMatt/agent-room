@@ -462,7 +462,9 @@ def t_start_lead_guards():
     assert f"refused: LEAD-STARTED #{started} at " in r.stderr, out(r)
     r = start("architect", "--takeover", "--force", ROOM_SESSION="arch")
     assert r.returncode == 0, out(r)
-    backdate(lambda c: "LEAD-STARTED" in c["body"], 21)  # older than 20 minutes: that lead isn't coming
+    backdate(lambda c: "LEAD-STARTED" in c["body"], 25)  # cold M6b R1-7: the window is 30 minutes, as ARCHITECT.md's
+    refused(start("architect", "--takeover", ROOM_SESSION="arch"), "a lead is still starting", counts())
+    backdate(lambda c: "LEAD-STARTED" in c["body"], 31)  # older than 30 minutes: that lead isn't coming
     r = start("architect", "--takeover", ROOM_SESSION="arch")
     assert r.returncode == 0, out(r)
     online()  # a LEAD ONLINE after the start: the started lead came, so another start is no duplicate
