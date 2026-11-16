@@ -29,7 +29,7 @@ The design doesn't settle a question. Meanwhile the lead keeps building whatever
 1. The architect explains the question, the options, the lead's recommendation, and what is blocked.
 2. Decide together. Ask anything you need.
 3. The architect records your decision in `DESIGN.md`, then posts `DECISION-n` in the room, saying how the mission continues.
-4. If the lead was waiting for you, it had ended. The architect starts a new lead to act on your decision, with a starter task: approve its pop-up. Nobody else starts it. If no lead joins within three hours of your decision, a `LEAD-SILENT: no lead joined after DECISION-n` buzz follows (see `LEAD-SILENT` below).
+4. If the lead was waiting for you, it had ended. The architect starts a new lead to act on your decision, with a starter task: approve its pop-up when it appears (a late approval may need a second one). Nobody else starts it. If no lead joins within three hours of your decision, a `LEAD-SILENT: no lead joined after DECISION-n` buzz follows (see `LEAD-SILENT` below).
 5. Wait for the lead's `ACK DECISION-n` ("What you should see").
 
 If the escalation is a **pipeline fault** (the quoted line says "the records can't fix this"), agent-room itself needs a fix. Report it ([Report a pipeline problem](report-a-pipeline-problem.md)); the mission waits. When the patched release is out, tell the architect, with its version:
@@ -107,7 +107,7 @@ Other texts:
 
 3. If a lead is alive and working (it posted a `STATUS` lately, say), you need no new lead: the architect tells you where it is. If it's looping, posting without progress, the architect asks you before taking over.
 4. If the lead is dead, a takeover lead is started, in exactly one of these two ways, never both:
-   - **The architect starts it** with a starter task: approve its pop-up. A `LEAD-STARTED` follows a few minutes later. That's all: don't start a lead yourself.
+   - **The architect starts it** with a starter task: approve its pop-up when it appears (a late approval may need a second one). A `LEAD-STARTED` follows about 10 minutes later. That's all: don't start a lead yourself.
    - **Or, if it can't, it posts `LEAD-STARTED: by hand …` and gives you the takeover line.** Start the lead soon after. The line ends with "Take over the lease … the previous lead stopped without handing over." Start a lead with it ([Start the next lead by hand](start-the-next-lead-by-hand.md)), then send the architect the new session's link, so it posts `LEAD-STARTED`. Use a takeover line only when the architect gives you one.
 
    Either way, if the old lead's session is still open, archive it. If the new lead stalls too, the next alarm or reminder brings you back here.

@@ -34,7 +34,7 @@ Normally you don't: each lead starts the next through the lead task, and the arc
 
    Before it gives you a line, the architect posts `LEAD-STARTED: by hand …` in the room, so the room shows your start at once. Start it soon after.
 
-   The architect may offer to start the lead itself, with a starter task. Let it; approve its pop-up, and skip to "What you should see".
+   The architect may offer to start the lead itself, with a starter task. Let it; approve its pop-up when it appears (a late approval may need a second one), and skip to "What you should see".
 2. Takeover only: if the old lead's session is still open, archive it.
 3. Start the lead through the lead task: open `https://claude.ai/code/routines`, open the task `agent-room lead SigorMatt/<repo>`, press **Run now**, and paste the line as its text.
 4. Or, with no lead task, in the Code tab: start a new session, repository `SigorMatt/<repo>`, environment `agent-room`. Paste the line and send.

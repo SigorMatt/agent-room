@@ -209,9 +209,9 @@ For the first phase and every later one. For a later phase, first add its `### P
 
    If the result says its runs will ask for approval, tell Matthew to switch the task to "Automatically approve" in its settings. The run inherits this chat's repos, so create it from this chat, after step 1 of Setup.
 
-   **Starter tasks** start leads for you, made the same way as the watchdog. An agent can't fire the lead task Matthew created in the web UI (finding T). So for each lead you start, create a one-time task with your scheduled-task tool (`create_trigger`) that runs `start-lead` in the `agent-room` environment, which has the token. Matthew approves the creation pop-up.
+   **Starter tasks** start leads for you, made the same way as the watchdog. An agent can't fire the lead task Matthew created in the web UI (finding T). So for each lead you start, create a one-time task with your scheduled-task tool (`create_trigger`) that runs `start-lead` in the `agent-room` environment, which has the token. Matthew approves the creation pop-up: tell him one is coming, so he approves it promptly.
    - **Name:** `agent-room start lead OWNER/NAME room N`
-   - **Schedule:** one time (`run_once_at`), about two minutes ahead.
+   - **Schedule:** one time (`run_once_at`), 10 minutes ahead. His approval can take a while, and the time must still be in the future when it goes through.
    - **Environment:** the one named `agent-room`, so the run has the token.
    - **Notifications:** none (`{}`).
    - **Prompt,** verbatim, with `OWNER/NAME`, `N` and `<version>` filled in. For a takeover, add `--takeover` to the last command: `python3 room.py start-lead N architect --takeover --repo OWNER/NAME`.
@@ -225,6 +225,8 @@ For the first phase and every later one. For a later phase, first add its `### P
 
      If the second command prints FAILED room.py, end there. Otherwise report the last command's output and exit code in one line, and end.
      ```
+
+   If the creation fails because the time has passed (`run_once_at must be in the future`: his approval came late, finding U), create it again at once, 10 minutes ahead of now, and tell Matthew a second pop-up is coming.
 
    `start-lead` posts `LEAD-STARTED` itself, as architect, so you don't post it for these starts. Its guards apply: it refuses while a lead holds the lease (without `--takeover`) or a start under 30 minutes old hasn't joined. If no `LEAD-STARTED` appears in the room within about 10 minutes of the task's time, the start failed or was refused: ask Matthew to open the task's run, whose last line gives `start-lead`'s output and exit code, and fix the cause (9.5) or use the fallback (step 9). Never delete a starter task: it disables itself after its run, and deleting it deletes that run's session.
 5. Set `watchdog: <task ID>` in `PLAYBOOK.md`. Commit. At `DONE` you delete the task by this ID (9.7); a lead can't.
@@ -251,7 +253,7 @@ For the first phase and every later one. For a later phase, first add its `### P
    - `✗` on "pin <V> isn't accepted by the lead task's prompt": set `pipeline:` to a release `vX.Y.Z` or `main` (section 11), and commit.
    - `!` on "lead task not configured": the `lead-task:` line is missing. Do step 6. Without it, every handover posts `NEXT-LEAD-NEEDED`.
 8. Confirm with Matthew that the `agent-room` cloud environment has `ROOM_NTFY_TOPIC`, `QODO_REVIEW` (`on` or `off`), the lead task's `ROOM_FIRE_TOKEN_<NAME>`, and the playbook's domains and secrets. Secrets go in as network secrets. The lead task's token is the one exception (step 6): network secrets are never sent to `api.anthropic.com`.
-9. Start the first lead with a starter task (step 4), without `--takeover`. Matthew approves the pop-up; he's present at kickoff. Its `start-lead` posts `LEAD-STARTED` about two minutes later.
+9. Start the first lead with a starter task (step 4), without `--takeover`. Tell Matthew the pop-up is coming, and he approves it; he's present at kickoff. Its `start-lead` posts `LEAD-STARTED` about 10 minutes later.
 
    **Fallback,** if you can't create the starter task, or its start fails: give Matthew the join line, after the post in step 10. He opens the lead task, presses **Run now** and pastes the line as its text; or he starts a new session in the Code tab on `OWNER/NAME` in the `agent-room` environment, and sends the line.
 

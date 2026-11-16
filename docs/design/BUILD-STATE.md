@@ -19,7 +19,7 @@ The build of the agent-room pipeline v1, as designed in [`v1.md`](v1.md). A fres
 | M5 | Protocols (`ARCHITECT.md`, `LEAD.md`, briefs, thin skill), manuals and index | Done (#9) |
 | M6 | Dress rehearsal on `pet-todo` (build lead plays the architect) | Done: phase 1 of pet-todo complete (#2, #3, #4), `DONE` buzz received; findings L to P; waiting on Matthew's decision on successor starts |
 | M6b | Leads started through the lead task's API trigger (`start-lead`), parking while waiting on Matthew, an alarm-only watchdog with reminders (option 1 below; watchdog starts deferred, B-5) | Done (#11): 3 cold rounds, 4 scoped reviews, 5 Qodo fetches; B-5 and B-6 deferred |
-| M6c | Unattended rehearsal of M6b on pet-todo phase 2 (build lead plays the architect) | Not started |
+| M6c | Rehearsal of M6b on pet-todo phase 2 (build lead plays the architect) | Done: phase 2 complete (pet-todo #6, #7, #8), two unattended `start-lead` handovers, takeover by starter task; findings T, U, V |
 | M7 | Matthew's owner run, then tag `v1.0.0` | Not started |
 
 ## Pre-approved fallbacks (Matthew, 2026-11-14)
@@ -82,6 +82,8 @@ Results of the eleven assumptions in `v1.md` ("To verify"). Evidence lives in is
 - **R. A run of a task created in the web UI has `add_repo` and a GitHub connector, and its `gh` reaches only the task's repositories** (probe 6b posted to agent-room issue #4 through the connector after attaching the repo). A lead's room is in its own repository, so this doesn't matter for leads; M6c confirms it with real leads.
 - **S. An agent can edit only the scheduled tasks it created.** `update_trigger` on a task Matthew made in the web UI fails ("created via http_api, not by an agent"), so he edits the lead task himself, and the architect gives him the prompt text.
 - **T. An agent can't fire a task Matthew created in the web UI either** (`fire_trigger` fails: "Agents can only fire routines they created"). So the architect can't start the lead task with a fire action. It creates a one-time *starter task* in the `agent-room` environment that runs `room.py start-lead N architect` (Matthew approves the creation), as M6c's first lead was started on 2026-11-16.
+- **U. An approval pop-up can wait for hours, and a one-time task whose start time has passed can't be created** (`run_once_at must be in the future`). The M6c takeover starter waited about 4 hours for Matthew and then failed, and a second request was needed. So starter tasks run 10 minutes ahead, the architect announces the pop-up, and it recreates the task at once if the time passed (`ARCHITECT.md` 8.4).
+- **V. Every scheduled-task run has a `PushNotification` tool, whatever the task's push setting** (probes 8a and 8b, issue #4: "Mobile push requested"). Its message, wrapped in `<routine_summary>`, goes to Matthew's phone through the Claude app; the notification is titled with the session's first words. Whether it arrives mid-run or only when the run ends is being checked with Matthew; if mid-run, it can replace ntfy (no shared-IP limits, no topic secret).
 - **C. A new repo may be completely empty** (`pet-todo` has no commits). Preflight detects this, and the architect's kickoff creates the first commit on `main`; no protection can exist yet, so this is safe.
 
 ## Decisions taken during the build
@@ -134,6 +136,23 @@ pet-todo phase 1, three missions, four lead generations, in about 4.5 hours of w
 | Drills not run | Second lead while one runs, Qodo not reviewing, `CHANGE-n` during Build (missions built too fast), lead looping (unit-tested only), an escalation (none was needed) |
 
 **Open question:** who starts successors. See "Successor-start options" below.
+
+## M6c rehearsal results (2026-11-16)
+
+pet-todo phase 2, room 5: three missions, four lead generations, 08:48Z to 17:08Z. About four of those hours were spent waiting for one approval (finding U).
+
+| Check | Result |
+| --- | --- |
+| First lead started by the architect | Pass: a starter task running `start-lead 5 architect` (after `fire_trigger` was refused, finding T); `LEAD ONLINE` 1 minute after the start |
+| Escalation and decision | Pass, by a better path than planned: the lead escalated Q-1 while planning and kept building M4 and M5; `DECISION-1` was ACKed within 2 minutes; no park was needed |
+| Drill: stop after merge | Pass: the M4 lead stopped after merging pet-todo #6; the watchdog posted `LEAD-SILENT` 69 minutes later (`--silent-after 60m`, hourly runs) |
+| Takeover | Pass: a starter task with `--takeover` (generation 6), which finished M4's bookkeeping in 1 minute |
+| Unattended handovers | Pass, twice: generation 6 to 7 in 50 seconds, and 7 to 8 in about 1 minute, both through `start-lead` with no human |
+| `CHANGE-1` | Pass: posted during M5's cold review (its build had already finished), ACKed, built as a new task, reviewed and merged |
+| Phase end | Pass: `DONE`, room closed, lease released; the architect deleted the watchdog |
+| Buzzes | Partly: `ESCALATION-1` arrived; the watchdog's `LEAD-SILENT` failed on ntfy's 429 shared-IP limit (finding M; owner to-do) |
+| Approvals Matthew gave | Three: the first start, the takeover (asked twice, finding U), and the watchdog deletion |
+| Not exercised | A park and the lead after a decision (the lead never parked); the decision alarm; reminder alarms |
 
 ## Successor-start options (2026-11-15)
 
