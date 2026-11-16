@@ -18,7 +18,7 @@ The build of the agent-room pipeline v1, as designed in [`v1.md`](v1.md). A fres
 | M4 | Unattended operation (spec `m4-unattended.md`) | Done (#8) |
 | M5 | Protocols (`ARCHITECT.md`, `LEAD.md`, briefs, thin skill), manuals and index | Done (#9) |
 | M6 | Dress rehearsal on `pet-todo` (build lead plays the architect) | Done: phase 1 of pet-todo complete (#2, #3, #4), `DONE` buzz received; findings L to P; waiting on Matthew's decision on successor starts |
-| M6b | Leads started through the lead task's API trigger (`start-lead`), watchdog takeovers, parking while waiting on Matthew (option 1 below) | In progress |
+| M6b | Leads started through the lead task's API trigger (`start-lead`), parking while waiting on Matthew, an alarm-only watchdog with reminders (option 1 below; watchdog starts deferred, B-5) | In progress (PR #11) |
 | M6c | Unattended rehearsal of M6b on pet-todo phase 2 (build lead plays the architect) | Not started |
 | M7 | Matthew's owner run, then tag `v1.0.0` | Not started |
 
@@ -113,7 +113,7 @@ Calls the build lead made that Matthew would normally make. Each is reversible; 
 | A-7 | Probe 3 (what a scheduled session's Agent tool can do) wasn't created: creating a scheduled task suddenly asked for approval at night. The protocol covers both answers, and M6 checks it | Matthew asleep | Run the probe when Matthew is back |
 | A-8 | For the M6 rehearsal the build lead wrote pet-todo's design and playbook as architect, without Matthew's review | M6 is the build lead's rehearsal; M7 is Matthew's own run | — |
 | A-9 | For M6c the build lead wrote pet-todo phase 2 (D-2 to D-4, items P2-1 to P2-4), with one question deliberately left open (Q-1, the busy-lock behaviour) so the lead escalates, and answers it as architect | The rehearsal needs a real escalation and a lead that parks | — |
-| A-10 | M6c's watchdog runs hourly with `--silent-after 60m`, and a one-time kickoff task starts the first lead at 04:00Z, so the rehearsal runs overnight | Matthew approved both before bed; after his decision the watchdog starts the next lead, since starting it from this chat needs his approval | Delete the kickoff task |
+| A-10 | M6c's watchdog runs hourly with `--silent-after 60m`. A one-time kickoff at 04:00Z was to start the first lead overnight; it found M6b unmerged and did nothing. Since the watchdog starts no leads (decision 2026-11-16), M6c runs in the daytime: the build lead, as architect, starts the first lead, takeovers and the lead after its `DECISION` with the fire action, and Matthew approves each pop-up | Firing the lead task from this chat needs Matthew's approval (finding K), and the chat has no `ROOM_FIRE_TOKEN_*` | Delete the kickoff task (spent) |
 | A-11 | Scoped reviews S2 and S3 found high findings after the last round; the build lead fixed and re-reviewed (S2), then removed the feature behind them (S3, decision above) instead of holding the PR for Matthew | Matthew asleep; the fix narrows scope and returns to v1's watchdog-alarms-only behaviour | Restore watchdog starts from PR #11's history |
 
 ## M6 dress rehearsal results (2026-11-15)
