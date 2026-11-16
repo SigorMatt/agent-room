@@ -20,6 +20,8 @@ Read the criteria it names, and the design they rest on, with `git -C <checkout>
 
 **How:** read the code, and run the tests: `<test>`. Write throwaway experiments only under `/tmp/cold-M<k>-<name>/`, never in the repo. Do not edit, commit or push anything in the repo.
 
+**Secrets:** never print, log or commit environment variables, tokens or other secrets, nor put them in your report or reply. Your report is committed as it is, and the repo may be public. To show that a secret leaks, name the variable and where it leaks, never its value.
+
 **Look for:** behaviour that contradicts the spec or the design; error paths that report success; data loss; races; security holes (command injection, trusting untrusted input, secrets in output); criteria without a check; deleted or weakened tests; anything outside the spec.
 
 **Severity:** **high** is wrong behaviour on a normal path, data loss, or a security hole; **medium** is wrong on an edge path that will plausibly happen; **low** is minor.

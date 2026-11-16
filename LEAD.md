@@ -180,9 +180,10 @@ Up to two rounds on the mission branch before the PR, plus the extra rounds a `D
 
 1. Note `<head>` (`git rev-parse <branch>`) and `<base>` (`git rev-parse origin/main`).
 2. Start a fresh subagent on the strongest model with [`briefs/cold-review.md`](briefs/cold-review.md): its shared part and one variant (`round 1`, `round 2 and later` or `scoped`). Give it nothing else: no builder replies, no commentary of yours.
-3. Commit its report. `<name>` is `round-<r>` or `scoped-<s>`.
+3. Commit its report. `<name>` is `round-<r>` or `scoped-<s>`. First check that it holds no token: if the `grep` prints a line, remove any token value on it (a variable's name may stay), then commit.
    ```bash
    mkdir -p reviews/cold/M<k> && cp /tmp/cold-M<k>-<name>/<name>.md reviews/cold/M<k>/
+   grep -nE 'ROOM_FIRE_TOKEN|sk-ant-' reviews/cold/M<k>/<name>.md
    git add reviews/cold/M<k> && git commit -m "review: cold M<k> <name>"
    ```
 4. Give each finding exactly one disposition:
