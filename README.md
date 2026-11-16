@@ -10,9 +10,10 @@ There's no server. The room is a GitHub issue in the project repo, the pipeline'
 | --- | --- | --- |
 | Matthew | The owner: designs, decides escalations and merge holds, does setup | [the manuals](docs/manual/README.md) |
 | Architect | A chat in the project's Claude Project: designs with Matthew, writes `DESIGN.md` and `PLAYBOOK.md`, kicks off phases, posts decisions | [`ARCHITECT.md`](ARCHITECT.md) |
-| Lead | A Claude Code cloud session, one per mission: plans, briefs subagents, triages reviews, merges, hands over to the next lead | [`LEAD.md`](LEAD.md) |
+| Lead | A Claude Code cloud session, one per mission: plans, briefs subagents, triages reviews, merges, hands over to the next lead and starts it | [`LEAD.md`](LEAD.md) |
 | Subagents | Builder, planner, cold reviewer, Qodo reader, auditor, survey | [`briefs/`](briefs/) |
-| Watchdog | A scheduled task every 3 hours that buzzes when no lead makes progress | — |
+| Lead task | One scheduled task per project with an API trigger, set up once by Matthew, that starts the leads: each run gets a join line as its text | [the manual page](docs/manual/set-up-the-lead-task.md) |
+| Watchdog | A scheduled task every 3 hours that buzzes when no lead makes progress or none answers a decision, with a reminder every 12 hours; it starts no leads | — |
 
 ## Where to start
 
@@ -37,6 +38,7 @@ python3 room.py reconcile N                          # a joining lead: recorded 
 python3 room.py gate <PR>                            # the merge gate
 python3 room.py merge <PR> --sha <sha>               # merge exactly the reviewed head
 python3 room.py handoff N --step <step> --cursor <ID>   # hand over to the next lead
+python3 room.py start-lead N lead                    # start the next lead through the lead task
 python3 room.py join-line N                          # the line that starts a lead
 ```
 

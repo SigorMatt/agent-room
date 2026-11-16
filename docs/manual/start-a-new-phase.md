@@ -21,12 +21,12 @@ After the `DONE` buzz, when you want the project to do more. The playbook gets a
 
 2. Design with it. It adds the phase and its items to `PLAYBOOK.md`. Findings that earlier reviews put off to this phase are planned in by the first lead, without you.
 3. [Approve the playbook](approve-the-playbook.md), and [Set up environment needs](set-up-environment-needs.md) if new ones appear.
-4. [Kick off a phase and start its first lead](kick-off-a-phase.md): a new room, a new watchdog, and a join line.
+4. [Kick off a phase and start its first lead](kick-off-a-phase.md): a new room, a new watchdog, and the first lead, which the architect starts through the lead task. The project keeps its lead task from the first phase.
 
 ## What you should see
 
 - A new room (a new issue labelled `agent-room`).
-- `LEAD ONLINE`, then `PLAN` listing the new phase's missions.
+- `LEAD-STARTED`, `LEAD ONLINE`, then `PLAN` listing the new phase's missions.
 
 ## If you don't
 

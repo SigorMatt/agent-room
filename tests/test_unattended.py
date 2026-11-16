@@ -203,7 +203,10 @@ def buzzes():
 
 def watchdog(*args, **env):
     env.setdefault("ROOM_SESSION", "wd")
-    return room("watchdog", "1", *args, **env)
+    r = room("watchdog", "1", *args, **env)
+    # the watchdog only alarms (BUILD-STATE 2026-11-16, B-5): curl never sees the lead task's fire endpoint
+    assert not any("/v1/claude_code/routines/" in json.dumps(x) for x in buzzes()), f"the watchdog fired:\n{out(r)}"
+    return r
 
 
 def push_mission(hours, branch=MISSION_BRANCH):
@@ -431,9 +434,11 @@ def t_watchdog_alarms_on_a_lead_in_a_loop():
     r = watchdog()
     assert r.returncode == 0 and "alarm: no progress for 5h" in r.stdout, out(r)
     assert text_of(alarms()[-1]).startswith(f"LEAD-SILENT: no progress since {iso(t)} (step build 7, mission M1)")
-    # waiting for owner does not alarm
+    # waiting for owner does not alarm (a parked lead releases the lease: cold M6b R1-1)
     set_state("step=waiting for owner (ESCALATION-2)", hours=5)
+    room("lease", "release", check=True)
     assert watchdog().stdout.strip() == "quiet: step is waiting for owner (ESCALATION-2)"
+    room("lease", "take", check=True)
     set_state("step=build 8", "counter=0", hours=5)  # the counter back where the later tests expect it
 
 
@@ -507,14 +512,18 @@ def t_watchdog_status_values():
 def t_watchdog_quiet_while_waiting_for_owner():
     age_alarms()
     set_state("step=waiting for owner", hours=5)
+    room("lease", "release", check=True)  # parked (with the lease held it counts as running: cold M6b R1-1)
     n, before = len(alarms()), state_sha()
     r = watchdog()
     assert r.returncode == 0 and r.stdout.strip() == "quiet: step is waiting for owner", out(r)
     assert len(alarms()) == n and state_sha() == before
+    room("lease", "take", check=True)
     # cold M4 R1-9: a step that starts with it, and the block's own waiting_for_owner key, are quiet too
     set_state("step=Waiting for owner (MERGE-HOLD-4)", hours=5)
+    room("lease", "release", check=True)
     r = watchdog()
     assert r.stdout.strip() == "quiet: step is Waiting for owner (MERGE-HOLD-4)", out(r)
+    room("lease", "take", check=True)
     for value in ("yes", "YES"):
         set_state("step=gate", f"waiting_for_owner={value}", hours=5)
         r = watchdog()

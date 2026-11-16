@@ -2,7 +2,7 @@
 
 Short how-tos for running agent-room from your phone. Each page says when to use it, what you need first, the steps with the exact lines to paste, what you should see, and what to do if you don't.
 
-You use three apps: the Claude app (the architect chat in the project's Claude Project, and the Code tab for leads), GitHub, and ntfy. You never run `room.py` yourself: you paste lines into the architect chat or a lead session, or change a setting.
+You use three apps: the Claude app (the architect chat in the project's Claude Project, and the Code tab where leads run), GitHub, and ntfy. A few setup pages need a computer browser instead. You never run `room.py` yourself: you paste lines into the architect chat or a lead session, or change a setting.
 
 A page that left you with a question is a bug: [report it](report-a-pipeline-problem.md).
 
@@ -25,6 +25,7 @@ A page that left you with a question is a bug: [report it](report-a-pipeline-pro
 - I want to check and approve the plan → [Approve the playbook](approve-the-playbook.md)
 - I want to add the websites and secrets a project needs → [Set up environment needs](set-up-environment-needs.md)
 - I want to fix a failed preflight check → [Fix preflight](fix-preflight.md)
+- I want leads to start each other without me → [Set up the lead task](set-up-the-lead-task.md)
 - I want to start building a phase → [Kick off a phase and start its first lead](kick-off-a-phase.md)
 
 ## During a run

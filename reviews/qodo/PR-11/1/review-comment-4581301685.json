@@ -1,0 +1,71 @@
+{
+  "url": "https://api.github.com/repos/SigorMatt/agent-room/pulls/comments/4581301685",
+  "pull_request_review_id": 5914203249,
+  "id": 4581301685,
+  "node_id": "PRRC_kwDOVVYvuc8AAAABEREdtQ",
+  "diff_hunk": "@@ -2891,18 +2926,142 @@ def outside_progress(values=None, missions=None):\n     return found\n \n \n-def alarms_since(a, progress):\n-    \"\"\"The room's trusted watchdog LEAD-SILENTs newer than PROGRESS (all, if None) whose buzz didn't fail, oldest\n-    first. An alarm whose buzz failed doesn't count, so it is tried again.\"\"\"\n+def watchdog_messages(a, kind, progress):\n+    \"\"\"The room's trusted watchdog messages of KIND (LEAD-SILENT, LEAD-STARTED) newer than PROGRESS (all, if None),\n+    oldest first.\"\"\"\n     out = []\n     for m in map(parse, comments(a.room, iso(progress) if progress is not None else None)):\n         t = parse_time(m[\"at\"])\n-        if m[\"role\"] == \"watchdog\" and trusted(m) and message_kind(m[\"text\"]) == \"LEAD-SILENT\" and t and \\\n-                (progress is None or t > progress) and not re.search(r\"\\(buzz failed\\b\", m[\"text\"]):\n+        if m[\"role\"] == \"watchdog\" and trusted(m) and message_kind(m[\"text\"]) == kind and t and \\\n+                (progress is None or t > progress):\n             out.append(m)\n     return out\n \n \n+def alarms_since(a, progress, failed=False):\n+    \"\"\"The room's trusted watchdog LEAD-SILENTs newer than PROGRESS (all, if None) whose buzz didn't fail, oldest\n+    first. An alarm whose buzz failed doesn't count, so it is tried again. With FAILED, every one counts (the cap).\"\"\"\n+    return [m for m in watchdog_messages(a, \"LEAD-SILENT\", progress)\n+            if failed or not re.search(r\"\\(buzz failed\\b\", m[\"text\"])]\n+\n+\n+def watchdog_start(a, takeover, after=None):\n+    \"\"\"start-lead's logic as the watchdog, printing how it went. Its exit code never becomes the watchdog's: 6 and 3\n+    are notes, and after 1 the next run tries again. TAKEOVER None: --takeover when the lease is held. AFTER names\n+    the DECISION-n a decision start answers.\"\"\"\n+    try:\n+        code, why = start_lead(a, a.room, \"watchdog\", takeover=takeover, after=after)\n+    except (StateError, GhError) as e:  # reading the state or the room broke: transient\n+        code, why = 1, str(e)\n+    if code == 1:\n+        print(f\"start failed: {why}; the next run tries again\")\n+    elif code:\n+        print(f\"note: no lead started: {why}\")\n+\n+\n+def decision_start(m):\n+    \"\"\"Whether LEAD-STARTED message M is the watchdog's start after a decision, which no takeover count includes\n+    (cold M6b R2-3).\"\"\"\n+    return re.search(r\"\\bafter DECISION-\\d+\\)\", m[\"text\"]) is not None\n+\n+\n+def stall_episode(a, stall, opened=None):\n+    \"\"\"The stall's episode (cold M6b R2-1), as {start, by, alarms, starts, sign}. It begins at the later of STALL, the\n+    progress time, and the newest trusted architect LEAD-STARTED (BY, if that is later): a start by hand opens a new\n+    episode. For pre-start (STALL None) the episode is the whole room, opened at OPENED. ALARMS are the episode's\n+    trusted watchdog LEAD-SILENTs, STARTS its watchdog takeover LEAD-STARTEDs (a decision start isn't one), and SIGN\n+    the time of the last sign of a lead: the latest of the episode's start, any trusted LEAD-STARTED (any role) and\n+    any trusted lead LEAD ONLINE, so a lead that joined by another route holds off the next start.\"\"\"\n+    msgs = [m for m in map(parse, comments(a.room)) if trusted(m)]\n+\n+    def when(m):\n+        return parse_time(m[\"at\"]) or 0\n+\n+    def kind(m):\n+        return message_kind(m[\"text\"])\n+    by = None\n+    if stall is None:\n+        start, within = opened or 0, msgs\n+    else:\n+        hand = [m for m in msgs if m[\"role\"] == \"architect\" and kind(m) == \"LEAD-STARTED\" and when(m) > stall]\n+        by = max(hand, key=lambda m: (when(m), m[\"id\"])) if hand else None\n+        start = when(by) if by else stall\n+        within = [m for m in msgs if when(m) > start]\n+    signs = [when(m) for m in msgs if kind(m) == \"LEAD-STARTED\" or (m[\"role\"] == \"lead\" and kind(m) == \"LEAD ONLINE\")]\n+    return {\"start\": start, \"by\": by, \"sign\": max([start] + signs),\n+            \"alarms\": [m for m in within if m[\"role\"] == \"watchdog\" and kind(m) == \"LEAD-SILENT\"],\n+            \"starts\": [m for m in within if m[\"role\"] == \"watchdog\" and kind(m) == \"LEAD-STARTED\"\n+                       and not decision_start(m)]}\n+\n+\n+def alarm_stage(a, ep, first, about, takeover, prefix=\"\"):\n+    \"\"\"A stall's alarms and takeover starts, within its episode EP (cold M6b R1-2, R2-1). FIRST is (the printed line,\n+    the posted text) of the episode's first alarm, ABOUT where the pipeline stands, PREFIX the start of quiet lines.\n+    A takeover start is due once silent-after has passed since the last sign of a lead, and the episode has fewer\n+    than two; the first comes with the first alarm, the second with its own. A failed or refused start posts nothing,\n+    so the next run tries again under the same rules. Alarms stay within ALARM_CAP per episode (finding P).\"\"\"\n+    now = time.time()\n+    sent = [m for m in ep[\"alarms\"] if not re.search(r\"\\(buzz failed\\b\", m[\"text\"])]\n+    due = not a.no_start and now - ep[\"sign\"] >= a.silent_after\n+    starts = ep[\"starts\"]\n+\n+    def post(line, text, told):\n+        \"\"\"One alarm, unless TOLD (alarms whose buzz worked) already says it or the episode has ALARM_CAP alarms.\"\"\"\n+        if told:\n+            print(f\"quiet: {prefix}LEAD-SILENT #{told[0]['id']} at {told[0]['at']} already reports this stall\")\n+        elif len(ep[\"alarms\"]) >= ALARM_CAP:\n+            print(f\"quiet: {prefix}{ALARM_CAP} alarms already posted for this stall\")\n+        else:\n+            print(f\"alarm: {line}\")\n+            alarm(a, text)\n+\n+    if len(starts) == 1 and due:  # the lead the watchdog started made no progress either: the second, last start\n+        phrase = f\"the lead started at {iso(parse_time(starts[0]['at']))} made no progress\"\n+        post(phrase, f\"LEAD-SILENT: {phrase} ({about})\", [m for m in sent if phrase in m[\"text\"]])\n+        watchdog_start(a, takeover)\n+        return\n+    if len(starts) >= 2 and now - ep[\"sign\"] >= a.silent_after:  # cold M6b R2-2: one last alarm, and no more starts\n+        final = \"two takeover leads made no progress; no more starts\"\n+        post(final, f\"LEAD-SILENT: {final} ({about})\", [m for m in sent if final in m[\"text\"]])\n+        return\n+    post(*first, sent)\n+    if a.no_start:\n+        return\n+    if not starts and due:\n+        watchdog_start(a, takeover)\n+    elif not starts:\n+        print(f\"note: no start yet: the last sign of a lead came {span(now - ep['sign'])} ago, at {iso(ep['sign'])}, \"\n+              f\"under {span(a.silent_after)}\")\n+    elif len(starts) == 1:\n+        print(f\"note: LEAD-STARTED #{starts[0]['id']} at {starts[0]['at']} already started a lead for this stall; a \"\n+              f\"second, last start follows if no sign of a lead comes for {span(a.silent_after)}\")\n+    else:\n+        print(f\"note: {len(starts)} leads already started for this stall: alarms only\")\n+\n+\n+def pending_decision(a, values, playbook):\n+    \"\"\"The room's trusted DECISION-n (from the architect or Matthew) that waits for a lead nobody started: newer than\n+    the room's newest trusted lead message, more than DECISION_GRACE old, with no trusted LEAD-STARTED after it.\n+    Only while the lease is released and room N is the current room; None otherwise.\"\"\"\n+    room = current_room(playbook, values)\n+    if lease_of(values)[0] != \"none\" or (room and room[0] != a.room):\n+        return None\n+    msgs = [m for m in map(parse, comments(a.room)) if trusted(m)]\n+    last_lead = max((m[\"id\"] for m in msgs if m[\"role\"] == \"lead\"), default=0)\n+    now = time.time()\n+    for d in msgs:\n+        if d[\"id\"] <= last_lead or d[\"role\"] not in (\"architect\", \"human\") or \\\n+                not re.fullmatch(r\"DECISION-\\d+\", message_kind(d[\"text\"]) or \"\"):\n+            continue\n+        t = parse_time(d[\"at\"])\n+        if t is None or now - t <= DECISION_GRACE:\n+            continue\n+        if any(m[\"id\"] > d[\"id\"] and message_kind(m[\"text\"]) == \"LEAD-STARTED\" for m in msgs):\n+            continue\n+        return d",
+  "path": "room.py",
+  "commit_id": "cde42bac28cebb6f54ade74bed236467aef6e605",
+  "original_commit_id": "cde42bac28cebb6f54ade74bed236467aef6e605",
+  "user": {
+    "login": "qodo-code-review[bot]",
+    "id": 151058649,
+    "node_id": "BOT_kgDOCQD42Q",
+    "avatar_url": "https://avatars.githubusercontent.com/in/484649?v=4",
+    "gravatar_id": "",
+    "url": "https://api.github.com/users/qodo-code-review%5Bbot%5D",
+    "html_url": "https://github.com/apps/qodo-code-review",
+    "followers_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/followers",
+    "following_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/following{/other_user}",
+    "gists_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/gists{/gist_id}",
+    "starred_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/starred{/owner}{/repo}",
+    "subscriptions_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/subscriptions",
+    "organizations_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/orgs",
+    "repos_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/repos",
+    "events_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/events{/privacy}",
+    "received_events_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/received_events",
+    "type": "Bot",
+    "user_view_type": "public",
+    "site_admin": false
+  },
+  "body": "<img src=\"https://img.shields.io/badge/Medium-634FD1?style=flat-square\" height=\"20px\" alt=\"Remediation recommended\">\n\n5\\. A failed post-decision lead leaves the room silent forever <code>🐞 Bug</code> <code>☼ Reliability</code>\n\n<pre>\n<b><i>pending_decision</i></b> skips a <b><i>DECISION-n</i></b> as soon as any trusted <b><i>LEAD-STARTED</i></b> is newer than it.\nAfter that, <b><i>cmd_watchdog</i></b> prints <b><i>quiet: step is waiting for owner…</i></b> on every later run, because\nthe step is still <b><i>waiting for owner</i></b> and the lease is still released. So if the lead started after\nthe decision (by the watchdog or the architect) never joins, for example because its session ended\nat once, ran out of usage, or the fire returned 200 but the run died, the watchdog never alarms and\nnever starts another lead, and the room stalls with no buzz until someone reads it by hand.\n</pre>\n\n\n<details>\n<summary><strong>Agent Prompt</strong></summary>\n\n```\n## Issue description\n`pending_decision` treats any LEAD-STARTED after a DECISION as answering it for good. If that lead never posts LEAD ONLINE, the room stays at `waiting for owner` with the lease released, and the watchdog stays quiet forever.\n\n## Fix Focus Areas\n- room.py[3042-3062]\n- room.py[3146-3159]\n\n## Recommended Fix\nIn `pending_decision`, ignore a LEAD-STARTED after the decision when it is older than `STARTING_FOR` (or `a.silent_after`) and no trusted lead LEAD ONLINE follows it. Cap such retries, for example at two decision starts per DECISION, then post one LEAD-SILENT (within ALARM_CAP) saying the lead started after DECISION-n never joined. Add a test: parked room, DECISION older than 30 min, watchdog LEAD-STARTED older than 30 min with no LEAD ONLINE. The watchdog should start again or alarm, not stay quiet.\n```\n\n<code>ⓘ Copy this prompt and use it to remediate the issue with your preferred AI generation tools</code>\n</details>\n\n[Dismiss ↗](https://app.qodo.ai/findings/8465c611-9314-4999-b33b-4e15f26bec79?action=dismiss&origin=git) | [View ↗](https://app.qodo.ai/findings/8465c611-9314-4999-b33b-4e15f26bec79)",
+  "created_at": "2026-11-16T01:55:12Z",
+  "updated_at": "2026-11-16T01:55:12Z",
+  "html_url": "https://github.com/SigorMatt/agent-room/pull/11#discussion_r4581301685",
+  "pull_request_url": "https://api.github.com/repos/SigorMatt/agent-room/pulls/11",
+  "_links": {
+    "self": {
+      "href": "https://api.github.com/repos/SigorMatt/agent-room/pulls/comments/4581301685"
+    },
+    "html": {
+      "href": "https://github.com/SigorMatt/agent-room/pull/11#discussion_r4581301685"
+    },
+    "pull_request": {
+      "href": "https://api.github.com/repos/SigorMatt/agent-room/pulls/11"
+    }
+  },
+  "reactions": {
+    "url": "https://api.github.com/repos/SigorMatt/agent-room/pulls/comments/4581301685/reactions",
+    "total_count": 0,
+    "+1": 0,
+    "-1": 0,
+    "laugh": 0,
+    "hooray": 0,
+    "confused": 0,
+    "heart": 0,
+    "rocket": 0,
+    "eyes": 0
+  },
+  "start_line": 3057,
+  "original_start_line": 3057,
+  "start_side": "RIGHT",
+  "line": 3061,
+  "original_line": 3061,
+  "side": "RIGHT",
+  "author_association": "NONE",
+  "original_position": 282,
+  "position": 282,
+  "subject_type": "line",
+  "is_copilot_code_review": false,
+  "copilot_code_review_sources": []
+}

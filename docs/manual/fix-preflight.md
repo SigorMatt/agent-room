@@ -28,10 +28,12 @@
    | `! couldn't read allow_merge_commit` | Check that **Allow merge commits** is ticked there |
    | `✗ state branch lacks PLAYBOOK.md` or `DESIGN.md` | The architect commits them. For a new project, send it the `state init` line below the table |
    | `✗ … no pipeline version` or `… not a release tag` | The architect fixes the `pipeline:` line of `PLAYBOOK.md` |
+   | `✗ … pin <V> isn't accepted by the lead task's prompt` | The `pipeline:` line names a pre-release, such as `v1.0.0-rc.1`, or another form leads can't be started with. The architect sets it to a release such as `v1.0.0`, or `main` |
    | `! … the pipeline is 'main'` | Fine until agent-room's first release, `v1.0.0` |
    | `✗ ROOM_NTFY_TOPIC is not set` (lead) | Add it to the `agent-room` environment ([Create the `agent-room` cloud environment](create-the-cloud-environment.md)) |
    | `✗ QODO_REVIEW must be 'on' or 'off'` (lead) | Set `QODO_REVIEW=on` or `QODO_REVIEW=off` there |
    | `✗ lead-owned files` (lead) | The lead fixes this itself. If it escalates it: [Report a pipeline problem](report-a-pipeline-problem.md) |
+   | `! lead task not configured: a handover will post NEXT-LEAD-NEEDED` | At kickoff: the architect sets up the lead task with you ([Set up the lead task](set-up-the-lead-task.md)). From a lead: the task or its `ROOM_FIRE_TOKEN_<NAME>` variable is missing; check step 9 of that page |
 
    The `state init` line:
 

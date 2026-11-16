@@ -14,10 +14,13 @@ Releases are immutable tags. Each entry gives the kind of release, what changed,
 - Review records: cold reviews, Qodo archives, dispositions and the ledger.
 - `gate` and `merge`: the merge gate, merge holds, and a merge bound to the reviewed head commit.
 - Unattended operation: `handoff` and successor leads, `intent` and `reconcile`, the watchdog, budgets, `PAUSE` and `STOP`.
+- The lead task: one scheduled task per project with an API trigger, which starts every lead. `lead-task-prompt` prints its prompt, which accepts only a well-formed join line; `start-lead` starts a lead through it, posts `LEAD-STARTED`, and refuses while a lead is running or starting, or the room is closed or done, or paused or stopped (except for the architect). Matthew creates the task once per project and adds its token as `ROOM_FIRE_TOKEN_<NAME>`.
+- The watchdog gains a decision alarm, `LEAD-SILENT: no lead joined after DECISION-<n>`, three hours after a `DECISION` to a parked lead that no lead answers, and reminders every 12 hours while a stall or such a wait lasts. A lead holding the lease at `waiting for owner` now counts as a stall. A failed buzz is retried at the next run, at most twice per stall. The watchdog only alarms: the architect starts takeovers and the lead after a decision, through the lead task.
+- Parking: a lead that waits only on Matthew records it, releases the lease and ends, instead of scheduling check-ins. The architect starts the lead after his decision, and deletes the watchdog at `DONE`.
 - Protocols: `ARCHITECT.md` and `LEAD.md`, and the thin skill.
 - Briefs for the subagents, and manuals for Matthew with an "I want to…" index.
 
 **Migration**
 
-- Matthew: save the new skill in each Claude account, replacing the old one, and paste the Project instructions from `ARCHITECT.md` (section 2) into each project's Claude Project.
+- Matthew: save the new skill in each Claude account, replacing the old one, and paste the Project instructions from `ARCHITECT.md` (section 2) into each project's Claude Project. At each project's first kickoff, set up its lead task ([Set up the lead task](docs/manual/set-up-the-lead-task.md)).
 - Architect and lead: none. Rooms opened with the old skill don't carry over; start projects as `ARCHITECT.md` section 5 says.
