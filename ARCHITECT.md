@@ -240,11 +240,17 @@ For the first phase and every later one. For a later phase, first add its `### P
 
    Start it with your scheduled-task tool's fire action (`fire_trigger`): the `lead-task:` ID, with that join line, whole, as its text. Matthew may get an approval pop-up; he's present at kickoff, so ask him to approve it. The result names the new session. If the fire action errs in a way that doesn't say whether the run started (a timeout, or an answer you can't read), don't fire again: in step 10 post `LEAD-STARTED: unconfirmed (<reason>); a LEAD ONLINE follows if the lead started (started by architect)` instead, and wait about 30 minutes for `LEAD ONLINE` (9.5). A clear refusal (no permission, task not found) started nothing.
 
-   **Fallback,** if the fire action isn't available or fails: give Matthew the join line. He opens the lead task, presses **Run now** and pastes the line as its text; or he starts a new session in the Code tab on `OWNER/NAME` in the `agent-room` environment, and sends the line.
+   **Fallback,** if the fire action isn't available or fails: first post `LEAD-STARTED: by hand …` (step 10), then give Matthew the join line. He opens the lead task, presses **Run now** and pastes the line as its text; or he starts a new session in the Code tab on `OWNER/NAME` in the `agent-room` environment, and sends the line.
 10. Post `LEAD-STARTED` for the new lead, with `<session_id>` from the fire action's result. If Matthew started it through the fallback, he sends you the session's link: post it the same way, so the watchdog keeps watching that lead, but only while that lead's `LEAD ONLINE` isn't in the room yet. A `LEAD-STARTED` after its `LEAD ONLINE` would look like a lead still starting, and `start-lead` would refuse the next handover for 30 minutes:
 
     ```bash
     python3 room.py say N architect "LEAD-STARTED: https://claude.ai/code/<session_id> (plain join line, started by architect)" --repo OWNER/NAME
+    ```
+
+    For the fallback, post this before you give Matthew the line, naming how he starts it. The watchdog then sees a sign of a lead at once and holds off, with no gap before his start leaves one:
+
+    ```bash
+    python3 room.py say N architect "LEAD-STARTED: by hand (Matthew starts it with <Run now | the Code tab>; started by architect)" --repo OWNER/NAME
     ```
 
     `LEAD ONLINE` should appear in the room within about 10 minutes, then `PLAN`. If not, Matthew brings you back.
@@ -364,9 +370,9 @@ Normally nothing is needed: the lead starts its successor, the watchdog starts t
 - Matthew opens the lead task, presses **Run now** and pastes the line as its text;
 - Matthew starts a new session in the Code tab on `OWNER/NAME` in the `agent-room` environment, and sends the line.
 
-Whichever way, post `LEAD-STARTED` for it as in section 8, step 10. The watchdog reads it: it starts no takeover within its silence time of it, and a start of yours opens a new episode, with up to two takeovers of its own if this lead stalls too.
+Whichever way, post `LEAD-STARTED` as in section 8, step 10. For Matthew's two ways, post `LEAD-STARTED: by hand …` before you give him the line, then the session's link when he sends it. The watchdog reads these: it starts no takeover within its silence time of the last one, and a start of yours opens a new episode, with up to two takeovers of its own if this lead stalls too.
 
-The fire action skips `start-lead`'s guards, so check them yourself. Never start a lead while a `LEAD-STARTED` under about 30 minutes old has no `LEAD ONLINE` after it: that lead may still be starting, and a takeover would take the lease from it once it joins. That includes `LEAD-STARTED: unconfirmed (…)`, which `start-lead` posts when its request timed out or got an answer it didn't recognize: the lead may well have started, so wait for its `LEAD ONLINE`.
+The fire action skips `start-lead`'s guards, so check them yourself. Never start a lead while a `LEAD-STARTED` under about 30 minutes old (other than the one you just posted for this start) has no `LEAD ONLINE` after it: that lead may still be starting, and a takeover would take the lease from it once it joins. That includes `LEAD-STARTED: unconfirmed (…)`, which `start-lead` posts when its request timed out or got an answer it didn't recognize: the lead may well have started, so wait for its `LEAD ONLINE`.
 
 Which line:
 

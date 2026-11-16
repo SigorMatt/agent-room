@@ -100,9 +100,9 @@ If the message reads `LEAD-SILENT: no lead joined after DECISION-n`, the leads s
 3. If a `LEAD ONLINE` came after the alarm, a takeover lead joined: the architect tells you where it is, and you need no new lead for now. If that lead makes no progress either, a second `LEAD-SILENT` follows ("the lead started at … made no progress") with one more takeover, the watchdog's last try. If that one stalls too, a final `LEAD-SILENT` says "two takeover leads made no progress; no more starts", and nothing more starts on its own. Answer it: the architect looks into why leads keep failing, fixes the cause with you, then starts a lead by hand. From that start, the watchdog watches again as before.
 4. If no takeover lead came online, one is started, in exactly one of these two ways, never both:
    - **The architect starts it** through the lead task, and posts `LEAD-STARTED`. You may get an approval pop-up: approve it. That's all: don't start a lead yourself.
-   - **Or, if it can't, it gives you the takeover line.** The line ends with "Take over the lease … the previous lead stopped without handing over." Start a lead with it ([Start the next lead by hand](start-the-next-lead-by-hand.md)), then send the architect the new session's link, so it posts `LEAD-STARTED`. Use a takeover line only when the architect gives you one.
+   - **Or, if it can't, it posts `LEAD-STARTED: by hand …` and gives you the takeover line.** Start the lead soon after. The line ends with "Take over the lease … the previous lead stopped without handing over." Start a lead with it ([Start the next lead by hand](start-the-next-lead-by-hand.md)), then send the architect the new session's link, so it posts `LEAD-STARTED`. Use a takeover line only when the architect gives you one.
 
-   Either way, if the old lead's session is still open, archive it. The watchdog sees the start and holds off (three hours, by default), so the two don't collide.
+   Either way, if the old lead's session is still open, archive it. The watchdog sees the architect's `LEAD-STARTED` at once and holds off (three hours, by default), so its own start and yours don't collide.
 
 ## What you should see
 
