@@ -1,0 +1,71 @@
+{
+  "url": "https://api.github.com/repos/SigorMatt/agent-room/pulls/comments/4581301681",
+  "pull_request_review_id": 5914203249,
+  "id": 4581301681,
+  "node_id": "PRRC_kwDOVVYvuc8AAAABEREdsQ",
+  "diff_hunk": "@@ -49,82 +50,78 @@ The message reads `MERGE-HOLD-n: PR #<number>, reason <r> (…)`. One hold can n\n    - for reason 3 only, **fix or relax the check** yourself, for example a flaky test or a check that no longer fits; the lead then runs the gate again;\n    - **back to Build** with an extra budget: by default one more cold-review round and up to two Qodo rounds. The mission's hours budget starts again from your decision;\n    - **drop the mission and re-plan.**\n-3. The architect records it and posts `DECISION-n`. Wait for the ACK.\n+3. The architect records it, posts `DECISION-n` and starts a new lead, as for an escalation. Wait for the ACK.\n \n ### `NEXT-LEAD-NEEDED`: start the next lead\n \n-A lead finished its part but couldn't schedule the next one. Nothing is lost. Start one with the normal join line: [Start the next lead by hand](start-the-next-lead-by-hand.md).\n+A lead finished its part but couldn't start the next one through the lead task. The message says why. Nothing is lost.\n+\n+1. The architect starts a lead with the normal join line, or gives it to you: [Start the next lead by hand](start-the-next-lead-by-hand.md).\n+2. Fix the cause too, or the next handover fails the same way:\n+   - `not configured` or `token rejected`: the lead task's token needs fixing ([Set up the lead task](set-up-the-lead-task.md), \"If you don't\").\n+   - `lead task … not found`: the task was deleted, or the playbook names an old one. The architect sets it up again with you and records its new ID ([Troubleshooting](troubleshooting.md), the new-task line).\n+   - `pin … isn't accepted by the lead task's prompt`: the playbook pins a pre-release. The architect pins a release, or `main`.\n \n ### `PAUSED`: paused, as asked\n \n-The lead let running work finish, saved everything and ended. Nothing runs now. To resume, start a lead with the normal join line: [Start the next lead by hand](start-the-next-lead-by-hand.md).\n+The lead let running work finish, saved everything and ended. Nothing runs now. To resume, ask the architect to start a lead ([STOP or PAUSE](stop-or-pause.md), step 4).\n \n ### `STOPPED`: halted, as asked\n \n-The lead stopped its helpers, recorded what it verified and what it couldn't, and ended. Go through that with the architect. To resume, start a lead with the normal join line: [Start the next lead by hand](start-the-next-lead-by-hand.md).\n+The lead stopped its helpers, recorded what it verified and what it couldn't, and ended. Go through that with the architect. To resume, ask the architect to start a lead ([STOP or PAUSE](stop-or-pause.md), step 4).\n \n ### `DONE`: the phase is complete\n \n-The lead merged the last mission, checked every criterion, posted `DONE` and closed the room. Then it deleted the watchdog task and ended.\n+The lead merged the last mission, checked every criterion, posted `DONE`, closed the room and ended.\n \n-1. The architect checks every item's criteria. If the watchdog task is still there (the lead stopped before deleting it), the architect deletes it.\n+1. The architect checks every item's criteria and deletes the watchdog task; a lead can't. The lead task stays, for the next phase.\n 2. Then either plan more ([Start a new phase](start-a-new-phase.md)) or finish ([Wrap up an architect session](wrap-up-an-architect-session.md)).\n 3. Optional: on `https://github.com/SigorMatt/<repo>/branches`, delete leftover `mission/…` branches whose pull request is merged, with the bin icon. Never delete `main` or `agent-room/state`.\n \n ### `LEAD-SILENT`: no progress for three hours\n \n-The watchdog saw nothing move. A lead died, got stuck or ran out of Claude usage, or the next one never started. Or the lead is alive but slow: it sees the alarm at its next check-in, within about 30 minutes, and answers in the room.\n+The watchdog saw nothing move. A lead died, got stuck or ran out of Claude usage, or the next one never started. With the lead task set up, the watchdog has usually started a takeover lead already: a `LEAD-STARTED` follows in the room, then that lead's `LEAD ONLINE`. It tries at most two takeovers for the same stall.\n \n 1. If the buzz's message reads `LEAD-SILENT: state unreadable (…)`, the pipeline's records are broken, not the lead. The architect checks them first. If the `agent-room/state` branch was deleted, it is restored before any lead starts. Best: the architect pushes it again from its own copy, or you push it from a fork or a local clone that still has it. In a local clone, run:\n \n    ```bash\n    git push origin agent-room/state\n    ```\n \n-   Only if no copy exists does the architect recreate it from scratch, and tell the next lead to rebuild its records from the merged pull requests and the room. Then go on.\n-2. The architect tells you where the build stopped. Then it waits for the lead's next check-in, until about 35 minutes after the alarm. It checks back itself, or asks you to send it this then:\n+   Only if no copy exists does the architect recreate it from scratch, and tell the next lead to rebuild its records from the merged pull requests and the room. The watchdog starts no lead after this alarm. Then go on.\n+2. The architect tells you where the build stopped. Then it checks that the takeover lead's `LEAD ONLINE` comes. That usually takes about 15 minutes, but the architect gives it about 30, so it doesn't start a second lead while the first is still starting. It checks back itself, or asks you to send it this then:\n \n    ```text\n    check the room\n    ```\n \n-3. If any lead message came after the alarm, the lead is alive: the architect tells you where it is, and you need no new lead. Stop here. If the lead posted or pushed work within the last hour, it may be busy with a helper and unable to check in yet: the architect waits one more check-in, about 35 minutes.\n-4. Otherwise it gives you the **takeover line**. It ends with \"Take over the lease … the previous lead stopped without handing over.\"\n-5. If the old lead's session is still open in the Code tab, archive it.\n+3. If a `LEAD ONLINE` came after the alarm, a takeover lead joined: the architect tells you where it is, and you need no new lead for now. If that lead makes no progress either, a second `LEAD-SILENT` follows (\"the lead started at … made no progress\") with one more takeover, the watchdog's last try. If that one stalls too, a final `LEAD-SILENT` says \"two takeover leads made no progress; no more starts\", and nothing more starts on its own. Answer it: the architect looks into why leads keep failing, fixes the cause with you, then starts a lead by hand. From that start, the watchdog watches again as before.\n+4. If no takeover lead came online, the architect starts a takeover lead itself, or gives you the **takeover line**. The watchdog sees that start and holds off (three hours, by default), so the two don't collide. It ends with \"Take over the lease … the previous lead stopped without handing over.\"",
+  "path": "docs/manual/answer-a-buzz.md",
+  "commit_id": "90a5e6d4d4b2c9703411aca6b6338921b4af9f30",
+  "original_commit_id": "cde42bac28cebb6f54ade74bed236467aef6e605",
+  "user": {
+    "login": "qodo-code-review[bot]",
+    "id": 151058649,
+    "node_id": "BOT_kgDOCQD42Q",
+    "avatar_url": "https://avatars.githubusercontent.com/in/484649?v=4",
+    "gravatar_id": "",
+    "url": "https://api.github.com/users/qodo-code-review%5Bbot%5D",
+    "html_url": "https://github.com/apps/qodo-code-review",
+    "followers_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/followers",
+    "following_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/following{/other_user}",
+    "gists_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/gists{/gist_id}",
+    "starred_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/starred{/owner}{/repo}",
+    "subscriptions_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/subscriptions",
+    "organizations_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/orgs",
+    "repos_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/repos",
+    "events_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/events{/privacy}",
+    "received_events_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/received_events",
+    "type": "Bot",
+    "user_view_type": "public",
+    "site_admin": false
+  },
+  "body": "<img src=\"https://img.shields.io/badge/Medium-634FD1?style=flat-square\" height=\"20px\" alt=\"Remediation recommended\">\n\n3\\. Buzz instructions can start a second lead <code>🐞 Bug</code> <code>≡ Correctness</code>\n\n<pre>\nThe revised <b><i>LEAD-SILENT</i></b> instructions say the architect may start the takeover itself or give\nMatthew a takeover line, but the next step tells Matthew to start a lead unconditionally. If the\narchitect already fired the task, following both steps can launch another takeover instead of\nstopping after the first start.\n</pre>\n\n\n<details>\n<summary><strong>Agent Prompt</strong></summary>\n\n```\n## Issue description\nThe buzz procedure offers an architect-started takeover but then directs Matthew to start another one regardless.\n## Fix Focus Areas\n- docs/manual/answer-a-buzz.md[98-101]\n## Recommended Fix\nMake the final start step conditional on receiving a takeover line. If the architect starts the lead, direct Matthew to wait for that lead instead.\n```\n\n<code>ⓘ Copy this prompt and use it to remediate the issue with your preferred AI generation tools</code>\n</details>\n\n[Dismiss ↗](https://app.qodo.ai/findings/81dfe293-bf09-4ef0-8a9b-91d1609ba799?action=dismiss&origin=git) | [View ↗](https://app.qodo.ai/findings/81dfe293-bf09-4ef0-8a9b-91d1609ba799)",
+  "created_at": "2026-11-16T01:55:12Z",
+  "updated_at": "2026-11-16T01:55:12Z",
+  "html_url": "https://github.com/SigorMatt/agent-room/pull/11#discussion_r4581301681",
+  "pull_request_url": "https://api.github.com/repos/SigorMatt/agent-room/pulls/11",
+  "_links": {
+    "self": {
+      "href": "https://api.github.com/repos/SigorMatt/agent-room/pulls/comments/4581301681"
+    },
+    "html": {
+      "href": "https://github.com/SigorMatt/agent-room/pull/11#discussion_r4581301681"
+    },
+    "pull_request": {
+      "href": "https://api.github.com/repos/SigorMatt/agent-room/pulls/11"
+    }
+  },
+  "reactions": {
+    "url": "https://api.github.com/repos/SigorMatt/agent-room/pulls/comments/4581301681/reactions",
+    "total_count": 0,
+    "+1": 0,
+    "-1": 0,
+    "laugh": 0,
+    "hooray": 0,
+    "confused": 0,
+    "heart": 0,
+    "rocket": 0,
+    "eyes": 0
+  },
+  "start_line": null,
+  "original_start_line": null,
+  "start_side": null,
+  "line": null,
+  "original_line": 99,
+  "side": "RIGHT",
+  "author_association": "NONE",
+  "original_position": 81,
+  "position": 1,
+  "subject_type": "line",
+  "is_copilot_code_review": false,
+  "copilot_code_review_sources": []
+}
