@@ -3,15 +3,18 @@
 
 A buzz (any URL but the fire endpoint) appends its arguments to FAKE_CURL_LOG and fails if FAKE_CURL_FAIL is set.
 
-A POST to a lead task's fire endpoint (.../v1/claude_code/routines/<task>/fire) appends its arguments to
-FAKE_FIRE_LOG (else FAKE_CURL_LOG) and answers as the API would:
-  FAKE_FIRE_FAIL    curl fails as on a network error, printing this text (%TOKEN% becomes the bearer token)
+A POST to a lead task's fire endpoint (.../v1/claude_code/routines/<task>/fire) appends {"argv", "stdin"} (what
+`--config -` passed) to FAKE_FIRE_LOG (else FAKE_CURL_LOG), takes headers from -H and from stdin's `header = "…"`
+lines, and answers as the API would:
+  FAKE_FIRE_FAIL    curl fails as on a network error, printing this text (%TOKEN% becomes the bearer token), with
+                    exit FAKE_FIRE_EXIT (default 7, couldn't connect; 28 is a timeout)
   FAKE_FIRE_STATUS  the HTTP status (default 200)
   FAKE_FIRE_BODY    the body (default: a routine_fire answer naming a new session); %TOKEN% as above
 It honours -w's %{http_code}, as room.py reads the status from it.
 """
 import json
 import os
+import re
 import sys
 
 args = sys.argv[1:]
@@ -26,14 +29,17 @@ if "/v1/claude_code/routines/" not in url:
         sys.exit(22)
     sys.exit(0)
 
+stdin = sys.stdin.read() if "--config" in args and args[args.index("--config") + 1] == "-" else ""
 log = os.environ.get("FAKE_FIRE_LOG") or os.environ["FAKE_CURL_LOG"]
-with open(log, "a") as f:
-    f.write(json.dumps(args) + "\n")
+with open(log, "a") as f:  # what any process could see (argv), and what came through stdin
+    f.write(json.dumps({"argv": args, "stdin": stdin}) + "\n")
 headers = [args[i + 1] for i, x in enumerate(args[:-1]) if x == "-H"]
+headers += [json.loads(m.group(1)) for m in re.finditer(r'^header\s*=\s*("(?:[^"\\]|\\.)*")\s*$', stdin, re.M)]
 token = next((h.split("Bearer ", 1)[1] for h in headers if h.startswith("Authorization: Bearer ")), "")
 if os.environ.get("FAKE_FIRE_FAIL"):
-    print(f"curl: (7) {os.environ['FAKE_FIRE_FAIL'].replace('%TOKEN%', token)}", file=sys.stderr)
-    sys.exit(7)
+    code = int(os.environ.get("FAKE_FIRE_EXIT", "7"))  # 7 couldn't connect, 28 timed out, 56 lost the reply
+    print(f"curl: ({code}) {os.environ['FAKE_FIRE_FAIL'].replace('%TOKEN%', token)}", file=sys.stderr)
+    sys.exit(code)
 with open(log + ".count", "a+") as f:  # a new session for each start
     f.seek(0)
     n = len(f.read()) + 1

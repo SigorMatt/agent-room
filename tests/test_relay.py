@@ -229,9 +229,12 @@ def fires():
     return log_lines(FIRE_LOG)
 
 
-def request(argv):
-    """The parts of one logged fire request."""
-    return {"url": argv[-1], "headers": [argv[i + 1] for i, x in enumerate(argv) if x == "-H"],
+def request(entry):
+    """The parts of one logged fire request ({"argv", "stdin"}): headers from -H and from `--config -`'s stdin."""
+    argv = entry["argv"]
+    stdin = [json.loads(m.group(1)) for m in re.finditer(r'^header\s*=\s*("(?:[^"\\]|\\.)*")\s*$', entry["stdin"],
+                                                         re.M)]
+    return {"url": argv[-1], "headers": [argv[i + 1] for i, x in enumerate(argv) if x == "-H"] + stdin,
             "body": json.loads(argv[argv.index("--data-raw") + 1]), "method": argv[argv.index("-X") + 1],
             "timeout": argv[argv.index("-m") + 1]}
 
@@ -1139,6 +1142,22 @@ def t_after_two_takeovers_one_last_alarm_then_a_start_by_hand_opens_a_new_episod
     online()
     set_state("step=build 51")
     age_room()
+
+
+# --- fixes after Qodo's review of PR #11
+
+def t_the_token_stays_out_of_curls_arguments():
+    # qodo PR #11 "Other processes can read the fire token": any process can read a command line; the token goes
+    # through curl's stdin instead
+    online()
+    nf = len(fires())
+    r = start("architect", "--takeover", ROOM_SESSION="arch")
+    assert r.returncode == 0, out(r)
+    [entry] = fires()[nf:]
+    assert TOKEN not in " ".join(entry["argv"]), entry["argv"]
+    assert f"Authorization: Bearer {TOKEN}" in request(entry)["headers"], entry
+    secret_free(r)
+    online()
 
 
 setup()

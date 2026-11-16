@@ -3628,13 +3628,15 @@ def fire(task, token, text):
     else its text; or (0, why) when curl itself failed. Never raises; no error holds the token or curl's argv."""
     base = (os.environ.get("ROOM_FIRE_URL", "").strip() or FIRE_URL).rstrip("/")
     beta = os.environ.get("ROOM_FIRE_BETA", "").strip() or FIRE_BETA
-    cmd = ["curl", "-sS", "-m", str(FIRE_TIMEOUT), "-X", "POST",
-           "-H", f"Authorization: Bearer {token}", "-H", f"anthropic-beta: {beta}",
-           "-H", "anthropic-version: 2023-06-01", "-H", "Content-Type: application/json",
+    # the token goes through stdin, as a curl config line, never in argv where any process can read it (qodo PR #11)
+    quoted = token.replace("\\", "\\\\").replace('"', '\\"')
+    cmd = ["curl", "-sS", "-m", str(FIRE_TIMEOUT), "-X", "POST", "--config", "-",
+           "-H", f"anthropic-beta: {beta}", "-H", "anthropic-version: 2023-06-01", "-H", "Content-Type: application/json",
            "--data-raw", json.dumps({"text": text}), "-w", "\n%{http_code}",
            f"{base}/v1/claude_code/routines/{task}/fire"]
     try:
-        r = subprocess.run(cmd, capture_output=True, text=True, errors="replace", timeout=FIRE_TIMEOUT + 5)
+        r = subprocess.run(cmd, input=f'header = "Authorization: Bearer {quoted}"\n', capture_output=True, text=True,
+                           errors="replace", timeout=FIRE_TIMEOUT + 5)
     except subprocess.TimeoutExpired:  # its text would hold the whole argv, token included
         return 0, f"curl timed out after {FIRE_TIMEOUT}s"
     except OSError as e:  # its text can hold a file name; strerror doesn't
