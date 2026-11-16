@@ -156,7 +156,7 @@ Fill every section of the [template](templates/playbook/DESIGN.md):
 Fill the [template](templates/playbook/PLAYBOOK.md):
 
 1. **Header lines,** one per line at the top:
-   - `pipeline: <version>`: the pin. Sessions download everything from it.
+   - `pipeline: <version>`: the pin. Sessions download everything from it. It is `main` or a release `vX.Y.Z`, never a pre-release such as `v1.0.0-rc.1`: the lead task's prompt accepts no other form, so no lead could be started.
    - `repo: OWNER/NAME`
    - `room: N`: set at kickoff.
    - `watchdog: <task ID>`: set at kickoff.
@@ -229,6 +229,7 @@ For the first phase and every later one. For a later phase, first add its `### P
    - `✗` on "merge commits are not allowed": ask Matthew to turn on "Allow merge commits" (repo Settings, General, Pull Requests). The lead's `merge` uses a merge commit. A `!` there means the setting couldn't be read: ask him to check it.
    - `!` on "Automatically delete head branches": ask Matthew to turn it on (repo Settings, General, Pull Requests). Mission branches can't be deleted any other way.
    - `!` on `pipeline: main`: expected before `v1.0.0`.
+   - `✗` on "pin <V> isn't accepted by the lead task's prompt": set `pipeline:` to a release `vX.Y.Z` or `main` (section 11), and commit.
    - `!` on "lead task not configured": the `lead-task:` line is missing. Do step 6. Without it, every handover posts `NEXT-LEAD-NEEDED`.
 8. Confirm with Matthew that the `agent-room` cloud environment has `ROOM_NTFY_TOPIC`, `QODO_REVIEW` (`on` or `off`), the lead task's `ROOM_FIRE_TOKEN_<NAME>`, and the playbook's domains and secrets. Secrets go in as network secrets. The lead task's token is the one exception (step 6): network secrets are never sent to `api.anthropic.com`.
 9. Start the first lead. Print the join line:
@@ -376,6 +377,7 @@ Which line:
   For `NEXT-LEAD-NEEDED`, its reason says why the start failed. Fix the cause too, so the next handover works:
   - `not configured` or `token rejected`: check the `lead-task:` line, and have Matthew check the variable ([Set up the lead task](docs/manual/set-up-the-lead-task.md), step 9).
   - `lead task <ID> not found`: the task was deleted, or the line names an old one. Redo section 8, step 6 with Matthew: a new task, its token in the variable, and a new `lead-task:` line. The fire action fails with the old ID too, so until then start leads through the fallback (section 8, step 9).
+  - `pin <V> isn't accepted by the lead task's prompt`: the `pipeline:` line names a form the prompt rejects, such as a pre-release. Pin a release `vX.Y.Z` or `main` (section 11), then start the lead.
 
   After Matthew recreates the lead task for any reason, redo section 8, step 6 the same way, even though a `lead-task:` line exists.
 - **`LEAD-SILENT`:** no lead progress for three hours. A lead died, got stuck or never started.
@@ -452,7 +454,7 @@ Use a fresh chat for each design session or phase, after the handoff note is com
 
 ## 11. Bumping the pin
 
-Releases are immutable tags. Read `CHANGELOG.md` at the new tag first: its kind and its migration steps.
+Releases are immutable tags. Pin only a release `vX.Y.Z`, or `main` before `v1.0.0`; the lead task's prompt rejects a pre-release such as `v1.0.0-rc.1`. Read `CHANGELOG.md` at the new tag first: its kind and its migration steps.
 
 **Patch (`v1.0.x`),** with nothing paused:
 

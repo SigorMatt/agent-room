@@ -60,6 +60,7 @@ A lead finished its part but couldn't start the next one through the lead task. 
 2. Fix the cause too, or the next handover fails the same way:
    - `not configured` or `token rejected`: the lead task's token needs fixing ([Set up the lead task](set-up-the-lead-task.md), "If you don't").
    - `lead task … not found`: the task was deleted, or the playbook names an old one. The architect sets it up again with you and records its new ID ([Troubleshooting](troubleshooting.md), the new-task line).
+   - `pin … isn't accepted by the lead task's prompt`: the playbook pins a pre-release. The architect pins a release, or `main`.
 
 ### `PAUSED`: paused, as asked
 
