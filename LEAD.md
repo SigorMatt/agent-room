@@ -102,7 +102,7 @@ Your session may have no background commands and no scheduling tools (a session 
    | 4 | The room is closed: end, unless you are closing it (section 7) |
    | 1 | Try once more; if it fails again, say so in your next `STATUS` |
 
-3. Subagents: start them in the background if the Agent tool offers that, then end your turn; you are woken as each one finishes. If it doesn't, run them one at a time in the foreground. Either way, post a `STATUS` each time you start or resume one: `python3 room.py say N lead "STATUS: builder for <task> running in the <background | foreground>"`. With a `STATUS` after every step change (section 11), that is the sign of life that keeps the watchdog from taking you over while builders work quietly.
+3. Subagents: start them in the background if the Agent tool offers that, then end your turn; you are woken as each one finishes. If it doesn't, run them one at a time in the foreground. Either way, post a `STATUS` each time you start or resume one: `python3 room.py say N lead "STATUS: builder for <task> running in the <background | foreground>"`. With a `STATUS` after every step change but the handover (section 11), that is the sign of life that keeps the watchdog from taking you over while builders work quietly.
 4. Never end a turn while you hold the lease, unless a subagent you started is still running. You end for good only by standing down, handing over, parking, `PAUSED`, `STOPPED` or `DONE`, or as a drill says (section 10).
 5. **Park** when you wait only on Matthew.
    - First check the buzz of the `ESCALATION-<n>` or `MERGE-HOLD-<n>` you wait on. If it printed `[buzz failed: …]`, Matthew may not know a decision is needed, and the watchdog only reminds him after 12 hours. Retry once, with a buzz; if that fails too, park anyway:
@@ -166,8 +166,9 @@ Record before acting: `python3 room.py intent N "<intent>"` before posting `PLAN
 
 1. Brief one builder per task with [`briefs/builder.md`](briefs/builder.md): at most three at once, each in its own worktree (the Agent tool's worktree isolation). Record each under "Tasks in flight" (task, builder ID, attempt), commit with `state commit`, and post a `STATUS` naming the builders you started (3.3).
 2. A `QUESTION`: answer from the docs in one or two sentences, citing the section, and resume the same builder, with a `STATUS` (3.3). If the docs don't settle it, decide only when any reasonable choice leaves the design intact, and record that under "Lead decisions" in `MISSIONS.md`. Otherwise escalate (section 8) and park the builder, recording its question (section 8, step 4).
-3. A `RESULT … done`: first read the room (`python3 room.py read N lead`) and handle what came (section 9): after a `STOP`, merge nothing more; after a `PAUSE`, brief no new builder. Then merge its branch, run the checks, push. Verify with the checks and `git diff --stat`, never by reading the diff. A conflict that isn't trivial: resume the builder to merge `<branch>` and resolve it.
+3. A `RESULT … done`: first read the room (`python3 room.py read N lead`) and handle what came (section 9): after a `STOP`, merge nothing more; after a `PAUSE`, brief no new builder. Then post a `STATUS` that it returned, merge its branch, run the checks, push. Verify with the checks and `git diff --stat`, never by reading the diff. A conflict that isn't trivial: resume the builder to merge `<branch>` and resolve it.
    ```bash
+   python3 room.py say N lead "STATUS: <task> returned; merging and testing"
    git merge --no-edit <builder-branch>
    <test>
    python3 room.py lease check && git push origin <branch>
@@ -313,7 +314,7 @@ At the end of a mission, or early at a step boundary when your context gets heav
 1. Drill `no-handoff`, at the end of a mission this session merged itself: end now, without `handoff` or `start-lead`.
 2. Let running builders finish; merge and push their work. Commit your state edits.
 3. Find the last comment you acted on. If you acted on everything you read, it is what `python3 room.py cursor N lead` prints.
-4. Hand over. This posts `HANDOFF`, records the step and the cursor, and releases the lease:
+4. Hand over. This posts `HANDOFF`, records the step and the cursor, and releases the lease. `HANDOFF` is your last post: after it, post no `STATUS` or anything else, apart from `start-lead`'s own `LEAD-STARTED` (step 5) or a `NEXT-LEAD-NEEDED`, so the watchdog can start a successor that never came (section 11):
    ```bash
    python3 room.py handoff N --step <step> --cursor <ID>
    ```
@@ -441,7 +442,7 @@ End.
 
 ## 11. Rules
 
-- **Signs of life:** the watchdog alarms when nothing progresses (a step change or a mission-branch push) for three hours. It tries a takeover at most once per stall, in the run of its first alarm, and only if no lead has posted anything since that progress, nor taken the lease; otherwise the architect decides whether you are alive. So any post since your progress keeps the watchdog from taking you over. Post a `STATUS` after every step change, and whenever you start or resume builders, in the foreground or the background (3.3, 5.1, 5.2). A step can run for hours with no push: builders working quietly in the background, a builder you resumed after a `QUESTION` or a failed attempt, a long cold review. The `STATUS` protects you, and shows the architect you are alive.
+- **Signs of life:** the watchdog alarms when nothing progresses (a step change or a mission-branch push) for three hours. It tries a takeover at most once per stall, in the run of its first alarm, and only if no lead has posted anything since that progress, nor taken the lease; otherwise the architect decides whether you are alive. So any post since your progress keeps the watchdog from taking you over. Post a `STATUS` after every step change except the handover, whenever you start or resume builders, in the foreground or the background, and when a builder's `RESULT` arrives, before you merge (3.3, 5.1, 5.2). The handover is the exception: `HANDOFF` is your last post, apart from `start-lead`'s own `LEAD-STARTED` or a `NEXT-LEAD-NEEDED` (section 6). Any other post after it would look like a sign of life, and the watchdog wouldn't start a successor that never came. A step can run for hours with no push: builders working quietly in the background, a builder you resumed after a `QUESTION` or a failed attempt, a long cold review. The `STATUS` protects you, and shows the architect you are alive.
 - **Context hygiene:** builders reply in at most 10 lines. Verify with checks and `git diff --stat`, not by reading diffs; open a file only when a check fails. Keep state in `MISSIONS.md`, not in your memory. After a compaction, re-read this file and `MISSIONS.md`.
 - **Delegate:** implementing, fixing, investigating code and hard merge conflicts go to builders. You write briefs and answers, run checks, merge, keep records, post and open the PR. Resume a builder for follow-ups; if resuming fails, start a fresh one with the full brief.
 - **State writes:** commit hand edits with `state commit` before `state set`, `state next`, `intent` or `handoff`; they refuse while the worktree has local changes. Exit 3 means the branch moved: run `python3 room.py state sync`, re-read and re-apply. Exit 5 means the lease isn't yours: stand down.
