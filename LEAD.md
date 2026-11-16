@@ -332,7 +332,7 @@ At the end of a mission, or early at a step boundary when your context gets heav
 
    | Exit | Do |
    | --- | --- |
-   | 0 | End. This includes an unconfirmed start (it timed out, or the answer wasn't recognized), which posts `LEAD-STARTED: unconfirmed (<reason>) …`: never run `start-lead` again after it. A `LEAD ONLINE` follows if the lead started; if none does, the watchdog alarms and the architect starts one |
+   | 0 | End. This includes an unconfirmed start (it timed out, or the answer wasn't recognized), which posts `LEAD-STARTED: unconfirmed (<reason>) …`: never run `start-lead` again after it. A `LEAD ONLINE` follows if the lead started; if none does, the watchdog alarms and starts one at that alarm, or the architect does |
    | 3, saying `this session still holds the lease` | Your release didn't go through. Run `python3 room.py lease release`, then `start-lead` again |
    | 3, otherwise (a lead is running or starting) | End |
    | 1 | A definite failure: nothing started. Run it once more; if it fails again, as for 6 |
