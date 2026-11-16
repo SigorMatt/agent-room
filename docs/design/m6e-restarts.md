@@ -20,7 +20,7 @@ A new item in section 3 (Waiting): **"After a container restart."** When a notic
 2. **For each stopped builder or reviewer:**
    - Look at its worktree with `git -C <worktree> status --short` and `git -C <worktree> log --oneline -3`. Its commits are kept; its uncommitted edits may be partial.
    - Resume it by sending it a message, using the ID the notice gives. Say that the container restarted, that its uncommitted edits are still in its worktree, and that it should review them, finish its task and report as briefed.
-   - If resuming fails (no transcript), start a fresh one with the full brief. Add that the worktree holds a stopped predecessor's uncommitted edits, which it may keep or discard.
+   - If resuming fails (no transcript), start a fresh one with the full brief. It gets its own new worktree, so add the stopped builder's worktree path and what is there: its commits on its branch, and any uncommitted edits. The fresh builder may look at them and take over what is sound, or ignore them.
    - None of this counts as a failed attempt (5.2, step 4).
 3. **A stopped wait or check** (a suite run, a Qodo wait) is run again.
 4. **Then post a `STATUS`:** `STATUS: container restarted; resumed <what>`. It is also a sign of life (section 11).
