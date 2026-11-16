@@ -3126,20 +3126,23 @@ def waiting_request(a, values, playbook):
     as the current room, the room's newest trusted lead ESCALATION-n or MERGE-HOLD-n with no trusted DECISION-n (from
     the architect or Matthew) after it: one left open after a newer one was answered still gets its reminder (cold
     M6d R3-2), and a stale old request that a later decision made moot doesn't hide the one the lead parked on (cold
-    M6d R4-2); else None. Unlike pending_decision, a room that neither PLAYBOOK.md nor the machine block records gets
-    no reminder (qodo PR #14)."""
+    M6d R4-2). Returns (that request, the other open requests, oldest first), which the reminder lists as also open,
+    so neither order of a stale and a live request hides the live one (cold M6d S1-1); else None. Unlike
+    pending_decision, a room that neither PLAYBOOK.md nor the machine block records gets no reminder (qodo PR #14)."""
     room = current_room(playbook, values)
     if lease_of(values)[0] != "none" or room is None or room[0] != a.room:
         return None
     msgs = [m for m in map(parse, comments(a.room)) if trusted(m)]
     asks = [m for m in msgs if m["role"] == "lead" and re.fullmatch(r"(?:ESCALATION|MERGE-HOLD)-\d+",
                                                                      message_kind(m["text"]) or "")]
-    for ask in reversed(asks):  # the newest open one
+    def answered(ask):
         n = message_kind(ask["text"]).rsplit("-", 1)[1]
-        if not any(m["id"] > ask["id"] and m["role"] in ("architect", "human")
-                   and message_kind(m["text"]) == f"DECISION-{n}" for m in msgs):
-            return ask
-    return None
+        return any(m["id"] > ask["id"] and m["role"] in ("architect", "human")
+                   and message_kind(m["text"]) == f"DECISION-{n}" for m in msgs)
+    open_asks = [m for m in asks if not answered(m)]  # oldest first
+    if not open_asks:
+        return None
+    return open_asks[-1], open_asks[:-1]
 
 
 def alarm(a, text):
@@ -3223,7 +3226,8 @@ def cmd_watchdog(a):
         if d is None:
             # a request still waiting on Matthew: a reminder once REMINDER_AFTER x silent-after has passed since it,
             # in case its own buzz was lost, then every as long again; no start: Matthew decides (M6d, B-6)
-            ask = waiting_request(a, values, playbook) if why == "waiting" else None
+            found = waiting_request(a, values, playbook) if why == "waiting" else None
+            ask, others = found if found else (None, [])
             t = parse_time(ask["at"]) if ask else None
             if t is None or time.time() - t < REMINDER_AFTER * a.silent_after:
                 print(f"quiet: {text}")
@@ -3231,7 +3235,8 @@ def cmd_watchdog(a):
             kind = message_kind(ask["text"])
             print(f"note: {text}, the lease is released, and {kind} #{ask['id']} at {ask['at']} has no decision yet")
             mine = f"LEAD-SILENT: still waiting for Matthew: {kind} since {iso(t)}"
-            waiting = (f"still waiting for Matthew: {kind} since {iso(t)}", f"{mine} (step {step})")
+            also = f" (also open: {', '.join(message_kind(m['text']) for m in others)})" if others else ""
+            waiting = (f"still waiting for Matthew: {kind} since {iso(t)}{also}", f"{mine} (step {step}){also}")
             # only this request's own reminders count: a state unreadable alarm posted meanwhile doesn't delay it
             stall_alarm(a, t, waiting, waiting, only=lambda m: m["text"].startswith(mine))
             return 0

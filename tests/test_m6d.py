@@ -683,7 +683,8 @@ def t_an_older_open_request_gets_its_reminder():
 
 def t_a_stale_older_request_doesnt_hide_the_newer_one():
     # cold M6d R4-2 (its E2): ESCALATION-32 was made moot by a later decision (its mission dropped) and never got a
-    # DECISION-32; days later the lead parks on MERGE-HOLD-37: the reminder names MERGE-HOLD-37, 12 hours after it
+    # DECISION-32; days later the lead parks on MERGE-HOLD-37: the reminder names MERGE-HOLD-37, 12 hours after it,
+    # and lists ESCALATION-32 as also open (cold M6d S1-1)
     answer_open_requests()
     age_room()
     room("lease", "take", "--takeover", check=True, **ago(80)[1])
@@ -712,7 +713,46 @@ def t_a_stale_older_request_doesnt_hide_the_newer_one():
     held = next(c for c in comments() if c["id"] == hold)["created_at"]
     r = watchdog()
     assert [text_of(c) for c in comments()[n:]] == [f"LEAD-SILENT: still waiting for Matthew: MERGE-HOLD-37 since {held} "
-                                                    "(step waiting for owner: gate) (buzz sent)"], out(r)
+                                                    "(step waiting for owner: gate) (also open: ESCALATION-32) "
+                                                    "(buzz sent)"], out(r)
+    room("lease", "take", check=True)
+
+
+def t_a_stale_newer_request_doesnt_hide_the_live_older_one():
+    # cold M6d S1-1: ESCALATION-24 (task 2, its builder parked), ESCALATION-25 (task 3 failed three attempts) and
+    # ESCALATION-26 (over budget); DECISION-26 drops task 3, so ESCALATION-25 is moot but never gets a DECISION-25; the
+    # lead started after it re-parks on ESCALATION-24 with no new request. The reminder names ESCALATION-25, the
+    # newest open one, 12 hours after it, and lists ESCALATION-24 as also open
+    answer_open_requests()
+    age_room()
+    room("lease", "take", "--takeover", check=True, **ago(21)[1])
+    e24 = say("ESCALATION-24: which storage format for task 2?")
+    e25 = say("ESCALATION-25: task 3 failed three attempts")
+    e26 = say("ESCALATION-26: the mission is over budget")
+    backdate(lambda c: c["id"] == e24, 20 * 60)
+    backdate(lambda c: c["id"] == e25, 11.5 * 60)
+    backdate(lambda c: c["id"] == e26, 10.9 * 60)
+    set_state("waiting_for_owner=yes", "step=waiting for owner: build", hours=10.9)
+    room("lease", "release", check=True, **ago(10.9)[1])
+    d26 = say("DECISION-26: drop task 3, go on", role="architect", ROOM_SESSION="arch")
+    backdate(lambda c: c["id"] == d26, 10.5 * 60)
+    room("lease", "take", check=True, ROOM_SESSION="L2", **ago(10.4)[1])
+    later = [say("LEAD ONLINE", ROOM_SESSION="L2"), say("ACK DECISION-26", ROOM_SESSION="L2")]
+    backdate(lambda c: c["id"] in later, 10.3 * 60)
+    set_state("waiting_for_owner=no", "step=build", hours=10.2, ROOM_SESSION="L2")
+    set_state("waiting_for_owner=yes", "step=waiting for owner: build", hours=10, ROOM_SESSION="L2")
+    room("lease", "release", check=True, ROOM_SESSION="L2", **ago(10)[1])
+    n = len(comments())
+    r = watchdog()  # ESCALATION-25 is 11h30m old: not yet, though ESCALATION-24 is 20h old
+    assert r.stdout.strip() == "quiet: step is waiting for owner: build" and len(comments()) == n, out(r)
+    backdate(lambda c: c["id"] == e25, 730)  # 12h10m old now
+    asked = next(c for c in comments() if c["id"] == e25)["created_at"]
+    r = watchdog()
+    assert "alarm: still waiting for Matthew: ESCALATION-25 since " in r.stdout, out(r)
+    assert [text_of(c) for c in comments()[n:]] == [f"LEAD-SILENT: still waiting for Matthew: ESCALATION-25 since "
+                                                    f"{asked} (step waiting for owner: build) (also open: "
+                                                    "ESCALATION-24) (buzz sent)"], out(r)
+    assert "already reports this stall" in watchdog().stdout and len(comments()) == n + 1
     room("lease", "take", check=True)
 
 
