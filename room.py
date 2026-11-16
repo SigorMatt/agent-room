@@ -2988,7 +2988,8 @@ def stall_episode(a, stall, opened=None):
         start = when(by) if by else stall
         within = [m for m in msgs if when(m) > start]
     signs = [when(m) for m in msgs if kind(m) == "LEAD-STARTED" or (m["role"] == "lead" and kind(m) == "LEAD ONLINE")]
-    return {"start": start, "by": by, "sign": max([start] + signs),
+    talk = max([0] + [when(m) for m in msgs if m["role"] == "lead"])  # the lead's last message of any kind
+    return {"start": start, "by": by, "sign": max([start] + signs), "talk": talk,
             "alarms": [m for m in within if m["role"] == "watchdog" and kind(m) == "LEAD-SILENT"],
             "starts": [m for m in within if m["role"] == "watchdog" and kind(m) == "LEAD-STARTED"
                        and not decision_start(m)]}
@@ -3002,7 +3003,10 @@ def alarm_stage(a, ep, first, about, takeover, prefix=""):
     so the next run tries again under the same rules. Alarms stay within ALARM_CAP per episode (finding P)."""
     now = time.time()
     sent = [m for m in ep["alarms"] if not re.search(r"\(buzz failed\b", m["text"])]
-    due = not a.no_start and now - ep["sign"] >= a.silent_after
+    # a takeover also waits for silent-after after the lead's last message of any kind: chatter isn't progress, so
+    # it still alarms, but a lead that still talks isn't displaced (qodo PR #11)
+    last = max(ep["sign"], ep["talk"]) if takeover is not False else ep["sign"]
+    due = not a.no_start and now - last >= a.silent_after
     starts = ep["starts"]
 
     def post(line, text, told):
@@ -3030,7 +3034,7 @@ def alarm_stage(a, ep, first, about, takeover, prefix=""):
     if not starts and due:
         watchdog_start(a, takeover)
     elif not starts:
-        print(f"note: no start yet: the last sign of a lead came {span(now - ep['sign'])} ago, at {iso(ep['sign'])}, "
+        print(f"note: no start yet: the last sign of a lead came {span(now - last)} ago, at {iso(last)}, "
               f"under {span(a.silent_after)}")
     elif len(starts) == 1:
         print(f"note: LEAD-STARTED #{starts[0]['id']} at {starts[0]['at']} already started a lead for this stall; a "

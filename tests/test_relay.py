@@ -929,6 +929,7 @@ def t_waiting_for_owner_with_the_lease_held():
     online()
     age_watchdog()
     room("say", "1", "lead", "ESCALATION-6: which font?", "--no-buzz", check=True)
+    backdate(lambda c: "ESCALATION-6" in c["body"], 300)  # posted when it parked
     set_state("waiting_for_owner=yes", "step=waiting for owner: spec 11", hours=5)  # parked five hours ago
     room("lease", "release", check=True)
     room("say", "1", "architect", "DECISION-6: serif", check=True, ROOM_SESSION="arch")
@@ -1086,6 +1087,7 @@ def t_a_decision_start_is_no_takeover_start():
     online()
     age_room()
     room("say", "1", "lead", "ESCALATION-7: which icon?", "--no-buzz", check=True)
+    backdate(lambda c: "ESCALATION-7" in c["body"], 300)  # posted when it parked
     set_state("waiting_for_owner=yes", "step=waiting for owner: spec 30", hours=5)
     room("lease", "release", check=True)
     room("say", "1", "architect", "DECISION-7: the cat", check=True, ROOM_SESSION="arch")
@@ -1248,6 +1250,27 @@ def t_a_decision_start_is_tried_twice_then_alarmed():
     room("lease", "take", check=True)
     set_state("step=build 70")
     online()
+    age_room()
+
+
+def t_a_lead_that_still_talks_is_not_taken_over():
+    # qodo PR #11 "Watchdog can take over from a working lead": chatter isn't progress, so it still alarms, but a lead
+    # whose builders run long and who still posts isn't displaced by a takeover
+    online()
+    age_room()
+    set_state("step=build 80", hours=5)  # L1 holds the lease
+    room("say", "1", "lead", "STATUS: three builders still running", "--no-buzz", check=True)
+    talk = comments()[-1]["id"]
+    nf = len(fires())
+    r = watchdog()
+    assert "alarm: no progress for 5h" in r.stdout and "note: no start yet: " in r.stdout, out(r)
+    assert len(fires()) == nf
+    backdate(lambda c: c["id"] == talk, 200)  # silent for silent-after now
+    r = watchdog()
+    assert "started: https://claude.ai/code/" in r.stdout and len(fires()) == nf + 1, out(r)
+    assert text_of(comments()[-1]).endswith("(takeover join line, started by watchdog)")
+    online()
+    set_state("step=build 81")
     age_room()
 
 
