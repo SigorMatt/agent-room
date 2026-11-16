@@ -83,7 +83,7 @@ Unchanged except the second paragraph of `HANDOFF`: `The successor is being star
 
 ### `watchdog`
 
-**It only alarms; it starts no leads** (decision of 2026-11-16 in `BUILD-STATE.md`; automatic starts deferred as B-5). Three cold reviews of the watchdog's start rules (R2-1, S2-1, S3-4, all high) each found new interactions between starts, alarms and the decision path. So takeovers, and the lead after a decision, are started by the architect with its fire action (`ARCHITECT.md` 9.2, 9.5). The handover start, which matters most, stays automatic through `start-lead`. The attempt at automatic starts is in PR #11's history, with its reviews under `reviews/cold/M6/`.
+**It only alarms; it starts no leads** (decision of 2026-11-16 in `BUILD-STATE.md`; automatic starts deferred as B-5). Three cold reviews of the watchdog's start rules (R2-1, S2-1, S3-4, all high) each found new interactions between starts, alarms and the decision path. So takeovers, and the lead after a decision, are started by the architect, through a starter task since finding T (`ARCHITECT.md` 9.2, 9.5). The handover start, which matters most, stays automatic through `start-lead`. The attempt at automatic starts is in PR #11's history, with its reviews under `reviews/cold/M6/`.
 
 Its rules, all covered by tests:
 
@@ -148,19 +148,19 @@ The environment section of `room.py --help` lists `ROOM_FIRE_TOKEN_<NAME>`, `ROO
     3. Find the task's ID by listing scheduled tasks (name `agent-room lead OWNER/NAME`).
     4. Set the `lead-task:` line and commit.
   - **Steps 8 and 9 (the first lead):**
-    1. Start the first lead with your scheduled-task tool's fire action (`fire_trigger`): the lead task's ID, with the join line from `join-line N` as its text. Matthew may get an approval pop-up; he's present at kickoff.
-    2. Post `LEAD-STARTED: https://claude.ai/code/<session_id> (plain join line, started by architect)` with `say N architect`.
-    3. **Fallback,** if the fire action isn't available: Matthew opens the lead task, presses **Run now** and pastes the join line as its text; or he starts a lead in the Code tab as before.
+    1. Start the first lead with a *starter task* (M6b2, finding T: an agent can't fire a task Matthew created in the web UI). It's a one-time task the architect creates with `create_trigger`, named `agent-room start lead OWNER/NAME room N`, about two minutes ahead, in the `agent-room` environment, with no notifications. Its prompt downloads `room.py` at the pin and runs `python3 room.py start-lead N architect --repo OWNER/NAME` (with `--takeover` for a takeover). Matthew approves the creation pop-up; he's present at kickoff.
+    2. `start-lead` posts `LEAD-STARTED` itself, as architect. Never delete a starter task: it disables itself, and deleting it deletes its session.
+    3. **Fallback,** if no starter task can be created or its start fails: post `LEAD-STARTED: by hand …`, then Matthew opens the lead task, presses **Run now** and pastes the join line as its text; or he starts a lead in the Code tab as before.
   - Preflight's new `!` line is listed in step 6.
   - **"Ready to hand over"** gains: the lead task exists and `lead-task:` is set.
 - **Section 9.1:** the buzz table.
   - `NEXT-LEAD-NEEDED`: the lead couldn't start its successor.
   - `LEAD-SILENT`: the watchdog saw no progress, or no lead joined after a `DECISION`; the architect checks the lead and starts a takeover if it's gone. Reminders follow every 12 hours.
-- **Section 9.2:** after posting a `DECISION-n` to a parked lead (step `waiting for owner: …`, lease released), start a lead as in section 8 (fire action, then `LEAD-STARTED`). If no lead joins, the watchdog's `no lead joined after DECISION-n` alarm follows.
+- **Section 9.2:** after posting a `DECISION-n` to a parked lead (step `waiting for owner: …`, lease released), start a lead as in section 8 (a starter task). If no lead joins, the watchdog's `no lead joined after DECISION-n` alarm follows.
 - **Section 9.4:**
   - `PAUSE` and `STOP` reach the lead at its next step boundary; one builder can take a while.
   - To resume, start a lead as in section 8. `start-lead` refuses a paused room for any role but the architect.
-- **Section 9.5:** rewrite as "Starting a lead by hand". The lead starts its successor; you start the lead after a decision and every takeover. Use the fire action, Matthew's **Run now** with the join line, or the Code tab. After a `LEAD-SILENT`, check the lease, the last sign of a lead and recent lead messages; start a takeover only for a dead lead, or with Matthew's agreement for one that posts without progress (B-5).
+- **Section 9.5:** rewrite as "Starting a lead by hand". The lead starts its successor; you start the lead after a decision and every takeover. Use a starter task, Matthew's **Run now** with the join line, or the Code tab (finding T). After a `LEAD-SILENT`, check the lease, the last sign of a lead and recent lead messages; start a takeover only for a dead lead, or with Matthew's agreement for one that posts without progress (B-5).
 - **Section 9.6:** the `ACK` comes from the lead started after the decision, usually within 15 minutes.
 - **Section 9.7, `DONE`:** delete the watchdog; the lead doesn't. Keep the lead task: the next phase reuses it.
 - **Section 9.8:** the lead task and its token belong to one account, so recreate them in the new account.

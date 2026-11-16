@@ -24,7 +24,7 @@ When a phase's playbook is approved and its environment needs are set. For the f
    - If it says the watchdog's runs will ask for approval: open the scheduled task named `agent-room watchdog SigorMatt/<repo> room N` in the Claude app, and switch on **Automatically approve**.
 3. At a project's first kickoff only, it asks you to set up the lead task, and gives you the task's prompt. Do it on a computer: [Set up the lead task](set-up-the-lead-task.md). Later phases reuse the task.
 4. It asks whether the `agent-room` environment has `ROOM_NTFY_TOPIC`, `QODO_REVIEW`, the lead task's token, and the playbook's websites and secrets. Say yes only when they're all there.
-5. It starts the first lead itself, through the lead task. You may get an approval pop-up: approve it. If it can't start the lead, it gives you the join line, starting `Join agent room N in SigorMatt/<repo> as lead`: start the lead with that ([Start the next lead by hand](start-the-next-lead-by-hand.md)).
+5. It starts the first lead itself: it creates a one-time starter task, which starts the lead through the lead task about two minutes later. Approve the pop-up for that task. If it can't start the lead, it gives you the join line, starting `Join agent room N in SigorMatt/<repo> as lead`: start the lead with that ([Start the next lead by hand](start-the-next-lead-by-hand.md)).
 6. Put the phone away. Only seven kinds of message buzz you ([Message kinds](message-kinds.md)). From now on, each lead starts the next.
 
 ## What you should see

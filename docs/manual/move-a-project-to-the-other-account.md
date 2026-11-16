@@ -38,7 +38,7 @@ In the other account, once:
    ```
 
 5. When it asks, set up the lead task in the other account ([Set up the lead task](set-up-the-lead-task.md)). Its token goes into that account's `agent-room` environment, under the same name.
-6. The architect starts the lead; approve the pop-up if one comes. If it can't, it gives you the join line: start the lead in the other account ([Start the next lead by hand](start-the-next-lead-by-hand.md)).
+6. The architect starts the lead with a starter task; approve its pop-up. If it can't, it gives you the join line: start the lead in the other account ([Start the next lead by hand](start-the-next-lead-by-hand.md)).
 
 ## What you should see
 

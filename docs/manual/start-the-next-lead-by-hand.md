@@ -4,7 +4,7 @@
 
 ## When to use it
 
-Normally you don't: each lead starts the next through the lead task, and the architect starts the lead after your decision and any takeover lead, through the same task. Start one yourself when the architect asks you to, because it can't:
+Normally you don't: each lead starts the next through the lead task, and the architect starts the lead after your decision and any takeover lead, with a one-time starter task that runs the lead task. Start one yourself when the architect asks you to, because it can't:
 
 - After `NEXT-LEAD-NEEDED`, `PAUSED` or `STOPPED`, or to resume after an upgrade or an account move: the **normal join line**.
 - When the old lead is gone without handing over: the **takeover line**. Only when the architect gives you one: after a `LEAD-SILENT` that no lead answered ([Answer a buzz](answer-a-buzz.md)).
@@ -34,7 +34,7 @@ Normally you don't: each lead starts the next through the lead task, and the arc
 
    Before it gives you a line, the architect posts `LEAD-STARTED: by hand …` in the room, so the room shows your start at once. Start it soon after.
 
-   The architect may offer to start the lead itself through the lead task. Let it; approve the pop-up if one comes, and skip to "What you should see".
+   The architect may offer to start the lead itself, with a starter task. Let it; approve its pop-up, and skip to "What you should see".
 2. Takeover only: if the old lead's session is still open, archive it.
 3. Start the lead through the lead task: open `https://claude.ai/code/routines`, open the task `agent-room lead SigorMatt/<repo>`, press **Run now**, and paste the line as its text.
 4. Or, with no lead task, in the Code tab: start a new session, repository `SigorMatt/<repo>`, environment `agent-room`. Paste the line and send.
