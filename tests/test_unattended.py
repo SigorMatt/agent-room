@@ -203,7 +203,10 @@ def buzzes():
 
 def watchdog(*args, **env):
     env.setdefault("ROOM_SESSION", "wd")
-    return room("watchdog", "1", *args, **env)
+    r = room("watchdog", "1", *args, **env)
+    # the watchdog only alarms (BUILD-STATE 2026-11-16, B-5): curl never sees the lead task's fire endpoint
+    assert not any("/v1/claude_code/routines/" in json.dumps(x) for x in buzzes()), f"the watchdog fired:\n{out(r)}"
+    return r
 
 
 def push_mission(hours, branch=MISSION_BRANCH):
