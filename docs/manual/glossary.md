@@ -18,7 +18,7 @@ To look up a word used in the manuals, the room or a session.
    - **Lead:** a Claude Code cloud session that builds one mission, then hands over to the next lead. It runs helpers (builders and reviewers) and merges.
    - **Builder:** a helper of the lead that writes code in its own private copy. It never posts or pushes.
    - **Cold reviewer, Qodo reader, Auditor, Planner:** fresh helpers of the lead that review the code, read Qodo's review, check the review tables, and plan the missions.
-   - **Watchdog:** a scheduled task, every three hours per active phase. It only alarms: `LEAD-SILENT` when no lead has made progress for three hours, or no lead has joined three hours after your decision, and a reminder every 12 hours while that lasts. It starts no leads; the architect does.
+   - **Watchdog:** a scheduled task, every three hours per active phase. It buzzes `LEAD-SILENT` when no lead has made progress for three hours, or no lead has joined three hours after your decision, with a reminder every 12 hours while that lasts, and while a request waits on your decision. After a stall's alarm it starts one lead itself, at most one per stall, if no lead has posted for three hours; the architect starts the rest.
    - **Lead task:** one scheduled task per project, with an API trigger, that starts each lead. You create it once ([Set up the lead task](set-up-the-lead-task.md)). The lead and the architect start it with a join line.
    - **Room:** a GitHub issue labelled `agent-room` in the project repo, one per phase, where the architect and the lead talk.
    - **Buzz:** an ntfy push to your phone. It carries the message kind, the project and the room number, never the content.

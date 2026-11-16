@@ -84,11 +84,12 @@ The lead merged the last mission, checked every criterion, posted `DONE`, closed
 
 ### `LEAD-SILENT`: no progress for three hours
 
-The watchdog saw nothing move. A lead died, got stuck or ran out of Claude usage, or the next one never started. Or a lead is alive but slow, or looping: posting without getting anywhere. The watchdog only alarms; it starts no lead. The architect works out which it is, and starts a takeover lead if one is needed.
+The watchdog saw nothing move. A lead died, got stuck or ran out of Claude usage, or the next one never started. Or a lead is alive but slow, or looping: posting without getting anywhere. After the alarm, the watchdog starts one lead itself, at most one per stall, if no lead has posted for three hours and none was started for this stall: a `LEAD-STARTED … started by watchdog` follows. The architect works out the rest, and starts a takeover lead if one is still needed.
 
 Other texts:
 
 - `LEAD-SILENT: no lead joined after DECISION-n`: no lead has joined in the three hours since your decision. The architect checks whether a lead was started; it starts one, or finds out with you why the start didn't take (often the lead task's token, or Claude usage), fixes it, and starts one.
+- `LEAD-SILENT: still waiting for Matthew: <KIND>-n since <time> (…)`: an `ESCALATION` or `MERGE-HOLD` has waited 12 hours for your decision, maybe because its own buzz was lost. It repeats every 12 hours until you decide. Open the room, find that message, and answer it as its kind says above. Nothing starts on its own meanwhile.
 - `LEAD-SILENT: no lead has joined room N in 12h`: the phase's first lead never joined. The architect checks the lead task with you (often its token), fixes it, and starts the first lead.
 - `LEAD-SILENT: still no progress since …`, `still no lead joined after DECISION-n …`, `still state unreadable (…)` or `still no lead has joined room N`: a reminder, every 12 hours by default, while the stall or the wait lasts. Answer it like the first alarm.
 
@@ -99,7 +100,7 @@ Other texts:
    ```
 
    Only if no copy exists does the architect recreate it from scratch, and tell the next lead to rebuild its records from the merged pull requests and the room. Then go on.
-2. The architect tells you where the build stopped, and whether the lead is dead or alive. If a lead was started less than 30 minutes ago and hasn't joined yet, it waits until then, so it doesn't start a second lead while the first is still starting. It checks back itself, or asks you to send it this then:
+2. The architect tells you where the build stopped, whether the lead is dead or alive, and whether the watchdog already started a lead for this stall. If a lead was started less than 30 minutes ago and hasn't joined yet, it waits until then, so it doesn't start a second lead while the first is still starting. It checks back itself, or asks you to send it this then:
 
    ```text
    check the room
@@ -110,7 +111,7 @@ Other texts:
    - **The architect starts it** with a starter task: approve its pop-up when it appears (a late approval may need a second one). A `LEAD-STARTED` follows about 10 minutes later. That's all: don't start a lead yourself.
    - **Or, if it can't, it posts `LEAD-STARTED: by hand …` and gives you the takeover line.** Start the lead soon after. The line ends with "Take over the lease … the previous lead stopped without handing over." Start a lead with it ([Start the next lead by hand](start-the-next-lead-by-hand.md)), then send the architect the new session's link, so it posts `LEAD-STARTED`. Use a takeover line only when the architect gives you one.
 
-   Either way, if the old lead's session is still open, archive it. If the new lead stalls too, the next alarm or reminder brings you back here.
+   Either way, if the old lead's session is still open, archive it. If the new lead stalls too, the next alarm or reminder brings you back here; the watchdog doesn't start a second lead for the same stall.
 
 ## What you should see
 

@@ -105,7 +105,7 @@ Your session may have no background commands and no scheduling tools (a session 
 3. Subagents: start them in the background if the Agent tool offers that, then end your turn; you are woken as each one finishes. If it doesn't, run them one at a time in the foreground, and post a `STATUS` before each one: `python3 room.py say N lead "STATUS: builder for <task> running in the foreground"`.
 4. Never end a turn while you hold the lease, unless a subagent you started is still running. You end for good only by standing down, handing over, parking, `PAUSED`, `STOPPED` or `DONE`, or as a drill says (section 10).
 5. **Park** when you wait only on Matthew.
-   - First check the buzz of the `ESCALATION-<n>` or `MERGE-HOLD-<n>` you wait on. If it printed `[buzz failed: …]`, Matthew may not know a decision is needed, and the watchdog stays quiet at a parked room. Retry once, with a buzz; if that fails too, park anyway:
+   - First check the buzz of the `ESCALATION-<n>` or `MERGE-HOLD-<n>` you wait on. If it printed `[buzz failed: …]`, Matthew may not know a decision is needed, and the watchdog only reminds him after 12 hours. Retry once, with a buzz; if that fails too, park anyway:
      ```bash
      python3 room.py say N lead "STATUS: the buzz for <KIND>-<n> failed (<reason>): Matthew, a decision is needed in room N" --buzz
      ```
@@ -420,7 +420,7 @@ End.
 
 **`LEAD-STARTED`:** history: ignore it.
 
-**`LEAD-SILENT`:** the watchdog saw no progress for three hours, and the architect may start a takeover lead. Post a `STATUS` saying where you are, and make progress. If a takeover lead's `LEAD ONLINE` follows, handle it as above.
+**`LEAD-SILENT`:** the watchdog saw no progress for three hours, and the watchdog (once per stall) or the architect may start a takeover lead. Post a `STATUS` saying where you are, and make progress. If a takeover lead's `LEAD ONLINE` follows, handle it as above.
 
 **Any other comment from Matthew** (`human (<login>)`, a trusted author) is an owner instruction. If it stays within `DESIGN.md` and `PLAYBOOK.md`, follow it, and say what you did in your next `STATUS`. Otherwise escalate (section 8), quoting the comment under **Context**, and act on it only as the `DECISION-n` says.
 
@@ -428,7 +428,7 @@ End.
 
 - Run `python3 room.py budget` at each step boundary while the step is `build`, a cold review or a Qodo round; never at the PR, the gate, close or while waiting for the owner. Exit 6: the mission is over budget, so escalate once; never retry automatically, and don't escalate the budget again while that escalation is open. A `DECISION` that sends the mission back to Build, says merge as is, or grants time restarts the clock (section 9). Exit 1: `mission_started` is missing; set it (5.1).
 - Three attempts per task, counted under "Tasks in flight". A fourth is an escalation. A fresh builder for a parked question after its `DECISION` isn't an attempt (section 9).
-- If Claude usage runs out, you simply stop. The watchdog reports it, and the architect starts a takeover lead, which resumes from the recorded step.
+- If Claude usage runs out, you simply stop. The watchdog reports it and starts one takeover lead (or the architect does), which resumes from the recorded step.
 - A `drill:` line in `PLAYBOOK.md` (reconcile prints it) is a failure drill:
 
   | `drill:` | You |
@@ -440,7 +440,7 @@ End.
 
 ## 11. Rules
 
-- **Signs of life:** the watchdog alarms when nothing progresses (a step change or a mission-branch push) for three hours, and the architect then decides whether you are alive before starting a takeover. Before a step that may run long with no push, such as a long builder in the foreground, post a `STATUS` saying what runs, so the architect sees you are alive.
+- **Signs of life:** the watchdog alarms when nothing progresses (a step change or a mission-branch push) for three hours. It starts a takeover only if no lead has posted anything within that time, at most once per stall; otherwise the architect decides whether you are alive. Before a step that may run long with no push, such as a long builder in the foreground, post a `STATUS` saying what runs, so the watchdog and the architect see you are alive.
 - **Context hygiene:** builders reply in at most 10 lines. Verify with checks and `git diff --stat`, not by reading diffs; open a file only when a check fails. Keep state in `MISSIONS.md`, not in your memory. After a compaction, re-read this file and `MISSIONS.md`.
 - **Delegate:** implementing, fixing, investigating code and hard merge conflicts go to builders. You write briefs and answers, run checks, merge, keep records, post and open the PR. Resume a builder for follow-ups; if resuming fails, start a fresh one with the full brief.
 - **State writes:** commit hand edits with `state commit` before `state set`, `state next`, `intent` or `handoff`; they refuse while the worktree has local changes. Exit 3 means the branch moved: run `python3 room.py state sync`, re-read and re-apply. Exit 5 means the lease isn't yours: stand down.

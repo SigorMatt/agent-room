@@ -205,7 +205,7 @@ For the first phase and every later one. For a later phase, first add its `### P
 
    The second command removes a download that failed or came back empty or broken, so the watchdog can't run a fake `room.py`; even if the run goes on, the third command then fails.
 
-   The watchdog only alarms; it starts no leads. It posts `LEAD-SILENT` (a buzz) when no lead has made progress for three hours, and when no lead has joined three hours after a `DECISION` to a parked lead. It reminds every 12 hours while either lasts. Takeovers, and the lead after a decision, are yours to start (9.2, 9.5).
+   The watchdog posts `LEAD-SILENT` (a buzz) when no lead has made progress for three hours, and when no lead has joined three hours after a `DECISION` to a parked lead. It reminds every 12 hours while either lasts, and while a parked room waits on an `ESCALATION` or `MERGE-HOLD` you haven't answered. After a stall's alarm it starts one lead itself, at most one per stall (B-5): only if no `LEAD-STARTED` exists for that stall and no lead has posted within three hours, and only with the lead task configured. Every other start is yours (9.2, 9.5). It needs the token, so its environment must be `agent-room`.
 
    If the result says its runs will ask for approval, tell Matthew to switch the task to "Automatically approve" in its settings. The run inherits this chat's repos, so create it from this chat, after step 1 of Setup.
 
@@ -298,7 +298,8 @@ Explain each buzz in plain terms, in a few lines:
 | `MERGE-HOLD-n` | A PR is ready but held, with a reason | 9.2 |
 | `STATUS` saying a buzz failed and a decision is needed | The buzz of an `ESCALATION-n` or `MERGE-HOLD-n` failed, and the lead retried it before parking. A real request | 9.2, for the message it names |
 | `NEXT-LEAD-NEEDED` | The lead couldn't start its successor; the message says why | 9.5 |
-| `LEAD-SILENT` | The watchdog saw no lead progress for three hours, or no lead joined three hours after a `DECISION` (`no lead joined after DECISION-n`). A reminder (`still …`) comes every 12 hours while it lasts. It starts no lead | 9.5 |
+| `LEAD-SILENT` | The watchdog saw no lead progress for three hours, or no lead joined three hours after a `DECISION` (`no lead joined after DECISION-n`). A reminder (`still …`) comes every 12 hours while it lasts. After the alarm it may start one lead for the stall (`LEAD-STARTED: … started by watchdog`) | 9.5 |
+| `LEAD-SILENT: still waiting for Matthew: <KIND>-<n> since <time> (…)` | An `ESCALATION-n` or `MERGE-HOLD-n` has waited 12 hours for a decision, and the lead is parked; it repeats every 12 hours. Nothing starts until Matthew decides. Often its own buzz was lost | 9.2 |
 | `PAUSED` / `STOPPED` | The lead paused or halted, as asked, and ended | 9.4 |
 | `DONE` | The phase is complete and the room is closed | 9.7 |
 
@@ -342,7 +343,7 @@ Explain each buzz in plain terms, in a few lines:
    python3 room.py state get lease_session --repo OWNER/NAME
    ```
 
-   Start it as in section 8, steps 9 and 10: a starter task without `--takeover`, whose `start-lead` posts `LEAD-STARTED`. Nobody else starts it: the watchdog starts no leads. If no lead joins within three hours of the decision, the watchdog posts `LEAD-SILENT: no lead joined after DECISION-<n> (step …)`, and reminds every 12 hours while it lasts (9.5). A `LEAD-STARTED` doesn't silence it; only a lead that joins does. A lead that isn't parked sees the decision at its next step boundary.
+   Start it as in section 8, steps 9 and 10: a starter task without `--takeover`, whose `start-lead` posts `LEAD-STARTED`. If you don't, the watchdog does, three hours (its `silent-after`) after the decision: it posts `LEAD-SILENT: no lead joined after DECISION-<n> (step …)`, then starts one plain lead. If your own start failed, its `LEAD-STARTED` counts, and the watchdog only reminds, every 12 hours (9.5). A `LEAD-STARTED` doesn't silence the alarm; only a lead that joins does. A lead that isn't parked sees the decision at its next step boundary.
 8. Check for the `ACK` (9.6).
 
 A "merge as is" for reason 5 lets the lead merge citing your `DECISION-n`, so name the hold in it.
@@ -385,7 +386,7 @@ To resume, on Matthew's word, start a lead with a starter task without `--takeov
 
 ### 9.5 Starting a lead by hand
 
-The lead starts its successor. You start the lead after a decision (9.2) and every takeover (below); the watchdog only alarms. Start one in one of these ways, the first if you can:
+The lead starts its successor. The watchdog starts at most one lead per stall, after its alarm (below). You start the lead after a decision (9.2) and every other takeover. Start one in one of these ways, the first if you can:
 
 - a starter task (section 8, step 4), with `--takeover` for a takeover; its `start-lead` posts `LEAD-STARTED` (saying `takeover join line` for a takeover);
 - Matthew opens the lead task, presses **Run now** and pastes the line as its text;
@@ -418,11 +419,12 @@ Which line:
 
   If the status is `paused`, `stopped` or `done` and the lease is `none`, the build was halted or finished: start nothing without Matthew's word (9.4). Otherwise, if the lease isn't `none`, the lease is held by a lead whose session was deleted with the task (unless Matthew started that lead in the Code tab, which survives): start a takeover lead through the new task, as in the `LEAD-SILENT` case, step 4 (below). If it's `none` and the step isn't `waiting for owner: …`, no lead is running: start one with the normal join line. A parked lead needs nothing until Matthew's decision.
 - **A `LEAD-STARTED` (`unconfirmed` included) with no `LEAD ONLINE` after it, about 30 minutes on,** with no buzz: Matthew says "check the room", or you see it yourself. The start didn't take, or its lead stopped before joining. Read `lease_session` and the lead messages after the `LEAD-STARTED`. If a lead is there (a message after it), nothing is needed. If not, start one with a starter task (section 8, step 9): without `--takeover` if `lease_session` is `none`, with it if a dead lead holds the lease. If the `LEAD-STARTED` gave a reason (`unconfirmed (…)`), or your start fails too, fix the cause first, as for the `NEXT-LEAD-NEEDED` reasons above.
-- **`LEAD-SILENT: no lead has joined room N in 12h`,** or its reminder `LEAD-SILENT: still no lead has joined room N`: the phase's first lead never joined. Check the lead task: the `lead-task:` line, the room for a `LEAD-STARTED` and its reason, and with Matthew the token (the `NEXT-LEAD-NEEDED` reasons above). Fix what's wrong, then start the first lead with a starter task (section 8, step 9).
+- **`LEAD-SILENT: no lead has joined room N in 12h`,** or its reminder `LEAD-SILENT: still no lead has joined room N`: the phase's first lead never joined. After this alarm the watchdog starts one plain lead, if no `LEAD-STARTED` exists in the room: if its `LEAD-STARTED` is there, wait about 30 minutes for its `LEAD ONLINE`. If none came, or it didn't join, check the lead task: the `lead-task:` line, the room for a `LEAD-STARTED` and its reason, and with Matthew the token (the `NEXT-LEAD-NEEDED` reasons above). Fix what's wrong, then start the first lead with a starter task (section 8, step 9).
 - **`LEAD-SILENT: no lead joined after DECISION-<n> (…)`,** or its reminder `still no lead joined after DECISION-<n> (…)`: no lead has joined in the three hours since Matthew's decision. Read the room after the decision.
-  - **No `LEAD-STARTED` after it:** nobody started the lead. Start it now (9.2, step 7).
+  - **The watchdog's `LEAD-STARTED` after the alarm:** it started the lead. Wait about 30 minutes for its `LEAD ONLINE`; if none comes, as in the next bullet but one.
+  - **No `LEAD-STARTED` after the decision:** nobody started the lead, and the watchdog was refused or isn't configured. Start it now (9.2, step 7).
   - **A `LEAD-STARTED` with no `LEAD ONLINE` after it:** that start didn't take. Find out why before starting another: read the `LEAD-STARTED` for its reason, check the `lead-task:` line, and ask Matthew about the token and his usage. Fix it, then start a lead with a starter task, with `--takeover` if `lease_session` isn't `none`.
-- **`LEAD-SILENT`,** or its reminders `still no progress since <time> (…)` and `still state unreadable (…)`: no lead progress (a step change or a mission-branch push) for three hours. A lead died, got stuck or never started; or a lead is alive but slow, or looping. The watchdog starts nothing: you decide, with Matthew. He got the buzz, so he's there to approve your starter task's pop-up.
+- **`LEAD-SILENT`,** or its reminders `still no progress since <time> (…)` and `still state unreadable (…)`: no lead progress (a step change or a mission-branch push) for three hours. A lead died, got stuck or never started; or a lead is alive but slow, or looping. After the alarm the watchdog starts one lead for the stall itself (`LEAD-STARTED: … started by watchdog`, a takeover when the lease is held), unless a `LEAD-STARTED` exists for this stall already, a lead posted within three hours, or the lead task isn't configured. Otherwise you decide, with Matthew. He got the buzz, so he's there to approve your starter task's pop-up.
   1. **`LEAD-SILENT: state unreadable (…)`, or its reminder `LEAD-SILENT: still state unreadable (…)`:** the state branch or its block is broken, not the lead. Check it: `state sync`, then `python3 room.py state get step --repo OWNER/NAME`. If the branch was deleted, restore it before any lead joins:
      - **Re-push it from any copy that still has it,** preferably: your own state worktree, a lead's, or a fork or local clone of Matthew's. From yours (if GitHub refuses a shallow copy, use another):
 
@@ -440,6 +442,8 @@ Which line:
      python3 room.py state get lease_session --repo OWNER/NAME
      ```
 
+     - **The watchdog's `LEAD-STARTED` after the alarm:** it started this stall's one lead. Wait for its `LEAD ONLINE`, about 30 minutes, as in the next bullet. If none comes, its start didn't take, and the watchdog won't start another for this stall: decide by hand, as below.
+     - **No watchdog `LEAD-STARTED`:** the watchdog was held off (a lead is talking), refused, or the lead task isn't configured. Decide by hand, as below.
      - **A `LEAD-STARTED` under about 30 minutes old with no `LEAD ONLINE` after it** (`unconfirmed` included): a lead may still be starting. Decide again once it is 30 minutes old. Schedule `send_later` for then: "Check room N for LEAD ONLINE after LEAD-SILENT." Without `send_later`, ask Matthew to come back then and say "check the room".
      - **A lead message after the alarm, or a `STATUS` within about the last three hours:** the lead is alive. Look at what it posts, the step and the mission branch. If it's working (a long builder, say), tell Matthew and start nothing; a reminder comes in 12 hours if nothing moves. If it's looping, posting without progress, take over only with Matthew's agreement.
      - **Nothing from a lead for about three hours, and no recent start:** the lead is dead, or never started. Start a takeover lead (step 4), or a plain one if `lease_session` is `none`.
@@ -449,7 +453,7 @@ Which line:
      python3 room.py join-line N --takeover --repo OWNER/NAME
      ```
 
-     If the old lead's session is still open, Matthew archives it first. If the takeover lead stalls too, the next alarm or reminder brings you back here. When leads keep failing at the same step, look into why before starting another: the room since the first alarm, the state (section 4) and the mission branch. If agent-room itself is at fault, Matthew reports it, as for a pipeline fault (9.2).
+     If the old lead's session is still open, Matthew archives it first. If the takeover lead stalls too, the next alarm or reminder brings you back here. A second stall alarm or a reminder after the watchdog's start means its lead failed too: the watchdog won't start another for that stall, so the next start is yours. When leads keep failing at the same step, look into why before starting another: the room since the first alarm, the state (section 4) and the mission branch. If agent-room itself is at fault, Matthew reports it, as for a pipeline fault (9.2).
 
 Never delete the lead task or one of its runs: deleting a task deletes the sessions it started (section 12).
 
@@ -465,7 +469,7 @@ An `ACK DECISION-n` comes from the lead started after the decision (9.2, step 7)
    - **A `LEAD-STARTED` after the decision, with no `LEAD ONLINE` after it:** that lead hasn't joined. Once the `LEAD-STARTED` is about 30 minutes old, start another by hand (9.5); before that, check again then.
    - **No `LEAD-STARTED` after the decision, and the step is `waiting for owner: …`:** nobody started a lead. Start one (9.2, step 7). If `lease_session` isn't `none`, the parked lead died before releasing the lease: add `--takeover` (9.5).
    - **Otherwise:** a lead is running, maybe busy with a builder. Schedule another check-in for about an hour after that lead's `LEAD-STARTED` (or its `LEAD ONLINE`, for a lead that wasn't parked), as in step 2.
-4. A `LEAD-SILENT: no lead joined after DECISION-<n> …` meanwhile means no lead joined in three hours: handle it as in 9.5. At that check-in, with still no `ACK` and no lead message since: the lead may have stopped while holding the lease, even with the step still `waiting for owner: …`. Tell Matthew. The watchdog doesn't stay quiet then: within three hours of that lead's `LEAD ONLINE` it posts `LEAD-SILENT`; handle it as in 9.5, which starts the takeover. If Matthew finds the lead's session gone, start a takeover lead at once (9.5).
+4. A `LEAD-SILENT: no lead joined after DECISION-<n> …` meanwhile means no lead joined in three hours: handle it as in 9.5. At that check-in, with still no `ACK` and no lead message since: the lead may have stopped while holding the lease, even with the step still `waiting for owner: …`. Tell Matthew. The watchdog doesn't stay quiet then: within three hours of that lead's `LEAD ONLINE` it posts `LEAD-SILENT` and may start one takeover itself; handle it as in 9.5. If Matthew finds the lead's session gone, start a takeover lead at once (9.5).
 
 ### 9.7 `DONE`
 
