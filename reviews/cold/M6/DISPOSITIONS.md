@@ -1,0 +1,18 @@
+# Cold dispositions, M6b
+
+M6b's records are kept under `reviews/cold/M6/`, because the gate's exempt patterns name missions `M<digits>`. M6 itself was docs-only and had no cold review.
+
+| ID | severity | file | finding | disposition | evidence |
+| --- | --- | --- | --- | --- | --- |
+| R1-1 | high | ARCHITECT.md | A lead started after a `DECISION` that stops at `waiting for owner` while holding the lease leaves the watchdog quiet for good, and the docs promised a `LEAD-SILENT` | fixed in 28c0dad | The watchdog measures a held lease at `waiting for owner` from the later of progress and the newest `LEAD ONLINE`, then alarms and starts a takeover (regression test in tests/test_relay.py; two tests/test_unattended.py cases now release the lease to check that a parked lead stays quiet); docs in b5954ae |
+| R1-2 | medium | room.py | One start per stall: a takeover lead that dies before any progress gets no second start | fixed in 195b757 | At most two starts per stall; the second after silent-after since that lead's `LEAD ONLINE` (or its `LEAD-STARTED`), with its own alarm (regression tests in tests/test_relay.py); docs in 9470f5d |
+| R1-3 | medium | LEAD.md | A lead woken by builder results never reads the room during Build, so `PAUSE`/`STOP` go unseen | fixed in ca3c456 | LEAD.md 3.6 and 5.2 step 3 read the room whenever a subagent's result wakes the lead; docs checked by tests/test_docs.py |
+| R1-4 | medium | docs/manual/troubleshooting.md | A recreated lead task leaves a stale `lead-task:` line, and `not found` has no remedy | fixed in 10b9a36 | Troubleshooting row and ARCHITECT.md start-failure reasons send the architect back to 8.6; docs checked by tests/test_docs.py |
+| R1-5 | low | room.py | `start-lead` refuses `done` even while the lease is held | fixed in ccba0ec | Refused only with the lease released (regression test in tests/test_relay.py) |
+| R1-6 | low | room.py | A pre-release pin produces a join line the lead task's prompt rejects | fixed in 9969bcb | `start-lead` checks the join line against the prompt's form and exits 6 (regression test in tests/test_relay.py) |
+| R1-7 | low | ARCHITECT.md | A by-hand takeover 15 minutes after the watchdog's start can race a slow lead | fixed in 3c623ae | Wait about 30 minutes, and never start by hand while a `LEAD-STARTED` under 30 minutes old has no `LEAD ONLINE`; docs checked by tests/test_docs.py |
+| R1-8 | low | tests/test_relay.py | No test that `--no-start` blocks a due decision start, nor that no start follows `state unreadable` | fixed in 175c67b | Both tests added; each fails when its guard is removed |
+| R1-9 | low | room.py | No three-alarm cap on `state unreadable` alarms | fixed in d169073 | The cap counts the latest run of `state unreadable` alarms (regression test in tests/test_relay.py) |
+| R1-10 | low | LEAD.md | A builder parked on an escalated question is lost when the lead parks | fixed in 52ed206 | The task and question are recorded under "Parked questions"; the next lead starts a fresh builder, which doesn't count as an attempt; docs checked by tests/test_docs.py |
+| R1-11 | low | LEAD.md | A failed `handoff` release leads to `start-lead` exit 3 and an ending lead that still holds the lease | fixed in a082116 | Section 6 handles `handoff` exit 1 (`lease release`) and `start-lead` exit 3 for this session's own lease; docs checked by tests/test_docs.py |
+| R1-12 | low | LEAD.md | A well-formed join line for another issue number would make a lead re-plan in that issue; builders could print tokens | fixed in 6c36695 | Join ends without writing if `PLAYBOOK.md`'s `room:` isn't `N`; builder brief forbids printing, logging or committing environment variables or tokens; docs checked by tests/test_docs.py |
