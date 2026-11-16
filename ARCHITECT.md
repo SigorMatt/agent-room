@@ -382,6 +382,13 @@ Which line:
   - `pin <V> isn't accepted by the lead task's prompt`: the `pipeline:` line names a form the prompt rejects, such as a pre-release. Pin a release `vX.Y.Z` or `main` (section 11), then start the lead.
 
   After Matthew recreates the lead task for any reason, redo section 8, step 6 the same way, even though a `lead-task:` line exists.
+- **The lead task was deleted** (Matthew says so, or a start fails with `lead task <ID> not found`), with no buzz: deleting a task deletes the sessions it started, so a lead running from it is gone. First redo section 8, step 6 with Matthew. Then read the lease:
+
+  ```bash
+  python3 room.py state get lease_session --repo OWNER/NAME
+  ```
+
+  If it isn't `none`, the lease is held by a lead whose session was deleted with the task (unless Matthew started that lead in the Code tab, which survives): start a takeover lead by hand through the new task, with the takeover line (below). If it's `none` and the step isn't `waiting for owner: …`, no lead is running: start one with the normal join line. A parked lead needs nothing until Matthew's decision.
 - **`LEAD-SILENT`:** no lead progress for three hours. A lead died, got stuck or never started.
   1. **`LEAD-SILENT: state unreadable (…)`:** the state branch or its block is broken, not the lead, and the watchdog starts no lead after this alarm. Check it: `state sync`, then `python3 room.py state get step --repo OWNER/NAME`. If the branch was deleted, restore it before any lead joins:
      - **Re-push it from any copy that still has it,** preferably: your own state worktree, a lead's, or a fork or local clone of Matthew's. From yours (if GitHub refuses a shallow copy, use another):
