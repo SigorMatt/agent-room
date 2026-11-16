@@ -188,7 +188,7 @@ Record before acting: `python3 room.py intent N "<intent>"` before posting `PLAN
 
 ### 5.2 Build
 
-1. Brief one builder per task with [`briefs/builder.md`](briefs/builder.md): at most three at once, each in its own worktree (the Agent tool's worktree isolation; its result gives the path, or `git worktree list`). Record each under "Tasks in flight" (task, builder ID, worktree path, attempt), commit with `state commit`, and post a `STATUS` naming the builders you started (3.3).
+1. Brief one builder per task with [`briefs/builder.md`](briefs/builder.md): at most three at once, each in its own worktree (the Agent tool's worktree isolation; its result gives the path, or `git worktree list`). Record each under "Tasks in flight" (task, builder ID, worktree path, branch, attempt, status), commit with `state commit`, and post a `STATUS` naming the builders you started (3.3).
 2. A `QUESTION`: answer from the docs in one or two sentences, citing the section, and resume the same builder, with a `STATUS` (3.3). If the docs don't settle it, decide only when any reasonable choice leaves the design intact, and record that under "Lead decisions" in `MISSIONS.md`. Otherwise escalate (section 8) and park the builder, recording its question (section 8, step 4).
 3. A `RESULT … done`: first read the room (`python3 room.py read N lead`) and handle what came (section 9): after a `STOP`, merge nothing more; after a `PAUSE`, brief no new builder. Then post a `STATUS` that it returned, merge its branch, run the checks, push. Verify with the checks and `git diff --stat`, never by reading the diff. A conflict that isn't trivial: resume the builder to merge `<branch>` and resolve it.
    ```bash

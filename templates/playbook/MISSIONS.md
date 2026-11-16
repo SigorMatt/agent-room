@@ -32,8 +32,8 @@ Owned by the lead. Only `room.py` edits the block above (`state set`, `state nex
 
 ### Tasks in flight
 
-| Task | Branch | Attempt | Status |
-| --- | --- | --- | --- |
+| Task | Builder | Worktree | Branch | Attempt | Status |
+| --- | --- | --- | --- | --- | --- |
 
 ### Parked questions
 
