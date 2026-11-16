@@ -13,7 +13,7 @@ There's no server. The room is a GitHub issue in the project repo, the pipeline'
 | Lead | A Claude Code cloud session, one per mission: plans, briefs subagents, triages reviews, merges, hands over to the next lead and starts it | [`LEAD.md`](LEAD.md) |
 | Subagents | Builder, planner, cold reviewer, Qodo reader, auditor, survey | [`briefs/`](briefs/) |
 | Lead task | One scheduled task per project with an API trigger, set up once by Matthew, that starts the leads: each run gets a join line as its text | [the manual page](docs/manual/set-up-the-lead-task.md) |
-| Watchdog | A scheduled task every 3 hours that buzzes when no lead makes progress or none answers a decision, with a reminder every 12 hours, also while a request waits on Matthew; once a lead has joined, it may start one lead per stall after the alarm | — |
+| Watchdog | A scheduled task every 3 hours that buzzes when no lead makes progress or none answers a decision, with a reminder every 12 hours, also while a request waits on Matthew; once a lead has joined, it may start one lead per stall after the alarm, for a lead that never came | — |
 
 ## Where to start
 

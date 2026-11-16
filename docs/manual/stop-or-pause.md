@@ -33,7 +33,7 @@
    Resume the lead in room N.
    ```
 
-   It starts a lead with a starter task, with the normal join line, not the takeover line. Approve the task's pop-up. Only the architect resumes: no lead starts another while the build is paused or stopped, and the watchdog starts none either, even if the old lead still holds the lease. If it can't, it gives you the line: [Start the next lead by hand](start-the-next-lead-by-hand.md).
+   It starts a lead with a starter task, with the normal join line, not the takeover line. Approve the task's pop-up. Only the architect resumes: no lead starts another while the build is paused or stopped, the watchdog starts none either, even if the old lead still holds the lease, and the architect starts no takeover either until you say to resume. If it can't, it gives you the line: [Start the next lead by hand](start-the-next-lead-by-hand.md).
 
 ## What you should see
 
