@@ -276,6 +276,7 @@ Explain each buzz in plain terms, in a few lines:
 | --- | --- | --- |
 | `ESCALATION-n` | The lead needs a decision the design doesn't settle | 9.2 |
 | `MERGE-HOLD-n` | A PR is ready but held, with a reason | 9.2 |
+| `STATUS` saying a buzz failed and a decision is needed | The buzz of an `ESCALATION-n` or `MERGE-HOLD-n` failed, and the lead retried it before parking. A real request | 9.2, for the message it names |
 | `NEXT-LEAD-NEEDED` | The lead couldn't start its successor; the message says why | 9.5 |
 | `LEAD-SILENT` | The watchdog saw no lead progress for three hours, or no lead joined three hours after a `DECISION` (`no lead joined after DECISION-n`). A reminder (`still …`) comes every 12 hours while it lasts. It starts no lead | 9.5 |
 | `PAUSED` / `STOPPED` | The lead paused or halted, as asked, and ended | 9.4 |

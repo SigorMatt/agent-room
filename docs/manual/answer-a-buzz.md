@@ -4,7 +4,7 @@
 
 ## When to use it
 
-Your phone buzzes with a title such as `ESCALATION-3 · pet-todo room 1`: the message kind, the project and the room number. Seven kinds buzz: `ESCALATION`, `MERGE-HOLD`, `NEXT-LEAD-NEEDED`, `PAUSED`, `STOPPED`, `DONE` and `LEAD-SILENT`.
+Your phone buzzes with a title such as `ESCALATION-3 · pet-todo room 1`: the message kind, the project and the room number. Seven kinds buzz: `ESCALATION`, `MERGE-HOLD`, `NEXT-LEAD-NEEDED`, `PAUSED`, `STOPPED`, `DONE` and `LEAD-SILENT`. A `STATUS` buzzes only when the lead retries a failed `ESCALATION` or `MERGE-HOLD` buzz: that's a real request (below).
 
 ## What you need first
 
@@ -51,6 +51,10 @@ The message reads `MERGE-HOLD-n: PR #<number>, reason <r> (…)`. One hold can n
    - **back to Build** with an extra budget: by default one more cold-review round and up to two Qodo rounds. The mission's hours budget starts again from your decision;
    - **drop the mission and re-plan.**
 3. The architect records it, posts `DECISION-n` and starts a new lead, as for an escalation. Wait for the ACK.
+
+### `STATUS`: a decision buzz that failed the first time
+
+Its text reads `STATUS: the buzz for <KIND>-<n> failed (…): Matthew, a decision is needed in room N`. The lead posted an `ESCALATION` or `MERGE-HOLD` whose buzz didn't reach you, and is now waiting for you. Open the room, find that message, and answer it as its kind says above.
 
 ### `NEXT-LEAD-NEEDED`: start the next lead
 

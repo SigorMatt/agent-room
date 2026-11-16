@@ -18,7 +18,7 @@ To look up a message in the room: who sent it, whether it buzzes, and what you d
    | --- | --- | --- | --- | --- |
    | `PLAN` | Lead | No | The phase's missions, as planned or re-planned | Nothing |
    | `LEAD ONLINE` | Lead | No | A new lead has taken over | Nothing |
-   | `STATUS` | Lead | No | A task or step finished, or a note | Nothing |
+   | `STATUS` | Lead | Usually not | A task or step finished, or a note. When a `STATUS` does buzz, it's a real request: the lead's `ESCALATION` or `MERGE-HOLD` buzz failed, and a decision is needed | Usually nothing. A `STATUS` buzz: open the room and [answer a buzz](answer-a-buzz.md) |
    | `ESCALATION-n` | Lead | Yes | It needs your decision | [Answer a buzz](answer-a-buzz.md) |
    | `MERGE-HOLD-n` | Lead | Yes | A pull request is held, with a reason | [Answer a buzz](answer-a-buzz.md) |
    | `HANDOFF` | Lead | No | This lead's turn ends; it starts the next one | Nothing |
