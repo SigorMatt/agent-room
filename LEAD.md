@@ -121,21 +121,25 @@ Your session may have no background commands and no scheduling tools (a session 
    ```
 
 7. **After a container restart.** Your session's container can restart while you wait. You are then woken with a notice that it restarted, naming the background subagents and shell commands that stopped. Git, the state branch, the lease and the room are untouched. The stopped subagents' work is not: builders never push, so their commits are only on local branches in this container, and they go with the session unless the builders finish and you merge and push them. Then:
-   1. **Already ended?** If this session already made its last post (`HANDOFF`, `PAUSED`, `STOPPED`, a park, or a drill's end), the notice changes nothing. Resume nothing, post nothing, and end again (section 6, step 4; section 11).
-   2. **Read the room first.** Don't take the lease again or re-post anything. Until you resume them, the subagents the restart stopped count as running.
+   1. **Already ended?** If this session already made its last post (`HANDOFF`, `PAUSED`, `STOPPED`, a park, or a drill's end), or stood down (section 3, step 4; section 11), the notice changes nothing. Resume nothing, post nothing, and end again (section 6, step 4; section 11).
+   2. **Check the lease, then read the room.** Don't take the lease again or re-post anything.
       ```bash
+      python3 room.py lease check
       python3 room.py read N lead
       ```
+      Exit 5 from `lease check`: you were replaced. Stand down as section 9 says, and resume nothing. Otherwise, until you resume them, the subagents the restart stopped count as running:
       - **A `STOP`:** handle it as section 9 says. The stopped subagents stay stopped: resume none of them.
-      - **Anything else, a `PAUSE` included:** do steps 3 to 5 first, then handle the room as at any wake (section 9). A `PAUSE` then lets the resumed builders finish like any running builder, before `PAUSED`.
+      - **A `PAUSE`:** resume only the stopped builders (step 3), so they finish, merge and push like running builders before `PAUSED` (section 9). Don't resume a stopped cold reviewer, Qodo reader, planner or auditor. Its step stays recorded as it is, and the lead that resumes after the `PAUSE` does that step again from its start, with a fresh subagent; the stopped one's partial output is left behind. Then do steps 4 and 5, and handle the `PAUSE`.
+      - **Anything else:** do steps 3 to 5 first, then handle the room as at any wake (section 9).
    3. **Resume each stopped subagent,** of any kind (builder, cold reviewer, Qodo reader, planner or auditor), by sending it a message with the ID the notice gives:
       - **A builder:** first look at its worktree, the path recorded under "Tasks in flight" (5.2, step 1): `git -C <worktree> status --short` and `git -C <worktree> log --oneline -3`. Its commits are kept; its uncommitted edits may be partial. Tell it that the container restarted, that its uncommitted edits are still in its worktree, and that it should review them, finish its task and report as briefed.
       - **Any other subagent:** tell it "the container restarted; continue and report as briefed".
       - **If resuming fails** (no transcript), start a fresh one by its own step's rules:
-        - **A builder:** the full brief. It gets its own new worktree, so add the stopped builder's worktree path and what is there: its commits on its branch, and any uncommitted edits, which it may look at and take over where sound, or ignore. Add the stopped builder's last follow-up, if it had one: a `QUESTION`'s answer, or the failed check's last 10 lines (as section 9, step 5). Put its ID in place of the stopped one's under "Tasks in flight", and commit with `state commit`.
-        - **A cold reviewer:** the cold brief and nothing else (5.3, step 2): none of the stopped reviewer's notes or partial report.
+        - **A builder:** the full brief. It gets its own new worktree, so add the stopped builder's worktree path and what is there: its commits on its branch, and any uncommitted edits, which it may look at and take over where sound, or ignore. Add the stopped builder's last follow-up, if it had one: a `QUESTION`'s answer, or the failed check's last 10 lines (as section 9, step 5). Update the task's whole row under "Tasks in flight": the fresh builder's ID, worktree and branch in place of the stopped one's, the task and attempt as they were. Commit with `state commit`.
+        - **A cold reviewer:** first move the stopped reviewer's directory aside, so the fresh one starts in an empty directory and nothing partial is committed: `mv /tmp/cold-M<k>-<name> /tmp/cold-M<k>-<name>.stopped`. Then the cold brief and nothing else (5.3, step 2): none of the stopped reviewer's notes or partial report.
         - **A Qodo reader:** its brief. When it reports, commit every fetch either reader archived (5.5, step 3), not only the newest, so the fetches stay numbered 1 to k.
-        - **A planner or an auditor:** its brief.
+        - **An auditor:** first move the stopped auditor's report aside: `mv /tmp/audit-<kind>-M<k>.md /tmp/audit-<kind>-M<k>.md.stopped`. Then its brief.
+        - **A planner:** its brief.
       - None of this counts as a failed attempt (5.2, step 4).
    4. **Run your own stopped commands again:** a suite run, `room.py wait`, a check. A Qodo reader isn't one of them: it is a subagent, so resume it (step 3) and don't start another.
    5. **Post a `STATUS`.** It is also a sign of life (section 11):
