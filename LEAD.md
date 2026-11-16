@@ -60,7 +60,7 @@ You are the lead: a Claude Code cloud session that runs one mission of a project
    python3 room.py state get cursor
    python3 room.py read N lead --from <cursor>
    ```
-7. A mission under way: `git switch <branch>` first, because its dispositions rows live there. Then handle those messages, before anything else (section 9). A `STOP` or `PAUSE` comes before everything: handle it, and redo no intent. A `DECISION-n` comes before the intent hint, because it may change what to do. A message an earlier lead already answered was handled: a `CHANGE-n` followed by its `ACK`, a `PAUSE` or `STOP` followed by `PAUSED` or `STOPPED`. Check that the records show it, and don't redo it. A `DECISION-n` followed by its `ACK` counts as handled only if the records show it applied: its dispositions rows are rewritten (section 9, step 3), and the step is no longer `waiting for owner: …`. Otherwise the lead that sent the `ACK` stopped part way: finish section 9 steps 3 to 5 for it now, without a second `ACK`, and don't park again. An earlier lead's own messages are history.
+7. A mission under way: `git switch <branch>` first, because its dispositions rows live there. Then handle those messages, before anything else (section 9). A `STOP` or `PAUSE` comes before everything: handle it, and redo no intent. A `DECISION-n` comes before the intent hint, because it may change what to do. A message an earlier lead already answered was handled: a `DECISION-n` or `CHANGE-n` followed by its `ACK`, a `PAUSE` or `STOP` followed by `PAUSED` or `STOPPED`. Check that the records show it, and don't redo it. One exception, for the newest `DECISION-n` in the room only: it was acknowledged but not applied when its dispositions rows aren't rewritten (section 9, step 3), the step is still `waiting for owner: …`, and no lead message other than `LEAD ONLINE` or `ACK` follows its `ACK`. Then the lead that sent the `ACK` stopped part way: finish section 9 steps 3 to 5 for it now, without a second `ACK`, and don't park again. Any older `DECISION-n` with its `ACK` is handled. An earlier lead's own messages are history.
 8. Then act on reconcile's intent hint:
 
    | Hint | Do |
@@ -83,7 +83,7 @@ You are the lead: a Claude Code cloud session that runs one mission of a project
    | `gate` | 5.6 Gate and merge; if reconcile says the PR is merged, 5.7 |
    | `close` | 5.7 Close |
    | `done` | 7. Phase end, to finish what is missing |
-   | `waiting for owner: <step>` | The `DECISION-n` (section 9) if it came, even with an `ACK` if it wasn't applied (step 7); else park again (section 3) |
+   | `waiting for owner: <step>` | A `DECISION-n` (section 9) that came without an `ACK`, or the newest one if it was acknowledged but not applied (step 7); else park again (section 3) |
 
 ## 3. Waiting
 
