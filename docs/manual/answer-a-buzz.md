@@ -4,7 +4,7 @@
 
 ## When to use it
 
-Your phone buzzes with a title such as `ESCALATION-3 · pet-todo room 1`: the message kind, the project and the room number. Seven kinds buzz: `ESCALATION`, `MERGE-HOLD`, `NEXT-LEAD-NEEDED`, `PAUSED`, `STOPPED`, `DONE` and `LEAD-SILENT`.
+Your phone buzzes with a title such as `ESCALATION-3 · pet-todo room 1`: the message kind, the project and the room number. Seven kinds buzz: `ESCALATION`, `MERGE-HOLD`, `NEXT-LEAD-NEEDED`, `PAUSED`, `STOPPED`, `DONE` and `LEAD-SILENT`. A `STATUS` buzzes only when the lead retries a failed `ESCALATION` or `MERGE-HOLD` buzz: that's a real request (below).
 
 ## What you need first
 
@@ -52,6 +52,10 @@ The message reads `MERGE-HOLD-n: PR #<number>, reason <r> (…)`. One hold can n
    - **drop the mission and re-plan.**
 3. The architect records it, posts `DECISION-n` and starts a new lead, as for an escalation. Wait for the ACK.
 
+### `STATUS`: a decision buzz that failed the first time
+
+Its text reads `STATUS: the buzz for <KIND>-<n> failed (…): Matthew, a decision is needed in room N`. The lead posted an `ESCALATION` or `MERGE-HOLD` whose buzz didn't reach you, and is now waiting for you. Open the room, find that message, and answer it as its kind says above.
+
 ### `NEXT-LEAD-NEEDED`: start the next lead
 
 A lead finished its part but couldn't start the next one through the lead task. The message says why. Nothing is lost.
@@ -85,7 +89,8 @@ The watchdog saw nothing move. A lead died, got stuck or ran out of Claude usage
 Other texts:
 
 - `LEAD-SILENT: no lead joined after DECISION-n`: no lead has joined in the three hours since your decision. The architect checks whether a lead was started; it starts one, or finds out with you why the start didn't take (often the lead task's token, or Claude usage), fixes it, and starts one.
-- `LEAD-SILENT: still no progress since …`, `still no lead joined after DECISION-n …` or `still state unreadable (…)`: a reminder, every 12 hours by default, while the stall or the wait lasts. Answer it like the first alarm.
+- `LEAD-SILENT: no lead has joined room N in 12h`: the phase's first lead never joined. The architect checks the lead task with you (often its token), fixes it, and starts the first lead.
+- `LEAD-SILENT: still no progress since …`, `still no lead joined after DECISION-n …`, `still state unreadable (…)` or `still no lead has joined room N`: a reminder, every 12 hours by default, while the stall or the wait lasts. Answer it like the first alarm.
 
 1. If the buzz's message reads `LEAD-SILENT: state unreadable (…)`, the pipeline's records are broken, not the lead. The architect checks them first. If the `agent-room/state` branch was deleted, it is restored before any lead starts. Best: the architect pushes it again from its own copy, or you push it from a fork or a local clone that still has it. In a local clone, run:
 
