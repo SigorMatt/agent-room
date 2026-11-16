@@ -33,7 +33,7 @@ To look up a word used in the manuals, the room or a session.
    - **Merge hold:** a pull request the lead won't merge without you (`MERGE-HOLD-n`).
    - **Decision, change:** the architect's answer to an escalation or hold (`DECISION-n`), and a design change mid-phase (`CHANGE-n`).
    - **ACK:** the lead's receipt for a decision or change.
-   - **Starter task:** a one-time scheduled task the architect creates to start one lead through the lead task, named `agent-room start lead SigorMatt/<repo> room N`. You approve its pop-up. It switches itself off after running; never delete it.
+   - **Starter task:** a one-time scheduled task the architect creates to start one lead through the lead task, named `agent-room start lead SigorMatt/<repo> room N`. Approve it when it appears; a late approval may need a second one. It switches itself off after running; never delete it.
    - **Join line:** the line that starts a lead: the text the lead task is started with, or what you paste into a new Code session.
    - **Takeover line:** a join line that may replace a lead that stopped without handing over. The architect uses it after a `LEAD-SILENT` when the lead is gone; you, only when the architect gives you one.
    - **Lease:** the record of which session is the lead, so only one lead acts at a time.
