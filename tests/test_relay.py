@@ -253,9 +253,10 @@ def start(*args, n="1", **env):
 
 
 def watchdog(*args, n="1", **env):
-    """room.py watchdog N, checking that it made no fire request: the watchdog only alarms (BUILD-STATE 2026-11-16,
-    B-5)."""
+    """room.py watchdog N, by default without the lead task's token, so these tests see its alarms alone, and checking
+    that it made no fire request. Its one start per stall (M6d, B-5) is tests/test_m6d.py's."""
     env.setdefault("ROOM_SESSION", "wd")
+    env.setdefault("ROOM_FIRE_TOKEN_PET", None)
     nf = len(fires())
     r = room("watchdog", n, *args, **env)
     assert len(fires()) == nf, f"the watchdog fired the lead task:\n{out(r)}"
@@ -449,8 +450,7 @@ def t_start_lead_guards():
     room("lease", "release", check=True)
     for role in ("lead", "architect"):
         refused(start(role, ROOM_SESSION="arch" if role == "architect" else "L1"), "status is done", before)
-    r = start("watchdog", ROOM_SESSION="wd")  # cold M6b R3-5: the watchdog starts no leads
-    assert r.returncode == 2 and "invalid choice: 'watchdog'" in r.stderr and counts() == before, out(r)
+    refused(start("watchdog", ROOM_SESSION="wd"), "status is done", before)  # M6d: one start per stall
     room("lease", "take", check=True)  # which sets status back to running
     # paused or stopped with the lease released: only the architect resumes
     for status in ("paused", "stopped"):
@@ -468,7 +468,8 @@ def t_start_lead_guards():
     room("lease", "take", check=True)
     before = counts()
     refused(start("lead", ROOM_SESSION="L9"), "refused: the lease is held by L1: a lead is running, and a takeover "
-                                              "(--takeover) is the architect's call", before)
+                                              "(--takeover) is the architect's or, once per stall, the watchdog's call",
+            before)
     r = start("architect", "--takeover", ROOM_SESSION="arch")
     assert r.returncode == 0, out(r)
     assert request(fires()[-1])["body"] == {"text": JOIN.format(n=1, v="main") + TAKEOVER}
@@ -504,13 +505,16 @@ def t_start_lead_post_fails():
     online()
 
 
-def t_the_watchdog_posts_only_lead_silent():
-    # cold M6b R3-5: the watchdog starts no leads, so it posts no LEAD-STARTED either
+def t_the_watchdog_posts_only_lead_silent_and_lead_started():
+    # M6d, B-5: the watchdog starts one lead per stall, so it posts LEAD-STARTED again, and nothing else besides alarms
+    r = room("say", "1", "watchdog", "LEAD-STARTED: https://claude.ai/code/y (plain join line, started by watchdog)",
+             ROOM_SESSION="wd")
+    assert r.returncode == 0 and "[buzz" not in r.stdout, out(r)
     n = len(comments())
-    for text in ("LEAD-STARTED: https://claude.ai/code/y (plain join line, started by watchdog)", "STATUS: not mine"):
-        r = room("say", "1", "watchdog", text, ROOM_SESSION="wd")
-        assert r.returncode == 2 and "the watchdog can send only LEAD-SILENT, not " in r.stderr, out(r)
+    r = room("say", "1", "watchdog", "STATUS: not mine", ROOM_SESSION="wd")
+    assert r.returncode == 2 and "the watchdog can send only LEAD-SILENT and LEAD-STARTED, not STATUS" in r.stderr, out(r)
     assert len(comments()) == n
+    age_watchdog()
     online()
 
 
@@ -542,7 +546,7 @@ def t_watchdog_alarms_and_starts_nothing():
     set_state("step=build 1", hours=5)  # L1 holds the lease
     nb, before, n = len(buzzes()), state_sha(), len(comments())
     r = watchdog()
-    assert r.returncode == 0 and "alarm: no progress for 5h" in r.stdout and "start" not in r.stdout, out(r)
+    assert r.returncode == 0 and "alarm: no progress for 5h" in r.stdout and "started:" not in r.stdout, out(r)
     [alarm] = comments()[n:]
     assert text_of(alarm).startswith("LEAD-SILENT: no progress since ") and tag(alarm) == ("watchdog", "wd")
     assert len(buzzes()) == nb + 1 and state_sha() == before, "it buzzes, and never writes state"

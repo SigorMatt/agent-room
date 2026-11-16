@@ -206,7 +206,33 @@ def setup():
         json.dump({}, f)
 
 
-# --- B-6: reminders while a room waits on Matthew
+# --- B-5: one start per stall
+
+def t_a_takeover_after_the_alarm_with_the_lease_held():
+    stall("build 1")
+    nf, n = len(fires()), len(comments())
+    r = watchdog()
+    assert r.returncode == 0 and "alarm: no progress for 5h" in r.stdout and "started: https://claude.ai/code/" in \
+        r.stdout, out(r)
+    assert r.stdout.index("alarm: ") < r.stdout.index("started: "), "the alarm comes before the fire"
+    assert new_kinds(n) == ["LEAD-SILENT", "LEAD-STARTED"], new_kinds(n)
+    assert text_of(comments()[-1]).endswith("(takeover join line, started by watchdog)")
+    assert [body_of(x) for x in fires()[nf:]] == [JOIN.format(n=1) + TAKEOVER]
+    # the same stall: no second start, after the watchdog's own
+    r = watchdog()
+    assert "already reports this stall" in r.stdout and "is this stall's start" in r.stdout, out(r)
+    assert len(fires()) == nf + 1 and len(comments()) == n + 2
+
+
+def t_a_plain_start_after_the_alarm_with_the_lease_released():
+    stall("build 2")
+    room("lease", "release", check=True)  # a handover whose successor never came
+    nf = len(fires())
+    r = watchdog()
+    assert "alarm: no progress for 5h" in r.stdout and "started: " in r.stdout, out(r)
+    assert text_of(comments()[-1]).endswith("(plain join line, started by watchdog)")
+    assert [body_of(x) for x in fires()[nf:]] == [JOIN.format(n=1)]
+
 
 def park(n, step):
     """The lead escalates and parks: ESCALATION-N 5 hours ago, the waiting step, the lease released."""
@@ -219,6 +245,129 @@ def park(n, step):
     return esc
 
 
+def t_a_plain_start_after_a_decision_nobody_started_a_lead_for():
+    park(1, "spec 3")
+    decision = say("DECISION-1: the first", role="architect", ROOM_SESSION="arch")
+    backdate(lambda c: c["id"] == decision, 200)
+    nf, n = len(fires()), len(comments())
+    r = watchdog()
+    assert "alarm: no lead joined after DECISION-1" in r.stdout and "started: " in r.stdout, out(r)
+    assert new_kinds(n) == ["LEAD-SILENT", "LEAD-STARTED"], new_kinds(n)
+    assert text_of(comments()[-1]).endswith("(plain join line, started by watchdog)") and len(fires()) == nf + 1
+
+
+def t_no_second_start_after_the_architects_start():
+    park(2, "spec 4")
+    decision = say("DECISION-2: the second", role="architect", ROOM_SESSION="arch")
+    say("LEAD-STARTED: https://claude.ai/code/a1 (plain join line, started by architect)", role="architect",
+        ROOM_SESSION="arch")  # its lead never joined
+    backdate(lambda c: c["id"] == decision, 260)
+    backdate(lambda c: c["id"] > decision, 200)
+    nf, n = len(fires()), len(comments())
+    r = watchdog()
+    assert "alarm: no lead joined after DECISION-2" in r.stdout and "is this stall's start" in r.stdout, out(r)
+    assert new_kinds(n) == ["LEAD-SILENT"] and len(fires()) == nf
+
+
+def t_no_second_start_after_an_unconfirmed_start():
+    stall("build 5")
+    r = room("start-lead", "1", "architect", "--takeover", ROOM_SESSION="arch", FAKE_FIRE_STATUS="502",
+             FAKE_FIRE_BODY="Bad Gateway")
+    assert r.returncode == 0 and "LEAD-STARTED: unconfirmed (HTTP 502)" in text_of(comments()[-1]), out(r)
+    backdate(lambda c: c["id"] == comments()[-1]["id"], 200)
+    nf = len(fires())
+    r = watchdog()
+    assert "alarm: no progress for 5h" in r.stdout and "is this stall's start" in r.stdout and len(fires()) == nf, out(r)
+
+
+def t_a_plain_start_before_any_lead_joined():
+    assert "room 2 in SigorMatt/pet" in room("new", "Phase 2", check=True).stdout
+    original = edit_state("PLAYBOOK.md", lambda t: re.sub(r"^room: .*$", "room: 2", t, count=1, flags=re.M))
+    room("lease", "take", "--takeover", check=True)
+    set_state("status=done")  # phase 1 is over
+    room("lease", "release", check=True)
+    try:
+        opened("2", 13)
+        nf = len(fires())
+        r = watchdog(n="2")
+        assert "alarm: no lead has joined room 2 in 12h" in r.stdout and "started: " in r.stdout, out(r)
+        assert new_kinds(0, "2") == ["LEAD-SILENT", "LEAD-STARTED"], new_kinds(0, "2")
+        assert [body_of(x) for x in fires()[nf:]] == [JOIN.format(n=2)]
+        r = watchdog(n="2")
+        assert "is this stall's start" in r.stdout and len(fires()) == nf + 1, out(r)
+    finally:
+        edit_state("PLAYBOOK.md", lambda t: original)
+        room("lease", "take", "--takeover", check=True)
+        set_state("status=running")
+
+
+def t_a_takeover_after_a_lead_joined_at_waiting_and_died():
+    park(3, "spec 5")
+    decision = say("DECISION-3: the third", role="architect", ROOM_SESSION="arch")
+    started = say("LEAD-STARTED: https://claude.ai/code/a2 (plain join line, started by architect)", role="architect",
+                  ROOM_SESSION="arch")
+    room("lease", "take", check=True, ROOM_SESSION="L2")
+    joined = say("LEAD ONLINE", ROOM_SESSION="L2")  # then it dies before moving the step on
+    backdate(lambda c: c["id"] in (decision, started), 260)
+    backdate(lambda c: c["id"] == joined, 200)  # a new stall, from its LEAD ONLINE (cold M6b R1-1)
+    nf, n = len(fires()), len(comments())
+    r = watchdog()
+    assert f"alarm: no progress for 3h20m (LEAD ONLINE #{joined} at " in r.stdout and "started: " in r.stdout, out(r)
+    assert new_kinds(n) == ["LEAD-SILENT", "LEAD-STARTED"]
+    assert text_of(comments()[-1]).endswith("(takeover join line, started by watchdog)") and len(fires()) == nf + 1
+
+
+def t_no_start_while_a_lead_talks():
+    stall("build 6")
+    talk = say("STATUS: builders still running")
+    nf, n = len(fires()), len(comments())
+    r = watchdog()
+    assert "alarm: no progress for 5h" in r.stdout and f"note: no start: the lead posted #{talk} at " in r.stdout, out(r)
+    assert new_kinds(n) == ["LEAD-SILENT"] and len(fires()) == nf
+    backdate(lambda c: c["id"] == talk, 200)  # silent for silent-after now
+    r = watchdog()
+    assert "started: " in r.stdout and len(fires()) == nf + 1, out(r)
+
+
+def t_a_definite_failure_is_retried_at_the_next_run():
+    stall("build 7")
+    nf, n = len(fires()), len(comments())
+    r = watchdog(FAKE_FIRE_STATUS="503", FAKE_FIRE_BODY="overloaded")
+    assert "start failed: lead task not started: HTTP 503: overloaded; the next run tries again" in r.stdout, out(r)
+    assert new_kinds(n) == ["LEAD-SILENT"] and len(fires()) == nf + 1
+    r = watchdog()
+    assert "already reports this stall" in r.stdout and "started: " in r.stdout and len(fires()) == nf + 2, out(r)
+    assert new_kinds(n) == ["LEAD-SILENT", "LEAD-STARTED"]
+
+
+def t_not_configured_or_refused_prints_a_note():
+    stall("build 8")
+    nf, n = len(fires()), len(comments())
+    r = watchdog(ROOM_FIRE_TOKEN_PET=None)
+    assert "note: no start: the lead task isn't configured" in r.stdout and len(fires()) == nf, out(r)
+    r = watchdog(FAKE_FIRE_STATUS="401", FAKE_FIRE_BODY='{"error": {"message": "bad token"}}')
+    assert "note: no lead started: token rejected (HTTP 401)" in r.stdout and len(fires()) == nf + 1, out(r)
+    set_issue_state("1", "closed")
+    try:
+        r = watchdog()
+        assert "note: no lead started: refused: room 1 is closed" in r.stdout and len(fires()) == nf + 1, out(r)
+    finally:
+        set_issue_state("1", "open")
+    assert new_kinds(n) == ["LEAD-SILENT"], "the alarm alone"
+
+
+def t_a_failed_alarm_post_means_no_fire():
+    stall("build 9")
+    nf, n = len(fires()), len(comments())
+    r = watchdog(FAKE_GH_FAIL_POSTS="1", FAKE_GH_FAIL_COUNTER=os.path.join(tmp, "alarm-post-fails"))
+    assert r.returncode == 1 and "Bad Gateway" in r.stderr, out(r)
+    assert len(fires()) == nf and len(comments()) == n, "no alarm, so no start"
+    r = watchdog()
+    assert "alarm: no progress for 5h" in r.stdout and "started: " in r.stdout, out(r)
+    assert new_kinds(n) == ["LEAD-SILENT", "LEAD-STARTED"]
+
+
+# --- B-6: reminders while a room waits on Matthew
 
 def t_a_reminder_while_a_request_waits_on_matthew():
     esc = park(4, "gate 10")
