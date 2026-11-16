@@ -3781,6 +3781,17 @@ def start_refusal(room, role, takeover, force, values, playbook, sid=None):
 POST_RETRY_WAITS = (2, 5)  # seconds before the second and third try of a LEAD-STARTED post (qodo PR #11)
 
 
+def already_posted(room, role, text, a):
+    """Whether room ROOM's comments of the last ten minutes hold TEXT from this ROLE and session, trusted. A read
+    that fails counts as no."""
+    sid = session_id(a)
+    try:
+        recent = [parse(c) for c in comments(room, iso(time.time() - 600))]
+    except GhError:
+        return False
+    return any(m["role"] == role and m["session"] == sid and m["text"] == text.strip() and trusted(m) for m in recent)
+
+
 def post_quietly(room, role, text, a):
     """Post TEXT as ROLE through say (its role guard and lease check on send), with no buzz. A failed post is tried
     twice more, after POST_RETRY_WAITS, since the start it records has happened; a refusal isn't. Returns None, or why
@@ -3796,6 +3807,9 @@ def post_quietly(room, role, text, a):
                 return str(e)
             print(f"[LEAD-STARTED not posted ({e}); trying again in {wait}s]", file=sys.stderr)
             time.sleep(wait)
+            if already_posted(room, role, text, a):  # GitHub may have made it and lost the answer (cold M6b S2-4)
+                print("[it was posted after all]", file=sys.stderr)
+                return None
 
 
 def start_lead(a, room, role, takeover=False, force=False, after=None):

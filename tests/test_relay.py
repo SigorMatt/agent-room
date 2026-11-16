@@ -1380,6 +1380,17 @@ def t_gateway_errors_are_unconfirmed_starts():
         online()
 
 
+def t_a_lead_started_that_landed_is_not_posted_twice():
+    # cold M6b S2-4: GitHub sometimes creates the comment and then answers 502; the retry first looks for it
+    online()
+    nc = len(comments())
+    r = start("architect", "--takeover", ROOM_SESSION="arch", FAKE_GH_LOST_REPLIES="1",
+              FAKE_GH_FAIL_COUNTER=os.path.join(tmp, "lost-replies"))
+    assert r.returncode == 0 and "wasn't posted" not in r.stdout, out(r)
+    assert [kind_of(c) for c in comments()[nc:]] == ["LEAD-STARTED"], [text_of(c) for c in comments()[nc:]]
+    online()
+
+
 setup()
 for name, fn in list(globals().items()):
     if name.startswith("t_"):
