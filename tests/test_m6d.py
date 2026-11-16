@@ -248,8 +248,8 @@ def t_a_plain_start_after_the_alarm_with_the_lease_released():
 
 
 def answer_open_requests():
-    """Answer, as the architect, every lead request an earlier test left open in room 1, so a test's own request is
-    the room's oldest open one (B-6 reminds about the oldest, cold M6d R3-2)."""
+    """Answer, as the architect, every lead request an earlier test left open in room 1, so each test's room holds
+    only its own open requests (B-6 reminds about the newest open one, so this is a tidiness, not a need)."""
     msgs = [(c, re.match(r"<!-- agent-room role=(\S+)", c["body"]), text_of(c)) for c in comments()]
     for c, tagged, text in msgs:
         ask = re.match(r"(?:ESCALATION|MERGE-HOLD)-(\d+)(?!\d)", text)
@@ -678,6 +678,41 @@ def t_an_older_open_request_gets_its_reminder():
     assert [text_of(c) for c in comments()[n:]] == [f"LEAD-SILENT: still waiting for Matthew: ESCALATION-21 since "
                                                     f"{asked} (step waiting for owner: build) (buzz sent)"], out(r)
     assert len(fires()) == nf
+    room("lease", "take", check=True)
+
+
+def t_a_stale_older_request_doesnt_hide_the_newer_one():
+    # cold M6d R4-2 (its E2): ESCALATION-32 was made moot by a later decision (its mission dropped) and never got a
+    # DECISION-32; days later the lead parks on MERGE-HOLD-37: the reminder names MERGE-HOLD-37, 12 hours after it
+    answer_open_requests()
+    age_room()
+    room("lease", "take", "--takeover", check=True, **ago(80)[1])
+    e32 = say("ESCALATION-32: which storage format for task 2 of M3?")
+    e33 = say("ESCALATION-33: M3 is over budget")
+    backdate(lambda c: c["id"] == e32, 72 * 60)
+    backdate(lambda c: c["id"] == e33, 70 * 60)
+    set_state("waiting_for_owner=yes", "step=waiting for owner: build", hours=70)
+    room("lease", "release", check=True, **ago(70)[1])
+    d33 = say("DECISION-33: drop M3 and re-plan", role="architect", ROOM_SESSION="arch")
+    backdate(lambda c: c["id"] == d33, 69 * 60)
+    room("lease", "take", check=True, ROOM_SESSION="L2", **ago(68.9)[1])
+    later = [say("LEAD ONLINE", ROOM_SESSION="L2"), say("ACK DECISION-33", ROOM_SESSION="L2"),
+             say("PLAN: M4 replaces M3", ROOM_SESSION="L2")]
+    backdate(lambda c: c["id"] in later, 68.8 * 60)
+    set_state("waiting_for_owner=no", "step=plan", hours=68.8, ROOM_SESSION="L2")
+    set_state("step=gate", hours=1, ROOM_SESSION="L2")
+    hold = say("MERGE-HOLD-37: PR #9, reason 5 (src/auth/)", ROOM_SESSION="L2")
+    backdate(lambda c: c["id"] == hold, 20)
+    set_state("waiting_for_owner=yes", "step=waiting for owner: gate", hours=0.3, ROOM_SESSION="L2")
+    room("lease", "release", check=True, ROOM_SESSION="L2")
+    n = len(comments())
+    r = watchdog()  # 20 minutes after the hold: no reminder yet, and none for the stale ESCALATION-32
+    assert r.stdout.strip() == "quiet: step is waiting for owner: gate" and len(comments()) == n, out(r)
+    backdate(lambda c: c["id"] == hold, 750)  # 12h30m later
+    held = next(c for c in comments() if c["id"] == hold)["created_at"]
+    r = watchdog()
+    assert [text_of(c) for c in comments()[n:]] == [f"LEAD-SILENT: still waiting for Matthew: MERGE-HOLD-37 since {held} "
+                                                    "(step waiting for owner: gate) (buzz sent)"], out(r)
     room("lease", "take", check=True)
 
 

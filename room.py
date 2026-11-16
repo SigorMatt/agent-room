@@ -3123,9 +3123,10 @@ def sign_of_life(msgs, since, values, path):
 
 def waiting_request(a, values, playbook):
     """The request a parked lead waits on Matthew for (M6d, B-6): while the lease is released and room N is recorded
-    as the current room, the room's oldest trusted lead ESCALATION-n or MERGE-HOLD-n with no trusted DECISION-n (from
-    the architect or Matthew) after it, so one left open after a newer one was answered still gets its reminder (cold
-    M6d R3-2); else None. Unlike pending_decision, a room that neither PLAYBOOK.md nor the machine block records gets
+    as the current room, the room's newest trusted lead ESCALATION-n or MERGE-HOLD-n with no trusted DECISION-n (from
+    the architect or Matthew) after it: one left open after a newer one was answered still gets its reminder (cold
+    M6d R3-2), and a stale old request that a later decision made moot doesn't hide the one the lead parked on (cold
+    M6d R4-2); else None. Unlike pending_decision, a room that neither PLAYBOOK.md nor the machine block records gets
     no reminder (qodo PR #14)."""
     room = current_room(playbook, values)
     if lease_of(values)[0] != "none" or room is None or room[0] != a.room:
@@ -3133,7 +3134,7 @@ def waiting_request(a, values, playbook):
     msgs = [m for m in map(parse, comments(a.room)) if trusted(m)]
     asks = [m for m in msgs if m["role"] == "lead" and re.fullmatch(r"(?:ESCALATION|MERGE-HOLD)-\d+",
                                                                      message_kind(m["text"]) or "")]
-    for ask in asks:
+    for ask in reversed(asks):  # the newest open one
         n = message_kind(ask["text"]).rsplit("-", 1)[1]
         if not any(m["id"] > ask["id"] and m["role"] in ("architect", "human")
                    and message_kind(m["text"]) == f"DECISION-{n}" for m in msgs):
