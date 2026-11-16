@@ -22,7 +22,7 @@ To look up a message in the room: who sent it, whether it buzzes, and what you d
    | `ESCALATION-n` | Lead | Yes | It needs your decision | [Answer a buzz](answer-a-buzz.md) |
    | `MERGE-HOLD-n` | Lead | Yes | A pull request is held, with a reason | [Answer a buzz](answer-a-buzz.md) |
    | `HANDOFF` | Lead | No | This lead's turn ends; it starts the next one | Nothing |
-   | `LEAD-STARTED` | Lead, architect or watchdog | No | A new lead was started through the lead task, with a link to its session, the kind of join line and who started it. `started by watchdog after DECISION-n` is the lead for your decision, not a takeover. Its `LEAD ONLINE` should follow within about 15 minutes | Nothing |
+   | `LEAD-STARTED` | Lead, architect or watchdog | No | A new lead was started through the lead task, with a link to its session, the kind of join line and who started it. `started by watchdog after DECISION-n` is the lead for your decision, not a takeover. `LEAD-STARTED: unconfirmed (…)` means the start may have worked: nobody starts another for 30 minutes. Its `LEAD ONLINE` should follow within about 15 minutes | Nothing |
    | `NEXT-LEAD-NEEDED` | Lead | Yes | The next lead couldn't be started; the message says why | [Answer a buzz](answer-a-buzz.md) |
    | `PAUSED` | Lead | Yes | Paused at a safe point; the lead ended | Resume when you like ([Start the next lead by hand](start-the-next-lead-by-hand.md)) |
    | `STOPPED` | Lead | Yes | Halted on `STOP`; the lead ended | [Answer a buzz](answer-a-buzz.md) |

@@ -64,12 +64,13 @@ Starts a lead through the lead task, as `ROLE` (`lead`, `watchdog` or `architect
    - **Timeout:** 30 seconds.
    - **Secrecy:** the token never appears in output, errors or room text; scrub it as `buzz` does.
 5. **Read the answer.**
-   - **HTTP 200 with `type` `routine_fire`:** print `started: <claude_code_session_url>`, then post `LEAD-STARTED: <url> (<plain|takeover> join line, started by <ROLE>)` as `ROLE`, with no buzz. Exit 0. If the post fails, print `started, but LEAD-STARTED wasn't posted: <reason>` and still exit 0.
+   - **HTTP 200 with `type` `routine_fire`:** print `started: <claude_code_session_url>`, then post `LEAD-STARTED: <url> (<plain|takeover> join line, started by <ROLE>)` as `ROLE`, with no buzz. Exit 0. The post is retried up to 3 times, since the watchdog and the architect rely on it to hold off another start (qodo PR #11). If it still fails, print `started, but LEAD-STARTED wasn't posted: <reason>` and still exit 0.
+   - **Unconfirmed** (qodo PR #11): the request timed out, or got an HTTP 200 without `routine_fire`. The run may have started, so a retry could start a second lead. Post `LEAD-STARTED: unconfirmed (<reason>); a LEAD ONLINE follows if the lead started (started by <ROLE>)`, with the same retries and no buzz, and exit 0. Like any `LEAD-STARTED`, it holds off further starts: `start-lead`'s 30-minute guard, the watchdog's `silent-after`, and the architect's 30 minutes.
    - **401 or 403:** exit 6, `token rejected (HTTP <code>)`.
    - **404:** exit 6, `lead task <id> not found`.
-   - **429 or any other failure** (network error, timeout, 5xx, a 200 without `routine_fire`): exit 1, with the scrubbed error.
+   - **429 or any other definite failure** (a network error before the request was sent, 5xx): exit 1, with the scrubbed error. Nothing started, so it is safe to try once more.
 
-Exit codes: 0 started, 1 transient (try once more), 3 refused, 6 not configured or rejected.
+Exit codes: 0 started or unconfirmed (never retry), 1 a definite failure (safe to try once more), 3 refused, 6 not configured or rejected (qodo PR #11).
 
 ### Message kinds
 

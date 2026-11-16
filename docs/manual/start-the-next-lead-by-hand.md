@@ -30,7 +30,7 @@ Normally you don't: each lead starts the next through the lead task, the watchdo
      Is the lead in room N gone? If so, give me the takeover line.
      ```
 
-   The architect first checks that no lead is still alive: after a `LEAD-SILENT`, the watchdog has usually started a takeover lead already, and the architect gives it about 30 minutes to join. The takeover line ends with "Take over the lease … the previous lead stopped without handing over." The normal one doesn't.
+   The architect first checks that no lead is still alive: after a `LEAD-SILENT`, the watchdog has usually started a takeover lead already, and the architect gives it about 30 minutes to join. The same holds for any `LEAD-STARTED` with no `LEAD ONLINE` after it, including `LEAD-STARTED: unconfirmed (…)`: that lead may still be starting, so nobody starts another within 30 minutes of it. The takeover line ends with "Take over the lease … the previous lead stopped without handing over." The normal one doesn't.
 
    The architect may offer to start the lead itself through the lead task. Let it; approve the pop-up if one comes, and skip to "What you should see".
 2. Takeover only: if the old lead's session is still open, archive it.
