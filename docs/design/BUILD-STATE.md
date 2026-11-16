@@ -18,7 +18,7 @@ The build of the agent-room pipeline v1, as designed in [`v1.md`](v1.md). A fres
 | M4 | Unattended operation (spec `m4-unattended.md`) | Done (#8) |
 | M5 | Protocols (`ARCHITECT.md`, `LEAD.md`, briefs, thin skill), manuals and index | Done (#9) |
 | M6 | Dress rehearsal on `pet-todo` (build lead plays the architect) | Done: phase 1 of pet-todo complete (#2, #3, #4), `DONE` buzz received; findings L to P; waiting on Matthew's decision on successor starts |
-| M6b | Leads started through the lead task's API trigger (`start-lead`), parking while waiting on Matthew, an alarm-only watchdog with reminders (option 1 below; watchdog starts deferred, B-5) | In progress (PR #11) |
+| M6b | Leads started through the lead task's API trigger (`start-lead`), parking while waiting on Matthew, an alarm-only watchdog with reminders (option 1 below; watchdog starts deferred, B-5) | Done (#11): 3 cold rounds, 4 scoped reviews, 5 Qodo fetches; B-5 and B-6 deferred |
 | M6c | Unattended rehearsal of M6b on pet-todo phase 2 (build lead plays the architect) | Not started |
 | M7 | Matthew's owner run, then tag `v1.0.0` | Not started |
 
@@ -157,4 +157,4 @@ What the pipeline needs: something that starts a lead in auto mode, in the `agen
 | B-3 | (Done in M2 after Qodo PR #6.) Strict machine-block parsing, from cold M2 scoped-3: the block is the only `agent-room-state` block and the first fenced block, its body only `key: value` or blank lines, closed by a bare fence; a second such block is refused on commit; a repair never deletes text, it prepends a fresh block and retires the damaged fence (S3-1, S3-2, S3-3) | M4 | cold M2 S3-1, S3-2, S3-3 |
 | B-4 | (Done: M3 spec, and `LEAD.md` in M5.) The M3 spec and `LEAD.md` say that a cold finding of weakened tests is a sensitive-area hold (reason 5) by the lead's judgement; the gate holds only deleted tests mechanically | M3 | Qodo PR #6, "Weakened tests evade the merge hold" |
 | B-5 | Watchdog starts leads by itself (takeover after a stall, the lead after a `DECISION`), with rules simple enough to verify: the M6b attempt is in PR #11's history and its reviews under `reviews/cold/M6/` | after v1 | cold M6b R2-1, S2-1, S3-4 |
-| B-6 | The watchdog reminds Matthew of a parked room waiting on him with no `DECISION` (every 12 hours), so a lost `ESCALATION`/`MERGE-HOLD` buzz is caught; and a failed `still state unreadable` reminder is retried at the next run like other reminders | M7 | cold M6b S4-2, S4-4 |
+| B-6 | The watchdog reminds Matthew of a parked room waiting on him with no `DECISION` (every 12 hours), so a lost `ESCALATION`/`MERGE-HOLD` buzz is caught; and a failed `still state unreadable` reminder is retried at the next run like other reminders | M7 | cold M6b R3-8, S4-2, S4-4 |
