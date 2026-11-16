@@ -91,7 +91,7 @@ The watchdog task's prompt doesn't change: room.py does the posting and starting
   - the step starts with `waiting for owner`;
   - the lease is released (a parked lead);
   - room N is recorded as the current room, in `PLAYBOOK.md` or the machine block (a room nothing records gets no reminder, qodo PR #14, finding 6);
-  - the room has a trusted lead request, an `ESCALATION-n` or `MERGE-HOLD-n`, with no trusted `DECISION-n` after it. The newest such open request is reminded about: an older one left open after a newer one was answered still gets its reminder (cold M6d R3-2), and a stale old request that a later decision made moot doesn't hide the one the lead parked on (cold M6d R4-2).
+  - the room has a trusted lead request, an `ESCALATION-n` or `MERGE-HOLD-n`, with no trusted `DECISION-n` after it. The newest such open request is reminded about: an older one left open after a newer one was answered still gets its reminder (cold M6d R3-2), and a stale old request that a later decision made moot doesn't hide the one the lead parked on (cold M6d R4-2). Every other open request is named too, after the text: ` (also open: ESCALATION-24, …)`, so neither order of a stale and a live request hides the live one (cold M6d S1-1). The reminder is due 12 hours after the newest open request.
 - **What it posts:** once `REMINDER_AFTER` × `silent-after` (12 hours by default) has passed since that request, `LEAD-SILENT: still waiting for Matthew: <KIND>-<n> since <time> (step <step>)`. It does this through `stall_alarm`, with `since` = the request's time and that text as both first and reminder, so it repeats every 12 hours under the same failed-buzz retry rules. Only its own reminders for that request count as this stall's alarms; a state unreadable alarm posted while it waited doesn't delay it (qodo PR #14, finding 5).
 - **No start:** Matthew must decide.
 - **Why:** this catches a request whose own buzz was lost (ntfy's limit, cold M6b R3-8 and S4-4), and an owner who forgot.
@@ -100,7 +100,7 @@ The watchdog task's prompt doesn't change: room.py does the posting and starting
 
 ## Docs
 
-- **`LEAD.md`:** the watchdog may start a lead only where none showed a sign of life since the stall began: any post after your progress, a `STATUS` before a long step included, keeps it from taking you over. So after every step change, and after starting builders (in the foreground or the background), the lead posts a `STATUS` (cold M6d R4-4).
+- **`LEAD.md`:** the watchdog may start a lead only where none showed a sign of life since the stall began: any post after your progress, a `STATUS` before a long step included, keeps it from taking you over. So after every step change except the handover's (`HANDOFF` is the session's last post, apart from `start-lead`'s own `LEAD-STARTED` or a `NEXT-LEAD-NEEDED`; cold M6d S1-2), after starting or resuming builders (in the foreground or the background), and when a builder's `RESULT` arrives, before merging, the lead posts a `STATUS` (cold M6d R4-4, S1-3).
 - **`ARCHITECT.md`:**
   - **9.5:**
     - After a `LEAD-SILENT`, first read the status. If it is `paused` or `stopped`, start nothing except on Matthew's word to resume (9.4): a takeover sets the status back to `running` (cold M6d R2-2).
@@ -143,7 +143,7 @@ All offline, in `tests/test_relay.py` or a new `tests/test_m6d.py`.
 **B-6:**
 - The waiting reminder comes at 12 hours, repeats, and retries a failed buzz.
 - No reminder once a `DECISION` came, or while the lease is held.
-- An older request still open after a newer one was answered gets its reminder; with a stale older request and a newer open one, the newer one is named.
+- An older request still open after a newer one was answered gets its reminder; with a stale older request and a newer open one, the newer one is named, and the older one is listed as also open; with a stale newer one, the live older one is listed.
 - No start on this path.
 - The state-unreadable reminder retry, and a new first alarm for an outage that comes back after an ordinary alarm.
 - A state unreadable alarm during the wait doesn't delay the waiting reminder.
