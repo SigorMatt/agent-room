@@ -3709,16 +3709,24 @@ def start_refusal(room, role, takeover, force, values, playbook, sid=None):
     return None
 
 
+POST_RETRY_WAITS = (2, 5)  # seconds before the second and third try of a LEAD-STARTED post (qodo PR #11)
+
+
 def post_quietly(room, role, text, a):
-    """Post TEXT as ROLE through say (its role guard and lease check on send), with no buzz. Returns None, or why it
-    wasn't posted; never exits."""
-    try:
-        say(room, role, text, a, buzz=False)
-        return None
-    except SystemExit as e:  # the role guard or the lease check refused it, and said why on stderr
-        return e.code if isinstance(e.code, str) else f"refused (exit {e.code})"
-    except (GhError, StateError) as e:
-        return str(e)
+    """Post TEXT as ROLE through say (its role guard and lease check on send), with no buzz. A failed post is tried
+    twice more, after POST_RETRY_WAITS, since the start it records has happened; a refusal isn't. Returns None, or why
+    it wasn't posted; never exits."""
+    for wait in (*POST_RETRY_WAITS, None):
+        try:
+            say(room, role, text, a, buzz=False)
+            return None
+        except SystemExit as e:  # the role guard or the lease check refused it, and said why on stderr
+            return e.code if isinstance(e.code, str) else f"refused (exit {e.code})"
+        except (GhError, StateError) as e:
+            if wait is None:
+                return str(e)
+            print(f"[LEAD-STARTED not posted ({e}); trying again in {wait}s]", file=sys.stderr)
+            time.sleep(wait)
 
 
 def start_lead(a, room, role, takeover=False, force=False, after=None):

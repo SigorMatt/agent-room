@@ -1160,6 +1160,25 @@ def t_the_token_stays_out_of_curls_arguments():
     online()
 
 
+def t_lead_started_is_posted_again_after_a_failed_post():
+    # qodo PR #11 "Unrecorded starts can spawn another lead": the start worked, so its record matters: two more tries
+    online()
+    counter = os.path.join(tmp, "post-fails-1")
+    nc = len(comments())
+    t0 = time.time()
+    r = start("architect", "--takeover", ROOM_SESSION="arch", FAKE_GH_FAIL_POSTS="2", FAKE_GH_FAIL_COUNTER=counter)
+    assert r.returncode == 0 and "wasn't posted" not in r.stdout, out(r)
+    assert len(comments()) == nc + 1 and kind_of(comments()[-1]) == "LEAD-STARTED"
+    assert time.time() - t0 >= 7, "waits 2 s, then 5 s"
+    online()
+    counter = os.path.join(tmp, "post-fails-2")
+    nc = len(comments())
+    r = start("architect", "--takeover", ROOM_SESSION="arch", FAKE_GH_FAIL_POSTS="3", FAKE_GH_FAIL_COUNTER=counter)
+    assert r.returncode == 0 and "started, but LEAD-STARTED wasn't posted: " in r.stdout and "502" in r.stdout, out(r)
+    assert len(comments()) == nc and open(counter).read() == "...", "three tries in all"
+    online()
+
+
 setup()
 for name, fn in list(globals().items()):
     if name.startswith("t_"):
