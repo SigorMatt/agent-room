@@ -2965,6 +2965,9 @@ def decision_start(m):
     return re.search(r"\bafter DECISION-\d+\)", m["text"]) is not None
 
 
+FINAL_ALARM = "two takeover leads made no progress; no more starts"  # an episode's last alarm (cold M6b R2-2)
+
+
 def stall_episode(a, stall, opened=None):
     """The stall's episode (cold M6b R2-1), as {start, by, alarms, starts, sign}. It begins at the later of STALL, the
     progress time, and the newest trusted architect LEAD-STARTED (BY, if that is later): a start by hand opens a new
@@ -2988,9 +2991,21 @@ def stall_episode(a, stall, opened=None):
     else:
         start = when(by) if by else stall
         within = [m for m in msgs if when(m) > start]
+    why = f"LEAD-STARTED #{by['id']} by the architect" if by else None
+    while True:
+        # a lead LEAD ONLINE after the episode's final alarm opens a new one: a lead Matthew started by Run now or the
+        # Code tab posts no LEAD-STARTED, and is watched again from its join (cold M6b S1-2)
+        finals = [m for m in within if m["role"] == "watchdog" and kind(m) == "LEAD-SILENT" and FINAL_ALARM in m["text"]]
+        joined = [m for m in within if finals and m["id"] > finals[-1]["id"] and m["role"] == "lead" and
+                  kind(m) == "LEAD ONLINE"]
+        if not joined:
+            break
+        by, start = joined[0], when(joined[0])
+        why = f"LEAD ONLINE #{by['id']} after the final alarm"
+        within = [m for m in msgs if m["id"] > by["id"]]
     signs = [when(m) for m in msgs if kind(m) == "LEAD-STARTED" or (m["role"] == "lead" and kind(m) == "LEAD ONLINE")]
     talk = max([0] + [when(m) for m in msgs if m["role"] == "lead"])  # the lead's last message of any kind
-    return {"start": start, "by": by, "sign": max([start] + signs), "talk": talk,
+    return {"start": start, "by": by, "why": why, "sign": max([start] + signs), "talk": talk,
             "alarms": [m for m in within if m["role"] == "watchdog" and kind(m) == "LEAD-SILENT"],
             "starts": [m for m in within if m["role"] == "watchdog" and kind(m) == "LEAD-STARTED"
                        and not decision_start(m)]}
@@ -3026,8 +3041,7 @@ def alarm_stage(a, ep, first, about, takeover, prefix=""):
         watchdog_start(a, takeover)
         return
     if len(starts) >= 2 and now - ep["sign"] >= a.silent_after:  # cold M6b R2-2: one last alarm, and no more starts
-        final = "two takeover leads made no progress; no more starts"
-        post(final, f"LEAD-SILENT: {final} ({about})", [m for m in sent if final in m["text"]])
+        post(FINAL_ALARM, f"LEAD-SILENT: {FINAL_ALARM} ({about})", [m for m in sent if FINAL_ALARM in m["text"]])
         return
     post(*first, sent)
     if a.no_start:
@@ -3215,8 +3229,8 @@ def cmd_watchdog(a):
         print(f"note: waiting_for_owner is yes, but {what} at {iso(progress)} came after it was set at "
               f"{iso(flag[1])}, so it is stale")
     ep = stall_episode(a, stall)
-    if ep["by"] and ep["start"] > progress:  # a start by hand opened a new episode: measured from it
-        progress, what = ep["start"], f"LEAD-STARTED #{ep['by']['id']} by the architect"
+    if ep["by"] and ep["start"] > progress:  # a start by hand, or a join after the final alarm, opened a new episode
+        progress, what = ep["start"], ep["why"]
     now = time.time()
     if now - progress < a.silent_after:
         print(f"quiet: progress {span(now - progress)} ago ({what} at {iso(progress)}), "

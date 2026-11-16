@@ -1311,6 +1311,38 @@ def t_prestart_a_start_by_hand_after_the_final_alarm_is_watched_again():
     age_room()
 
 
+def t_a_lead_online_after_the_final_alarm_opens_a_new_episode():
+    # cold M6b S1-2: a lead Matthew starts by Run now or the Code tab posts no LEAD-STARTED; its LEAD ONLINE after the
+    # final alarm opens a new episode, so it's watched again
+    age_room()
+    set_state("step=build 90", hours=10)
+    nf, n0 = len(fires()), len(comments())
+    assert "started: https://claude.ai/code/" in watchdog().stdout
+    first = comments()[n0]["id"]  # this stall's first alarm
+    backdate(lambda c: c["id"] >= comments()[-1]["id"], 200)
+    n = len(comments())
+    assert "started: https://claude.ai/code/" in watchdog().stdout
+    backdate(lambda c: c["id"] >= comments()[n]["id"], 200)
+    assert "alarm: two takeover leads made no progress; no more starts" in watchdog().stdout
+    backdate(lambda c: c["id"] >= first, 300)
+    room("lease", "take", "--takeover", check=True, ROOM_SESSION="T7")
+    room("say", "1", "lead", "LEAD ONLINE", "--no-buzz", check=True, ROOM_SESSION="T7")
+    joined = comments()[-1]["id"]
+    r = watchdog()
+    assert re.search(rf"^quiet: progress \d+s ago \(LEAD ONLINE #{joined} after the final alarm at \S+\), under "
+                     r"3h00m$", r.stdout, re.M) and len(fires()) == nf + 2, out(r)
+    backdate(lambda c: c["id"] == joined, 200)  # then it stalls
+    n = len(comments())
+    r = watchdog()
+    assert f"alarm: no progress for 3h20m (LEAD ONLINE #{joined} after the final alarm at " in r.stdout and \
+        "started: https://claude.ai/code/" in r.stdout and len(fires()) == nf + 3, out(r)
+    assert [kind_of(c) for c in comments()[n:]] == ["LEAD-SILENT", "LEAD-STARTED"]
+    room("lease", "take", "--takeover", check=True)
+    online()
+    set_state("step=build 91")
+    age_room()
+
+
 setup()
 for name, fn in list(globals().items()):
     if name.startswith("t_"):
