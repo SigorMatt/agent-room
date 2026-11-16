@@ -3011,6 +3011,16 @@ def stall_episode(a, stall, opened=None):
                        and not decision_start(m)]}
 
 
+def lead_task_configured():
+    """Whether start-lead could fire at all: a token, and a lead-task: line in the pushed PLAYBOOK.md."""
+    if not fire_token():
+        return False
+    try:
+        return bool(lead_task_id(pushed_text(ensure_worktree(), "PLAYBOOK.md")))
+    except StateError:
+        return False
+
+
 def alarm_stage(a, ep, first, about, takeover, prefix=""):
     """A stall's alarms and takeover starts, within its episode EP (cold M6b R1-2, R2-1). FIRST is (the printed line,
     the posted text) of the episode's first alarm, ABOUT where the pipeline stands, PREFIX the start of quiet lines.
@@ -3043,7 +3053,12 @@ def alarm_stage(a, ep, first, about, takeover, prefix=""):
     if len(starts) >= 2 and now - ep["sign"] >= a.silent_after:  # cold M6b R2-2: one last alarm, and no more starts
         post(FINAL_ALARM, f"LEAD-SILENT: {FINAL_ALARM} ({about})", [m for m in sent if FINAL_ALARM in m["text"]])
         return
-    post(*first, sent)
+    line, text = first
+    if not starts and not a.no_start and not due and lead_task_configured():
+        # the first alarm, whose start is held off: say so, so a missing LEAD-STARTED isn't read as a failed start
+        # (cold M6b S1-3); without a lead task no start would come anyway
+        text += f" (start held off: a lead showed signs at {iso(last)})"
+    post(line, text, sent)
     if a.no_start:
         return
     if not starts and due:

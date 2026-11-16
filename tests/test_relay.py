@@ -1343,6 +1343,25 @@ def t_a_lead_online_after_the_final_alarm_opens_a_new_episode():
     age_room()
 
 
+def t_a_first_alarm_says_when_its_start_is_held_off():
+    # cold M6b S1-3: the first alarm comes without its start while a lead showed signs within silent-after; it says so
+    age_room()
+    set_state("step=build 95", hours=5)
+    room("lease", "take", "--takeover", check=True, ROOM_SESSION="T8")
+    room("say", "1", "lead", "LEAD ONLINE", "--no-buzz", check=True, ROOM_SESSION="T8")
+    joined = comments()[-1]
+    nf, n = len(fires()), len(comments())
+    r = watchdog()
+    assert "alarm: no progress for 5h" in r.stdout and len(fires()) == nf, out(r)
+    [alarm] = comments()[n:]
+    assert text_of(alarm).endswith(f"(step build 95, mission M1) (start held off: a lead showed signs at "
+                                   f"{joined['created_at']}) (buzz sent)"), text_of(alarm)
+    room("lease", "take", "--takeover", check=True)
+    online()
+    set_state("step=build 96")
+    age_room()
+
+
 setup()
 for name, fn in list(globals().items()):
     if name.startswith("t_"):
