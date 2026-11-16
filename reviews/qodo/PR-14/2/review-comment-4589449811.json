@@ -1,0 +1,71 @@
+{
+  "url": "https://api.github.com/repos/SigorMatt/agent-room/pulls/comments/4589449811",
+  "pull_request_review_id": 5924834293,
+  "id": 4589449811,
+  "node_id": "PRRC_kwDOVVYvuc8AAAABEY1yUw",
+  "diff_hunk": "@@ -3024,35 +3103,11 @@ def unreadable_state_alarm(a, path, reason):\n         print(f\"quiet: state unreadable ({reason}), but progress {span(now - progress)} ago ({what} at \"\n               f\"{iso(progress)}), under {span(a.silent_after)}\")\n         return 0\n-    # only an earlier \"state unreadable\" alarm reports this, and only as the newest alarm: an ordinary stall alarm,\n-    # or one after which the state came back, says nothing of the state being gone now\n-    every = alarms_since(a, progress, failed=True)\n-\n-    def unreadable(m):  # a state unreadable alarm, or its reminder\n-        return re.search(r\"LEAD-SILENT: (?:still )?state unreadable\", m[\"text\"]) is not None\n-    seen = [m for m in every if not buzz_failed(m)]\n-    seen = seen[-1:] if seen and unreadable(seen[-1]) else []\n-    # the cap (finding P, cold M6b R1-9) counts the newest run of state unreadable alarms, failed buzzes included,\n-    # so an ordinary stall alarm before them doesn't count, and one after them starts a new count\n-    run = []\n-    for m in reversed(every):\n-        if not unreadable(m):\n-            break\n-        run.append(m)\n-    if seen or len(run) >= ALARM_CAP:\n-        # reported, or its buzzes kept failing: a reminder every REMINDER_AFTER x silent-after since the last alarm,\n-        # while the state stays unreadable (cold M6b R3-4)\n-        newest = [m for m in every if unreadable(m)][-1]\n-        if now - (parse_time(newest[\"at\"]) or 0) >= REMINDER_AFTER * a.silent_after:\n-            print(f\"alarm: still state unreadable ({reason})\")\n-            alarm(a, f\"LEAD-SILENT: still state unreadable ({reason})\")\n-        elif seen:\n-            print(f\"quiet: LEAD-SILENT #{seen[-1]['id']} at {seen[-1]['at']} already reports this stall\")\n-        else:\n-            print(f\"quiet: {ALARM_CAP} alarms already posted for this stall (state unreadable: {reason})\")\n-        return 0\n-    print(f\"alarm: state unreadable ({reason})\")\n-    alarm(a, f\"LEAD-SILENT: state unreadable ({reason})\")\n+    # only state unreadable alarms report this stall: an ordinary stall alarm says nothing of the state being gone. Its\n+    # failed buzzes are retried and its reminders come like any stall's (cold M6b R1-9, R3-4, S4-2; M6d B-6)\n+    stall_alarm(a, progress, (f\"state unreadable ({reason})\", f\"LEAD-SILENT: state unreadable ({reason})\"),\n+                (f\"still state unreadable ({reason})\", f\"LEAD-SILENT: still state unreadable ({reason})\"),\n+                only=lambda m: re.search(r\"LEAD-SILENT: (?:still )?state unreadable\", m[\"text\"]) is not None)",
+  "path": "room.py",
+  "commit_id": "842c7a0cba202e46b5dfcebffb257e4af7121bac",
+  "original_commit_id": "bc901b7bb45e50a86dc95aa3af100446c8faa6b6",
+  "user": {
+    "login": "qodo-code-review[bot]",
+    "id": 151058649,
+    "node_id": "BOT_kgDOCQD42Q",
+    "avatar_url": "https://avatars.githubusercontent.com/in/484649?v=4",
+    "gravatar_id": "",
+    "url": "https://api.github.com/users/qodo-code-review%5Bbot%5D",
+    "html_url": "https://github.com/apps/qodo-code-review",
+    "followers_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/followers",
+    "following_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/following{/other_user}",
+    "gists_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/gists{/gist_id}",
+    "starred_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/starred{/owner}{/repo}",
+    "subscriptions_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/subscriptions",
+    "organizations_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/orgs",
+    "repos_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/repos",
+    "events_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/events{/privacy}",
+    "received_events_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/received_events",
+    "type": "Bot",
+    "user_view_type": "public",
+    "site_admin": false
+  },
+  "body": "<img src=\"https://img.shields.io/badge/Medium-634FD1?style=flat-square\" height=\"20px\" alt=\"Remediation recommended\">\n\n4\\. A renewed state outage misses its alarm <code>🐞 Bug</code> <code>≡ Correctness</code>\n\n<pre>\n<b><i>unreadable_state_alarm()</i></b> now passes a predicate that keeps every earlier state-unreadable alarm\nsince <b><i>progress</i></b>, even across an intervening ordinary alarm. If state recovers, an ordinary stall\nalarm is posted, and state becomes unreadable again without newer progress, <b><i>stall_alarm()</i></b> treats\nthe previous outage&#x27;s alarm and retry count as belonging to the new outage.\n</pre>\n\n\n<details>\n<summary><strong>Agent Prompt</strong></summary>\n\n```\n## Issue description\nFiltering all historical unreadable alarms carries their timing and failed-buzz retries into a later outage after an ordinary alarm.\n## Fix Focus Areas\n- room.py[2956-2978]\n- room.py[3106-3110]\n## Recommended Fix\nFor the unreadable-state path, account only for the latest contiguous run of unreadable alarms since progress, resetting that run when another alarm type intervenes. Test outage, recovery, ordinary alarm, and renewed outage.\n```\n\n<code>ⓘ Copy this prompt and use it to remediate the issue with your preferred AI generation tools</code>\n</details>\n\n[Dismiss ↗](https://app.qodo.ai/findings/5361ed9a-7333-46e3-b156-06bd6f3b0308?action=dismiss&origin=git) | [View ↗](https://app.qodo.ai/findings/5361ed9a-7333-46e3-b156-06bd6f3b0308)",
+  "created_at": "2026-11-16T17:57:14Z",
+  "updated_at": "2026-11-16T17:57:14Z",
+  "html_url": "https://github.com/SigorMatt/agent-room/pull/14#discussion_r4589449811",
+  "pull_request_url": "https://api.github.com/repos/SigorMatt/agent-room/pulls/14",
+  "_links": {
+    "self": {
+      "href": "https://api.github.com/repos/SigorMatt/agent-room/pulls/comments/4589449811"
+    },
+    "html": {
+      "href": "https://github.com/SigorMatt/agent-room/pull/14#discussion_r4589449811"
+    },
+    "pull_request": {
+      "href": "https://api.github.com/repos/SigorMatt/agent-room/pulls/14"
+    }
+  },
+  "reactions": {
+    "url": "https://api.github.com/repos/SigorMatt/agent-room/pulls/comments/4589449811/reactions",
+    "total_count": 0,
+    "+1": 0,
+    "-1": 0,
+    "laugh": 0,
+    "hooray": 0,
+    "confused": 0,
+    "heart": 0,
+    "rocket": 0,
+    "eyes": 0
+  },
+  "start_line": null,
+  "original_start_line": 3108,
+  "start_side": "RIGHT",
+  "line": null,
+  "original_line": 3110,
+  "side": "RIGHT",
+  "author_association": "NONE",
+  "original_position": 193,
+  "position": 1,
+  "subject_type": "line",
+  "is_copilot_code_review": false,
+  "copilot_code_review_sources": []
+}
