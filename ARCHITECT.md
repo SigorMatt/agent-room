@@ -314,7 +314,7 @@ Explain each buzz in plain terms, in a few lines:
 | `STATUS` saying a buzz failed and a decision is needed | The buzz of an `ESCALATION-n` or `MERGE-HOLD-n` failed, and the lead retried it before parking. A real request | 9.2, for the message it names |
 | `NEXT-LEAD-NEEDED` | The lead couldn't start its successor; the message says why | 9.5 |
 | `LEAD-SILENT` | The watchdog saw no lead progress for three hours, or no lead joined three hours after a `DECISION` (`no lead joined after DECISION-n`). A reminder (`still …`) comes every 12 hours while it lasts. It may start one lead for the stall in the run of its first alarm only (`LEAD-STARTED: … started by watchdog`), and only when no lead has shown a sign of life since the stall began | 9.5 |
-| `LEAD-SILENT: still waiting for Matthew: <KIND>-<n> since <time> (…)` | The newest `ESCALATION-n` or `MERGE-HOLD-n` still without a `DECISION` has waited 12 hours, and the lead is parked; every other open request is listed after it, `(also open: <KIND>-<n>, …)`. It repeats every 12 hours. A request a later decision made moot stays listed until it gets a `DECISION-n` of its own: post one ("no longer needed") to clear it. Post what Matthew can decide at one sitting, clearing the moot ones, then start one lead (9.2, step 7). Nothing starts until Matthew decides. Often its own buzz was lost | 9.2 |
+| `LEAD-SILENT: still waiting for Matthew: <KIND>-<n> since <time> (…)` | The newest `ESCALATION-n` or `MERGE-HOLD-n` still without a `DECISION` has waited 12 hours, and the lead is parked; every other open request is listed after it, `(also open: <KIND>-<n>, …)`. It repeats every 12 hours. A request a later decision made moot stays listed until it gets a `DECISION-n` of its own: post one ("no longer needed") to clear it. Answer all of them at one sitting, then start one lead (9.2, step 7). Nothing starts until Matthew decides. Often its own buzz was lost | 9.2 |
 | `PAUSED` / `STOPPED` | The lead paused or halted, as asked, and ended | 9.4 |
 | `DONE` | The phase is complete and the room is closed | 9.7 |
 
@@ -351,7 +351,7 @@ Explain each buzz in plain terms, in a few lines:
    python3 room.py say N architect "$(cat msg.md)" --repo OWNER/NAME
    ```
 
-7. Post together, at the same sitting, the `DECISION`s Matthew is ready to give: the one you answer, any other open request he can decide now (the waiting reminder lists them as also open), and a short clearing one ("no longer needed") for each moot request. A lead started for one clearing decision alone would only `ACK` it and park again. If a live request must wait, start the lead anyway: it applies what is decided and parks again on the rest. Then, if the lead is parked, start one lead. Parked means the step starts with `waiting for owner` and the lease is released (`lease_session` is `none`):
+7. First post the `DECISION` of every open request, at the same sitting: the one you answer, and any others the room still has open (the waiting reminder lists them as also open). A live request gets its real decision, a moot one a short clearing one ("no longer needed"). A lead started for one clearing decision alone would only `ACK` it and park again. Then, if the lead is parked, start one lead to act on them all. Parked means the step starts with `waiting for owner` and the lease is released (`lease_session` is `none`):
 
    ```bash
    python3 room.py state get step --repo OWNER/NAME
