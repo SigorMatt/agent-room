@@ -21,7 +21,7 @@ The build of the agent-room pipeline v1, as designed in [`v1.md`](v1.md). A fres
 | M6b | Leads started through the lead task's API trigger (`start-lead`), parking while waiting on Matthew, an alarm-only watchdog with reminders (option 1 below; watchdog starts deferred, B-5) | Done (#11): 3 cold rounds, 4 scoped reviews, 5 Qodo fetches; B-5 and B-6 deferred |
 | M6c | Rehearsal of M6b on pet-todo phase 2 (build lead plays the architect) | Done: phase 2 complete (pet-todo #6, #7, #8), two unattended `start-lead` handovers, takeover by starter task; findings T, U, V |
 | M6d | The watchdog starts one lead per stall, only for a lead that never came (B-5, A-12), and reminds Matthew of a room waiting on him (B-6) (spec `m6d-watchdog.md`) | Done (#14): 4 cold rounds, 2 scoped reviews, 5 Qodo fetches (6 findings resolved); `start-lead --seen` and `--replacing` for the architect's starters; finding W |
-| M6e | A lead survives its container restarting: LEAD.md handles the restart notice (B-7, finding W) (spec `m6e-restarts.md`) | Done (#15): 2 cold rounds, 3 scoped reviews, Qodo (no findings; no re-review after the first) |
+| M6e | A lead survives its container restarting: LEAD.md handles the restart notice (B-7, finding W) (spec `m6e-restarts.md`) | Done (#15): LEAD.md section 3 step 7 and no duplicate requests (5.6, 8); 2 cold rounds, 4 scoped reviews, Qodo (no findings; no re-review after the first) |
 | M7 | Matthew's owner run, then tag `v1.0.0` | Not started |
 
 ## Pre-approved fallbacks (Matthew, 2026-11-14)
