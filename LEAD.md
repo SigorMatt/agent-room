@@ -109,6 +109,7 @@ Your session may have no background commands and no scheduling tools (a session 
      ```bash
      python3 room.py say N lead "STATUS: the buzz for <KIND>-<n> failed (<reason>): Matthew, a decision is needed in room N" --buzz
      ```
+     A request an earlier session posted, which you found still open (5.6 step 5, section 8 step 1), left you no buzz output to check: skip the retry. The watchdog's waiting reminder names every open request.
    - Then record it so the watchdog stays quiet, and release the lease:
      ```bash
      python3 room.py state set waiting_for_owner=yes step="waiting for owner: <step>"
@@ -315,7 +316,8 @@ This follows `~/agent-room/docs/QODO-REVIEW.md` ([`docs/QODO-REVIEW.md`](docs/QO
    ```
    Exit 0 (`merged PR #<PR>: <merge sha>`): with drill `stop-after-merge`, end now, before any bookkeeping, still holding the lease; otherwise 5.7. Exit 3 (head moved): run the gate again. Exit 6: the gate failed (as in step 2), or GitHub finds the PR not mergeable (hold, reason 3). Exit 5: stand down. Exit 1: run `reconcile` and follow its hint.
 4. Hold reasons: 1 an owner decision is open; 2 a review hit its round cap with a finding undecided; 3 checks fail on the merge result and one builder attempt can't fix them; 4 the diff reaches well outside the spec; 5 a sensitive path, named by the gate, or weakened tests (step 1); 6 Qodo is on, and this PR and the previous one got no first review.
-5. Hold, with that first line exactly, then park as section 3, step 5 says: if the `MERGE-HOLD` buzz failed, retry it first; the last command below already records the step; then release the lease and end. Write each reason as `reason <r>`, and several as `reason 1, reason 5`. In the parentheses, name each finding as section 8 step 2 says, and for reason 5 every path the gate printed, exactly as printed:
+5. Hold, unless a hold is open already: never post a duplicate request. First read the whole room (`python3 room.py read N --all`) for an open hold on this PR: a lead's `MERGE-HOLD-<n>` with no `DECISION-<n>` from the architect or Matthew after it, neither marked `UNTRUSTED`, that names every reason that stands, and for reason 5 every path the gate printed. Check before the commands below: they take a number and record the intent, and a hold you don't post must leave no intent for `reconcile` to redo. If one is open, post no other, take no number and record no intent. Say which hold you wait on, `python3 room.py say N lead "STATUS: MERGE-HOLD-<n> is still open for PR #<PR>; parked on it, not holding again"`, then park as section 3, step 5 says, with the step `waiting for owner: gate`.
+   If none is open, hold, with that first line exactly, then park as section 3, step 5 says: if the `MERGE-HOLD` buzz failed, retry it first; the last command below already records the step; then release the lease and end. Write each reason as `reason <r>`, and several as `reason 1, reason 5`. In the parentheses, name each finding as section 8 step 2 says, and for reason 5 every path the gate printed, exactly as printed:
    ```bash
    python3 room.py state next counter
    python3 room.py intent N "post MERGE-HOLD-<n>"
@@ -393,7 +395,7 @@ A lead that joins at step `done` comes here too, and finishes only what is missi
 
 Escalate when the docs don't settle a question and the choice would change interfaces, data formats, scope, dependencies, security or user-visible behaviour, or would be costly to reverse. Also for: a top-severity finding you won't fix; a second deferral; a task that failed three attempts; a mission over budget; a preflight `✗` only Matthew can fix; a pipeline fault, such as a gate failure the records can't fix. What `PLAYBOOK.md` leaves to the lead's discretion you decide, and record under "Lead decisions" in `MISSIONS.md`.
 
-1. Take the next number, shared by escalations and holds: `python3 room.py state next counter`.
+1. Never post a duplicate request. First read the whole room (`python3 room.py read N --all`) for an open escalation on the same task and question: a lead's `ESCALATION-<n>` with no `DECISION-<n>` from the architect or Matthew after it, neither marked `UNTRUSTED`. For a pipeline fault at the gate, that is one on the same PR quoting the same line. Check before you take a number, so a request you don't post leaves no intent behind. If one is open, post no other, take no number and record no intent. Say which one you wait on, `python3 room.py say N lead "STATUS: ESCALATION-<n> is still open; waiting on it, not asking again"`, then go on at step 4 with its number. Otherwise take the next number, shared by escalations and holds: `python3 room.py state next counter`.
 2. Write `/tmp/esc-<n>.md`, under 300 words. Name each finding it is about by its cold ID (`R1-2`), its full Qodo title, or its dispositions file (`reviews/qodo/PR-<PR>/DISPOSITIONS.md`): the gate accepts a top-severity owner decision only if the escalation or hold it answers names the finding one of these ways. Never edit a posted escalation or hold; the gate distrusts one edited after its decision.
    ```text
    ESCALATION-<n>: <the question, in one sentence>
