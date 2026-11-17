@@ -316,11 +316,11 @@ This follows `~/agent-room/docs/QODO-REVIEW.md` ([`docs/QODO-REVIEW.md`](docs/QO
    ```
    Exit 0 (`merged PR #<PR>: <merge sha>`): with drill `stop-after-merge`, end now, before any bookkeeping, still holding the lease; otherwise 5.7. Exit 3 (head moved): run the gate again. Exit 6: the gate failed (as in step 2), or GitHub finds the PR not mergeable (hold, reason 3). Exit 5: stand down. Exit 1: run `reconcile` and follow its hint.
 4. Hold reasons: 1 an owner decision is open; 2 a review hit its round cap with a finding undecided; 3 checks fail on the merge result and one builder attempt can't fix them; 4 the diff reaches well outside the spec; 5 a sensitive path, named by the gate, or weakened tests (step 1); 6 Qodo is on, and this PR and the previous one got no first review.
-5. Hold, with that first line exactly, then park as section 3, step 5 says: if the `MERGE-HOLD` buzz failed, retry it first; the last command below already records the step; then release the lease and end. Write each reason as `reason <r>`, and several as `reason 1, reason 5`. In the parentheses, name each finding as section 8 step 2 says, and for reason 5 every path the gate printed, exactly as printed:
+5. Hold, with that first line exactly, then park as section 3, step 5 says: if the `MERGE-HOLD` buzz failed, retry it first; the last command below already records the step; then release the lease and end. Write each reason as `reason <r>`, and several as `reason 1, reason 5`. In the parentheses, name each finding as section 8 step 2 says, and for reason 5 every path the gate printed, exactly as printed. End with the head the gate checked, copied from the `(head <head12>)` that ends its `FAIL` line; for a PR `merge` found not mergeable, the first 12 digits of its `--sha`:
    ```bash
    python3 room.py state next counter
    python3 room.py intent N "post MERGE-HOLD-<n>"
-   python3 room.py say N lead "MERGE-HOLD-<n>: PR #<PR>, reason <r> (<paths or finding>)"
+   python3 room.py say N lead "MERGE-HOLD-<n>: PR #<PR>, reason <r> (<paths or finding>), head <head12>"
    python3 room.py state set intent=none waiting_for_owner=yes step="waiting for owner: gate"
    ```
 6. A `DECISION-<n>` that allows the sensitive path: `python3 room.py merge <PR> --sha <sha> --allow-hold 5 --decision DECISION-<n>`.

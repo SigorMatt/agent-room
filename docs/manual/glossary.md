@@ -30,7 +30,7 @@ To look up a word used in the manuals, the room or a session.
    - **State branch:** `agent-room/state`, the branch holding the playbook and all pipeline state. No code; never merged into `main`.
    - **Ledger:** `LEDGER.md`, review findings put off to a named later mission or the next phase.
    - **Escalation:** a lead's question that only you can decide (`ESCALATION-n`).
-   - **Merge hold:** a pull request the lead won't merge without you (`MERGE-HOLD-n`).
+   - **Merge hold:** a pull request the lead won't merge without you (`MERGE-HOLD-n`). It names the head, the code it shows you, and your decision covers only that code.
    - **Decision, change:** the architect's answer to an escalation or hold (`DECISION-n`), and a design change mid-phase (`CHANGE-n`).
    - **ACK:** the lead's receipt for a decision or change.
    - **Starter task:** a one-time scheduled task the architect creates to start one lead through the lead task, named `agent-room start lead SigorMatt/<repo> room N`. Approve it when it appears; a late approval may need a second one. A plain one is given the room's newest comment ID when the architect decided (`0` in a new room), and starts nothing if a lead started or spoke after it (`refused: the room moved on …`). A takeover is given the session of the lead it replaces, and starts nothing once that lead handed over or another lead took the lease (`refused: the lease is now …`); it still starts while a looping lead keeps posting. It switches itself off after running; never delete it.

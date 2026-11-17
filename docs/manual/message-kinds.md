@@ -20,7 +20,7 @@ To look up a message in the room: who sent it, whether it buzzes, and what you d
    | `LEAD ONLINE` | Lead | No | A new lead has taken over | Nothing |
    | `STATUS` | Lead | Usually not | A task or step finished, or a note. When a `STATUS` does buzz, it's a real request: the lead's `ESCALATION` or `MERGE-HOLD` buzz failed, and a decision is needed | Usually nothing. A `STATUS` buzz: open the room and [answer a buzz](answer-a-buzz.md) |
    | `ESCALATION-n` | Lead | Yes | It needs your decision | [Answer a buzz](answer-a-buzz.md) |
-   | `MERGE-HOLD-n` | Lead | Yes | A pull request is held, with a reason | [Answer a buzz](answer-a-buzz.md) |
+   | `MERGE-HOLD-n` | Lead | Yes | A pull request is held, with a reason and the head it shows: `MERGE-HOLD-n: PR #<number>, reason <r> (…), head <head>` | [Answer a buzz](answer-a-buzz.md) |
    | `HANDOFF` | Lead | No | This lead's turn ends; it starts the next one | Nothing |
    | `LEAD-STARTED` | Lead, architect or watchdog | No | A new lead was started through the lead task, with a link to its session, the kind of join line and who started it. `LEAD-STARTED: by hand …` means you start it with the line the architect gives you. `started by watchdog`: the watchdog's one start for a stall, after its alarm. `LEAD-STARTED: unconfirmed (…)` means the start may have worked: nobody starts another for 30 minutes. Its `LEAD ONLINE` should follow within about 15 minutes | Nothing |
    | `NEXT-LEAD-NEEDED` | Lead | Yes | The next lead couldn't be started; the message says why | [Answer a buzz](answer-a-buzz.md) |
