@@ -2055,7 +2055,8 @@ class Gate:
     def verdict(self, head):
         if self.holds or self.fixes:
             line = "gate: FAIL hold reasons " + (", ".join(str(h) for h in sorted(self.holds)) or "none")
-            print(line + (f"; fix first: {', '.join(self.fixes)}" if self.fixes else ""))
+            line += f"; fix first: {', '.join(self.fixes)}" if self.fixes else ""
+            print(line + (f" (head {head[:12]})" if head else ""))  # the head a hold names (M6f)
             return EXIT_FAIL
         if self.waits:
             print("gate: WAIT " + "; ".join(self.waits))
@@ -2494,13 +2495,39 @@ def message_tokens(text):
     return out
 
 
+HOLD_HEAD = re.compile(r"\bhead\s+([0-9a-f]{12,40})(?![0-9a-z])", re.I)
+
+
+def hold_heads(text):
+    """The heads a MERGE-HOLD names: each `head <hex>` token of 12 to 40 hex digits, lowercased."""
+    return [h.lower() for h in HOLD_HEAD.findall(text)]
+
+
 def hold_problems(text, pr, paths):
     """What a MERGE-HOLD message lacks for a reason-5 hold of PR's PATHS: [] when it names them all, each
-    as a whole token (message_tokens)."""
+    as a whole token (message_tokens), and the head it was posted for."""
     out = [] if re.search(rf"PR #{pr}(?!\d)", text) else [f"PR #{pr}"]
     out += [] if re.search(r"\breason 5\b", text, re.I) else ["reason 5"]
     tokens = message_tokens(text)
-    return out + [p for p in paths if p not in tokens]
+    out += [p for p in paths if p not in tokens]
+    return out + ([] if hold_heads(text) else ["a head"])
+
+
+def hold_head_problem(root, text, n, pr, head):
+    """Why MERGE-HOLD-N (TEXT) doesn't show the code at HEAD, or None: each head it names resolves to a commit in
+    HEAD's history, and only review records (exempt) changed between that commit and HEAD (M6f, B-11)."""
+    for named in hold_heads(text):
+        sha = resolve_commit(root, named)
+        if not sha or not sha.startswith(named) or not is_ancestor(root, sha, head):
+            return (f"MERGE-HOLD-{n} names head {named}, which isn't in PR #{pr}'s history: "
+                    f"post a new hold for head {head[:12]}")
+        changed = [p for p in zsplit(git("diff", "--name-only", "--no-renames", "-z", sha, head, cwd=root).stdout)
+                   if not exempt(p)]
+        if changed:
+            shown = ", ".join(changed[:5]) + (f" and {len(changed) - 5} more" if len(changed) > 5 else "")
+            return (f"MERGE-HOLD-{n} was posted for head {sha[:12]}; PR #{pr} changed since ({shown}): "
+                    f"post a new hold for head {head[:12]}")
+    return None
 
 
 def check_sensitive(g, root, head, playbook, a, room):
@@ -2530,30 +2557,40 @@ def check_sensitive(g, root, head, playbook, a, room):
     if a.allow_hold != "5":
         g.fail("sensitive paths", [(f"on the merge-hold list: {held}", 5)])
         return
-    # the decision must answer this PR's hold: the lead's MERGE-HOLD-n (same n) for reason 5 and these
-    # paths, posted before it and not edited since (an edit keeps the comment's id)
+    # the decision must answer this PR's hold: the lead's MERGE-HOLD-n (same n) for reason 5, these paths
+    # and a head whose code is HEAD's but for review records, posted before it and not edited since (an
+    # edit keeps the comment's id)
     n = a.decision.rsplit("-", 1)[1]
     holds = room.holds(f"MERGE-HOLD-{n}")
     lacking = [hold_problems(m["text"], a.pr, paths) for m in holds]
     whole = [h for h, problems in zip(holds, lacking) if not problems]
+    moved = {h["id"]: hold_head_problem(root, h["text"], n, a.pr, head) for h in whole}
+    fresh = [h for h in whole if not moved[h["id"]]]
     decisions = room.decisions(a.decision)
-    pair = next(((h, d) for h in whole for d in decisions if room.before(h, d)), None)
+    pair = next(((h, d) for h in fresh for d in decisions if room.before(h, d)), None)
     if pair:
         g.ok("sensitive paths", f"{held}: allowed by {a.decision} (comment #{pair[1]['id']}), answering "
                                 f"MERGE-HOLD-{n} (comment #{pair[0]['id']})")
         return
-    edited = next((h for h in whole for d in decisions if h["id"] < d["id"]), None)
-    hold = whole[0] if whole else None
+    edited = next((h for h in fresh for d in decisions if h["id"] < d["id"]), None)
+    hold = fresh[0] if fresh else None
+    others = [h for h in whole if moved[h["id"]]]  # a hold for other code: the one the decision answers, or the newest
+    stale = next((h for h in others for d in decisions if room.before(h, d)), others[-1] if others else None)
+    prefix = f"{held}; --allow-hold 5 --decision {a.decision}: "
     if edited:
         missing = f"MERGE-HOLD-{n} (comment #{edited['id']}) edited after {a.decision}: post a new hold"
     elif hold:
         missing = f"no trusted {a.decision} from the architect or Matthew after MERGE-HOLD-{n} (comment #{hold['id']})"
+    elif stale:
+        g.fail("sensitive paths", [(prefix + moved[stale["id"]], 5)])
+        return
     elif holds:  # safe to show the form: a decision must still come after a new hold
         missing = (f"no MERGE-HOLD-{n} for this hold: the lead's doesn't name {', '.join(min(lacking, key=len))} "
-                   f"(the form: MERGE-HOLD-<n>: PR #{a.pr}, reason 5 (sensitive paths): {', '.join(paths)})")
+                   f"(the form: MERGE-HOLD-<n>: PR #{a.pr}, reason 5 (sensitive paths): {', '.join(paths)}, "
+                   f"head {head[:12]})")
     else:
         missing = f"no trusted MERGE-HOLD-{n} from the lead"
-    g.fail("sensitive paths", [(f"{held}; --allow-hold 5 --decision {a.decision}: {room.where()} has {missing}", 5)])
+    g.fail("sensitive paths", [(f"{prefix}{room.where()} has {missing}", 5)])
 
 
 # --- gate and merge commands

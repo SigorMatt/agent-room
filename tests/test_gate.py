@@ -102,9 +102,16 @@ def failed(r, name, *needles):
 
 
 def verdict(r):
+    """The gate's verdict line. A FAIL line ends with the PR's head once the gate knows it (M6f): checked, then dropped."""
     lines = [ln for ln in r.stdout.splitlines() if ln.startswith("gate: ")]
     assert lines, out(r)
-    return lines[-1]
+    v = lines[-1]
+    if v.startswith("gate: FAIL") and not v.endswith("fix first: PR"):
+        tail = f" (head {CFG['pulls'][PR]['head']['sha'][:12]})"
+        assert v.endswith(tail), f"{v!r} doesn't end with{tail}\n{out(r)}"
+        v = v[:-len(tail)]
+    assert "(head " not in v, out(r)
+    return v
 
 
 def test(name, fn):
@@ -1317,7 +1324,7 @@ def t_allow_hold():
     s = mission(extra={".github/workflows/ci.yml": "on: push\n"})
     gh_cfg(check_runs={s["head"]: [{"id": 1, "name": "ci", "status": "completed", "conclusion": "success",
                                     "app": {"slug": "github-actions"}}]})
-    path = ".github/workflows/ci.yml"
+    path, h12 = ".github/workflows/ci.yml", s["head"][:12]
     r = gate()
     failed(r, "sensitive paths", f"on the merge-hold list: {path} (`.github/workflows/**`, CI and workflow files)")
     r = gate("--allow-hold", "5")
@@ -1335,15 +1342,15 @@ def t_allow_hold():
     # a decision that answers no hold, or another PR's hold, or another reason, or other paths (cold M3 R1-4)
     room("say", "1", "architect", "DECISION-7: defer L-3", check=True)
     failed(allow(7), "sensitive paths", "no trusted MERGE-HOLD-7 from the lead")
-    room("say", "1", "lead", f"MERGE-HOLD-7: PR #13, reason 5 (sensitive paths): {path}", check=True)
+    room("say", "1", "lead", f"MERGE-HOLD-7: PR #13, reason 5 (sensitive paths): {path}, head {h12}", check=True)
     failed(allow(7), "sensitive paths", f"no MERGE-HOLD-7 for this hold: the lead's doesn't name PR #{PR}")
-    room("say", "1", "lead", f"MERGE-HOLD-8: PR #{PR}, reason 3 (checks fail): {path}", check=True)
+    room("say", "1", "lead", f"MERGE-HOLD-8: PR #{PR}, reason 3 (checks fail): {path}, head {h12}", check=True)
     room("say", "1", "architect", "DECISION-8: merge", check=True)
     failed(allow(8), "sensitive paths", "the lead's doesn't name reason 5")
-    room("say", "1", "lead", f"MERGE-HOLD-9: PR #{PR}0, reason 5 (sensitive paths): {path}", check=True)
+    room("say", "1", "lead", f"MERGE-HOLD-9: PR #{PR}0, reason 5 (sensitive paths): {path}, head {h12}", check=True)
     room("say", "1", "architect", "DECISION-9: merge", check=True)
     failed(allow(9), "sensitive paths", f"the lead's doesn't name PR #{PR}")
-    room("say", "1", "lead", f"MERGE-HOLD-10: PR #{PR}, reason 5 (sensitive paths): src/auth/x.py", check=True)
+    room("say", "1", "lead", f"MERGE-HOLD-10: PR #{PR}, reason 5 (sensitive paths): src/auth/x.py, head {h12}", check=True)
     room("say", "1", "architect", "DECISION-10: merge", check=True)
     failed(allow(10), "sensitive paths", f"the lead's doesn't name {path}")
     post_raw(f"<!-- agent-room role=lead session=L1 -->\n**[lead · L1]**\n\nMERGE-HOLD-11: PR #{PR}, reason 5: {path}",
@@ -1353,20 +1360,20 @@ def t_allow_hold():
     # a decision posted before the hold answered something else (cold M3 R2-1)
     room("say", "1", "lead", "ESCALATION-14: R1-3 needs an owner decision: defer it to M4?", check=True)
     room("say", "1", "architect", "DECISION-14: defer R1-3 to M4 (L-1)", check=True)
-    room("say", "1", "lead", f"MERGE-HOLD-14: PR #{PR}, reason 5 (sensitive paths): {path}", check=True)
+    room("say", "1", "lead", f"MERGE-HOLD-14: PR #{PR}, reason 5 (sensitive paths): {path}, head {h12}", check=True)
     failed(allow(14), "sensitive paths", "no trusted DECISION-14 from the architect or Matthew after MERGE-HOLD-14")
     # a hold names each path as a whole token (cold M3 R2-10)
-    room("say", "1", "lead", f"MERGE-HOLD-15: PR #{PR}, reason 5 (sensitive paths): lib/{path}", check=True)
+    room("say", "1", "lead", f"MERGE-HOLD-15: PR #{PR}, reason 5 (sensitive paths): lib/{path}, head {h12}", check=True)
     room("say", "1", "architect", "DECISION-15: merge", check=True)
     r = allow(15)
     failed(r, "sensitive paths", f"the lead's doesn't name {path}",  # and the form to post (cold M3 S1-2)
-           f"(the form: MERGE-HOLD-<n>: PR #{PR}, reason 5 (sensitive paths): {path})")
-    room("say", "1", "lead", f"MERGE-HOLD-12: PR #{PR}, reason 5 (sensitive paths): {path}", check=True)
+           f"(the form: MERGE-HOLD-<n>: PR #{PR}, reason 5 (sensitive paths): {path}, head {h12})")
+    room("say", "1", "lead", f"MERGE-HOLD-12: PR #{PR}, reason 5 (sensitive paths): {path}, head {h12}", check=True)
     room("say", "1", "architect", "DECISION-12: merge the CI change", check=True)
     r = allow(12)
     assert r.returncode == 0 and verdict(r) == f"gate: PASS {s['head']}", out(r)
     assert "allowed by DECISION-12" in line(r, "sensitive paths") and "answering MERGE-HOLD-12" in line(r, "sensitive paths")
-    room("say", "1", "lead", f"MERGE-HOLD-13: PR #{PR}, reason 5 (`{path}`)", check=True)
+    room("say", "1", "lead", f"MERGE-HOLD-13: PR #{PR}, reason 5 (`{path}`), head {s['head']}.", check=True)
     post_raw("DECISION-13: fine, merge it")  # Matthew from GitHub, untagged
     assert allow(13).returncode == 0
     assert gate().returncode == 6, "without --allow-hold the match still holds"
@@ -1397,7 +1404,7 @@ def t_edited_hold_or_escalation_doesnt_count():  # qodo PR #7: An edited hold re
                                     "app": {"slug": "github-actions"}}]})
     path = ".github/workflows/ci.yml"
     try:
-        hold = say_id("1", "lead", f"MERGE-HOLD-90: PR #{PR}, reason 5 (sensitive paths): lib/old.py")
+        hold = say_id("1", "lead", f"MERGE-HOLD-90: PR #{PR}, reason 5 (sensitive paths): lib/old.py, head {s['head'][:12]}")
         room("say", "1", "architect", "DECISION-90: merge lib/old.py", check=True)
         r = gate("--allow-hold", "5", "--decision", "DECISION-90")
         failed(r, "sensitive paths", f"the lead's doesn't name {path}")
@@ -1421,7 +1428,8 @@ def t_edited_hold_or_escalation_doesnt_count():  # qodo PR #7: An edited hold re
     assert verdict(r) == "gate: FAIL hold reasons 1", out(r)
 
 def t_hold_paths_are_whole_tokens():  # cold M3 R2-10, S1-2
-    hp = R.hold_problems
+    def hp(text, pr, paths):
+        return R.hold_problems(text + "\nhead 0123456789ab", pr, paths)
     assert hp("MERGE-HOLD-20: PR #12, reason 5: lib/tests/test_x.py", 12, ["tests/test_x.py"]) == ["tests/test_x.py"]
     assert hp("MERGE-HOLD-20: PR #12, reason 5: xtests/test_x.py.", 12, ["tests/test_x.py"]) == ["tests/test_x.py"]
     for text in ("MERGE-HOLD-20: PR #12, reason 5: a.py, tests/test_x.py", "MERGE-HOLD-20: PR #12 (reason 5: tests/test_x.py)",
@@ -1537,9 +1545,10 @@ exec "{sys.executable}" "{os.path.join(HERE, 'fake_gh_state.py')}" "$@"
     room("lease", "take", "--takeover", check=True)
     room("state", "set", "intent=none", check=True)
 
-setup()
-for name, fn in list(globals().items()):
-    if name.startswith("t_"):
-        test(name[2:], fn)
-shutil.rmtree(tmp, ignore_errors=True)
-print("all passed")
+if __name__ == "__main__":  # test_m6f.py imports this harness
+    setup()
+    for name, fn in list(globals().items()):
+        if name.startswith("t_"):
+            test(name[2:], fn)
+    shutil.rmtree(tmp, ignore_errors=True)
+    print("all passed")
