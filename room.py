@@ -2475,12 +2475,16 @@ class RoomLog:
 
     def later_hold(self, pr, after):
         """The lead's newest trusted MERGE-HOLD, of any number, after comment AFTER that supersedes a reason-5 hold
-        for PR #pr, or None: its first line names PR #pr, and not only reasons other than 5. A hold for another
-        reason only (3, 4 or 6, say after a 405) doesn't supersede (cold M6f scoped-1 S1-1); one whose first line
-        names no reason number, or `reasons 1 and 5`, does: in doubt it supersedes (cold M6f scoped-2 S2-1)."""
+        for PR #pr, or None: one that names PR #pr anywhere, unless its first line names PR #pr and only reasons
+        other than 5 (3, 4 or 6, say after a 405: cold M6f scoped-1 S1-1). It fails closed: a first line with no
+        reason number, `reasons 1 and 5`, or the PR only on a later line, even another PR's hold, supersedes, which
+        costs only a re-hold (cold M6f scoped-2 S2-1)."""
         def supersedes(m):
+            names = re.compile(rf"PR #{pr}(?!\d)")
+            if not names.search(m["text"]):
+                return False
             reasons = hold_reasons(m["text"])
-            return re.search(rf"PR #{pr}(?!\d)", m["text"].split("\n", 1)[0]) and (not reasons or 5 in reasons)
+            return not (names.search(m["text"].split("\n", 1)[0]) and reasons and 5 not in reasons)
         holds = [m for m in self.messages() if m["id"] > after and m["role"] == "lead"
                  and base_kind(message_kind(m["text"])) == "MERGE-HOLD" and supersedes(m)]
         return max(holds, key=lambda m: m["id"], default=None)
