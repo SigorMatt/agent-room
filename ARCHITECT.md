@@ -363,6 +363,8 @@ Explain each buzz in plain terms, in a few lines:
 
 A "merge as is" for reason 5 lets the lead merge citing your `DECISION-n`, so name the hold in it.
 
+Every hold's first line ends with `head <head12>`, the PR head it showed. When several holds are open, answer the newest: a `DECISION` posted after a newer hold, for any PR in the room, never allows a merge. A hold for any reason that comes after a decision doesn't cancel it. Before Matthew decides the newest, show him what changed on its held paths since the older one, in a clone of the repo (5.3 step 1): `git fetch origin pull/<PR>/head`, then `git diff <older head> <newer head> -- <held paths>`. An empty diff means the same code. Clear each older one at the same sitting (step 7) with a `DECISION` that allows nothing ("superseded by MERGE-HOLD-<n>"); posted after the newer hold, it can never allow a merge.
+
 **A pipeline fault** (an `ESCALATION-n` quoting a gate line that says `the records can't fix this`) needs a fix in agent-room itself:
 
 1. Ask Matthew for a patched release ([Report a pipeline problem](docs/manual/report-a-pipeline-problem.md)). The mission waits meanwhile, with the lead parked.

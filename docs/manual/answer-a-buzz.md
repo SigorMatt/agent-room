@@ -42,7 +42,7 @@ It bumps the pin, posts a `DECISION-n` telling the lead to re-download and run t
 
 ### `MERGE-HOLD-n`: a pull request is ready but held
 
-The message reads `MERGE-HOLD-n: PR #<number>, reason <r> (…)`. One hold can name several reasons, as `reason 1, reason 5`; your decision covers each. The reasons are on [Merge-hold list](merge-hold-list.md).
+The message reads `MERGE-HOLD-n: PR #<number>, reason <r> (…), head <head>`. One hold can name several reasons, as `reason 1, reason 5`; your decision covers each. The head is the code the hold shows you, and your decision covers only that code: if anything but review records changes after it, the lead holds again. If several holds are open, answer the newest: a decision posted after a newer hold, for any pull request in the room, never allows a merge, though a hold that comes after your decision doesn't cancel it. The architect shows you what changed on the held paths since the older one, and clears the older one. The reasons are on [Merge-hold list](merge-hold-list.md).
 
 1. The architect explains the reason. Open the pull request on GitHub if you want to look.
 2. Choose how the mission continues:

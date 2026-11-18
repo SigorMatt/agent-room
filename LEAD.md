@@ -316,14 +316,14 @@ This follows `~/agent-room/docs/QODO-REVIEW.md` ([`docs/QODO-REVIEW.md`](docs/QO
    ```
    Exit 0 (`merged PR #<PR>: <merge sha>`): with drill `stop-after-merge`, end now, before any bookkeeping, still holding the lease; otherwise 5.7. Exit 3 (head moved): run the gate again. Exit 6: the gate failed (as in step 2), or GitHub finds the PR not mergeable (hold, reason 3). Exit 5: stand down. Exit 1: run `reconcile` and follow its hint.
 4. Hold reasons: 1 an owner decision is open; 2 a review hit its round cap with a finding undecided; 3 checks fail on the merge result and one builder attempt can't fix them; 4 the diff reaches well outside the spec; 5 a sensitive path, named by the gate, or weakened tests (step 1); 6 Qodo is on, and this PR and the previous one got no first review.
-5. Hold, with that first line exactly, then park as section 3, step 5 says: if the `MERGE-HOLD` buzz failed, retry it first; the last command below already records the step; then release the lease and end. Write each reason as `reason <r>`, and several as `reason 1, reason 5`. In the parentheses, name each finding as section 8 step 2 says, and for reason 5 every path the gate printed, exactly as printed:
+5. Hold, with that first line exactly, then park as section 3, step 5 says: if the `MERGE-HOLD` buzz failed, retry it first; the last command below already records the step; then release the lease and end. Write each reason as `reason <r>`, and several as `reason 1, reason 5`. In the parentheses, name each finding as section 8 step 2 says, and for reason 5 every path the gate printed, exactly as printed. End the first line with the PR head the gate checked, in 12 digits: the `(head <head12>)` at the very end of a `FAIL` line, after any `; fix first: …`; or the first 12 digits of the sha in `gate: PASS <sha>` (a reason 4 or 6 you judged yourself after a `PASS`), or of `merge`'s `--sha` (a PR it found not mergeable). Only that head counts, so name no other head in the first line: a note about an older hold, or a quoted refusal, goes on a later line:
    ```bash
    python3 room.py state next counter
    python3 room.py intent N "post MERGE-HOLD-<n>"
-   python3 room.py say N lead "MERGE-HOLD-<n>: PR #<PR>, reason <r> (<paths or finding>)"
+   python3 room.py say N lead "MERGE-HOLD-<n>: PR #<PR>, reason <r> (<paths or finding>), head <head12>"
    python3 room.py state set intent=none waiting_for_owner=yes step="waiting for owner: gate"
    ```
-6. A `DECISION-<n>` that allows the sensitive path: `python3 room.py merge <PR> --sha <sha> --allow-hold 5 --decision DECISION-<n>`.
+6. The `DECISION-<n>` of the reason-5 hold, the one that allows the sensitive path. The gate accepts it only if no other hold was posted between that hold and its decision. A hold posted after the decision doesn't cancel it: after a 405, pass the reason-5 hold's `DECISION`, not the reason-3 hold's: `python3 room.py merge <PR> --sha <sha> --allow-hold 5 --decision DECISION-<n>`.
 
 ### 5.7 Close
 
