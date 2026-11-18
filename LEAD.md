@@ -323,7 +323,7 @@ This follows `~/agent-room/docs/QODO-REVIEW.md` ([`docs/QODO-REVIEW.md`](docs/QO
    python3 room.py say N lead "MERGE-HOLD-<n>: PR #<PR>, reason <r> (<paths or finding>), head <head12>"
    python3 room.py state set intent=none waiting_for_owner=yes step="waiting for owner: gate"
    ```
-6. The `DECISION-<n>` of the hold that was the PR's newest when the decision came, normally the one the architect answered last, when it allows the sensitive path: `python3 room.py merge <PR> --sha <sha> --allow-hold 5 --decision DECISION-<n>`.
+6. The `DECISION-<n>` of the reason-5 hold, the one that allows the sensitive path. The gate accepts it only if no other hold was posted between that hold and its decision. A hold posted after the decision doesn't cancel it: after a 405, pass the reason-5 hold's `DECISION`, not the reason-3 hold's: `python3 room.py merge <PR> --sha <sha> --allow-hold 5 --decision DECISION-<n>`.
 
 ### 5.7 Close
 
