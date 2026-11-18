@@ -2473,18 +2473,19 @@ class RoomLog:
         """The lead's trusted messages of KIND (MERGE-HOLD-n)."""
         return [m for m in self.messages() if m["role"] == "lead" and message_kind(m["text"]) == kind]
 
-    def later_hold(self, pr, after):
+    def later_hold(self, pr, after, paths):
         """The lead's newest trusted MERGE-HOLD, of any number, after comment AFTER that supersedes a reason-5 hold
-        for PR #pr, or None: one that names PR #pr anywhere, unless its first line names PR #pr and only reasons
-        other than 5 (3, 4 or 6, say after a 405: cold M6f scoped-1 S1-1). It fails closed: a first line with no
-        reason number, `reasons 1 and 5`, or the PR only on a later line, even another PR's hold, supersedes, which
-        costs only a re-hold (cold M6f scoped-2 S2-1)."""
+        for PR #pr's held PATHS, or None: one that names PR #pr and also any of PATHS (whole tokens, as hold_problems
+        reads them) or `reason 5`, anywhere in its text. No reason numbers are parsed: a valid reason-5 re-hold names
+        every held path, so it always supersedes (cold M6f scoped-2 S2-1, scoped-3 S3-1, S3-2). A hold for other
+        reasons naming neither, a reason-3 hold after a 405 say, doesn't (scoped-1 S1-1); one that mentions a held
+        path does, which fails closed and costs one re-hold."""
         def supersedes(m):
-            names = re.compile(rf"PR #{pr}(?!\d)")
-            if not names.search(m["text"]):
+            text = m["text"]
+            if not re.search(rf"PR #{pr}(?!\d)", text):
                 return False
-            reasons = hold_reasons(m["text"])
-            return not (names.search(m["text"].split("\n", 1)[0]) and reasons and 5 not in reasons)
+            tokens = message_tokens(text)
+            return bool(re.search(r"\breason 5\b", text, re.I)) or any(p in tokens for p in paths)
         holds = [m for m in self.messages() if m["id"] > after and m["role"] == "lead"
                  and base_kind(message_kind(m["text"])) == "MERGE-HOLD" and supersedes(m)]
         return max(holds, key=lambda m: m["id"], default=None)
@@ -2512,14 +2513,6 @@ def message_tokens(text):
 
 
 HOLD_HEAD = re.compile(r"(?:,\s*|\s)head\s+([0-9a-f]{12,40})\.?\s*$", re.I)
-HOLD_REASONS = re.compile(r"\breasons?\s+(\d(?:\d|\s|,|/|&|and|or)*)", re.I)
-
-
-def hold_reasons(text):
-    """The reason numbers a MERGE-HOLD's first line attaches to `reason` or `reasons` (reason 3, reason 3, reason 6,
-    reasons 1 and 5, reasons 3, 6), as a set: empty when it names none."""
-    first = (text or "").split("\n", 1)[0]
-    return {int(d) for group in HOLD_REASONS.findall(first) for d in re.findall(r"\d+", group)}
 
 
 def hold_head(text):
@@ -2602,7 +2595,7 @@ def check_sensitive(g, root, head, playbook, a, room):
     fresh = [h for h in whole if not moved[h["id"]]]
     decisions = room.decisions(a.decision)
     pairs = [(h, d) for h in fresh for d in decisions if room.before(h, d)]
-    later = {h["id"]: room.later_hold(a.pr, h["id"]) for h, _ in pairs}  # only the newest reason-5 hold's
+    later = {h["id"]: room.later_hold(a.pr, h["id"], paths) for h, _ in pairs}  # only the newest reason-5 hold's
     pair = next(((h, d) for h, d in pairs if not later[h["id"]]), None)   # decision, not a clearing one (qodo PR #16 1)
     prefix = f"{held}; --allow-hold 5 --decision {a.decision}: "
     if pair:
