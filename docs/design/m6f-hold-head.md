@@ -10,13 +10,15 @@ A lead that holds, goes back to Build after another decision, changes a held pat
 
 ## The rule
 
-**A hold names its head.** Every `MERGE-HOLD` ends with `, head <sha>`: the PR head the gate checked, at least 12 hex digits (LEAD.md 5.6 step 5 prints 12). Holds for reasons other than 5 name it too. Only reason 5 is checked by the gate, but the architect reads the head for every hold.
+**A hold names its head.** Every `MERGE-HOLD`'s first line ends with `, head <sha>`: the PR head the gate checked, at least 12 hex digits (LEAD.md 5.6 step 5 prints 12), taken from the gate's `FAIL` line, its `PASS <sha>` line, or `merge`'s `--sha` (cold M6f R1-2). Holds for reasons other than 5 name it too. Only that trailing head counts: other heads mentioned in the hold, an older hold's say, are ignored (cold M6f R1-1). Only reason 5 is checked by the gate, but the architect reads the head for every hold.
 
 **The gate checks it.** With `--allow-hold 5 --decision DECISION-<n>`, the pair that `check_sensitive` finds (a whole hold before the decision) must also pass these checks, against the head being gated:
 
-1. **It names a head.** The hold has a `head <hex>` token of 12 to 40 hex digits. `hold_problems` reports a missing head alongside a missing PR, reason or path, so the "the form:" line names it.
-2. **The head is in this PR's history.** It resolves to a commit (`git rev-parse --verify <hex>^{commit}`), and that commit is an ancestor of the gated head. If either fails, refuse: `MERGE-HOLD-<n> names head <hex>, which isn't in PR #<PR>'s history: post a new hold for head <head12>`.
+1. **It names a head.** The hold's first line ends with `head <hex>`, 12 to 40 hex digits. `hold_problems` reports a missing head alongside a missing PR, reason or path, so the "the form:" line names it.
+2. **The head is in this PR's history.** It resolves as a commit-id prefix, never through a ref name (cold M6f R1-3), to exactly one commit, and that commit is an ancestor of the gated head. If either fails, refuse: `MERGE-HOLD-<n> names head <hex>, which isn't in PR #<PR>'s history: post a new hold for head <head12>`.
 3. **Only review records changed since.** Every path changed between the hold's head and the gated head (`git diff --name-only <hold head> <head>`) must be a review record (`exempt(path)`, the coverage rule's `REVIEW_EXEMPT`). The decision's own record push, section 9 step 3's rows, moves the head after the hold, and that must still pass (cold M6e scoped-6 S6-2). If any other path changed, refuse: `MERGE-HOLD-<n> was posted for head <hold12>; PR #<PR> changed since (<up to 5 paths, then "and N more">): post a new hold for head <head12>`.
+
+4. **It is the PR's newest hold.** No trusted lead `MERGE-HOLD` for the same PR comes after it in the room. Only the newest hold's decision can allow a merge, so a clearing `DECISION` on an older hold ("superseded", allowing nothing) never does, even when only records changed since its head (qodo PR #16 finding 1). Refusal: `MERGE-HOLD-<n> is not PR #<PR>'s newest hold: MERGE-HOLD-<m> came after it; use its DECISION`.
 
 The refusal is reason 5, like the existing failures in `check_sensitive`, so the lead holds again (5.6 step 5) for the current head. A hold that fails 1 to 3 never pairs. If no hold pairs, the existing "no trusted DECISION / no MERGE-HOLD" messages stay, except that the most specific failure from 1 to 3 is reported when one exists.
 
@@ -44,6 +46,9 @@ All offline, in a new `tests/test_m6f.py`, or in `tests/test_gate.py` if its har
 - At a later head where another path changed: refused, naming the path and both heads.
 - A hold head that isn't an ancestor of the gated head (a force push), and one that doesn't resolve: refused.
 - A hold with no head: no pair, and the form names `head`.
+- An older hold's decision when a newer hold for the same PR exists, even with only records changed between their heads: refused, naming the newer hold.
+- A hold that mentions an older head on a later line, or quotes a refusal: its trailing first-line head counts.
+- A ref named like the head hex doesn't shadow the commit.
 - B-11's scenario: `MERGE-HOLD-37` at H1, then a held path changes and `MERGE-HOLD-38` at H2. `DECISION-37` at H2 is refused, and `DECISION-38` at H2 passes.
 - The `FAIL` verdict names the head; the `PASS` verdict is unchanged.
 - `merge --allow-hold 5 --decision` behaves like `gate`.
