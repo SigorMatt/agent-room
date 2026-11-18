@@ -22,7 +22,7 @@ The build of the agent-room pipeline v1, as designed in [`v1.md`](v1.md). A fres
 | M6c | Rehearsal of M6b on pet-todo phase 2 (build lead plays the architect) | Done: phase 2 complete (pet-todo #6, #7, #8), two unattended `start-lead` handovers, takeover by starter task; findings T, U, V |
 | M6d | The watchdog starts one lead per stall, only for a lead that never came (B-5, A-12), and reminds Matthew of a room waiting on him (B-6) (spec `m6d-watchdog.md`) | Done (#14): 4 cold rounds, 2 scoped reviews, 5 Qodo fetches (6 findings resolved); `start-lead --seen` and `--replacing` for the architect's starters; finding W |
 | M6e | A lead survives its container restarting: LEAD.md handles the restart notice (B-7, finding W) (spec `m6e-restarts.md`) | Done (#15): LEAD.md section 3 step 7 and no duplicate escalations (section 8); 2 cold rounds, 7 scoped reviews, Qodo (no findings; no re-review after the first) |
-| M6f | A hold's decision is bound to the head the hold showed (B-11) (spec `m6f-hold-head.md`) | Done (#16): a hold's first line ends with its head; the gate accepts a reason-5 decision only on the PR's newest reason-5 hold, at its head or with only review records changed since; 1 cold round, 2 scoped reviews, Qodo (1 finding fixed) |
+| M6f | A hold's decision is bound to the head the hold showed (B-11) (spec `m6f-hold-head.md`) | Done (#16): a hold's first line ends with its head; the gate accepts a reason-5 decision only on the PR's newest reason-5 hold, at its head or with only review records changed since; 1 cold round, 3 scoped reviews, Qodo (1 finding fixed) |
 | M7 | Matthew's owner run, then tag `v1.0.0` | Not started |
 
 ## Pre-approved fallbacks (Matthew, 2026-11-14)
