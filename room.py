@@ -2473,21 +2473,13 @@ class RoomLog:
         """The lead's trusted messages of KIND (MERGE-HOLD-n)."""
         return [m for m in self.messages() if m["role"] == "lead" and message_kind(m["text"]) == kind]
 
-    def later_hold(self, pr, after, paths):
-        """The lead's newest trusted MERGE-HOLD, of any number, after comment AFTER that supersedes a reason-5 hold
-        for PR #pr's held PATHS, or None: one that names PR #pr and also any of PATHS (whole tokens, as hold_problems
-        reads them) or `reason 5`, anywhere in its text. No reason numbers are parsed: a valid reason-5 re-hold names
-        every held path, so it always supersedes (cold M6f scoped-2 S2-1, scoped-3 S3-1, S3-2). A hold for other
-        reasons naming neither, a reason-3 hold after a 405 say, doesn't (scoped-1 S1-1); one that mentions a held
-        path does, which fails closed and costs one re-hold."""
-        def supersedes(m):
-            text = m["text"]
-            if not re.search(rf"PR #{pr}(?!\d)", text):
-                return False
-            tokens = message_tokens(text)
-            return bool(re.search(r"\breason 5\b", text, re.I)) or any(p in tokens for p in paths)
-        holds = [m for m in self.messages() if m["id"] > after and m["role"] == "lead"
-                 and base_kind(message_kind(m["text"])) == "MERGE-HOLD" and supersedes(m)]
+    def hold_between(self, pr, hold, decision):
+        """The newest trusted lead MERGE-HOLD, of any number or reason, that names PR #pr anywhere and was posted
+        after HOLD and before DECISION, in comment order as before() reads it, or None (M6f check 4). Only the room's
+        order counts, never what the holds say, so no wording of a re-hold dodges it (cold M6f scoped-4 S4-1); a hold
+        posted after the decision doesn't count (scoped-1 S1-1). An edit doesn't move a hold."""
+        holds = [m for m in self.messages() if hold["id"] < m["id"] < decision["id"] and m["role"] == "lead"
+                 and base_kind(message_kind(m["text"])) == "MERGE-HOLD" and re.search(rf"PR #{pr}(?!\d)", m["text"])]
         return max(holds, key=lambda m: m["id"], default=None)
 
 
@@ -2595,17 +2587,18 @@ def check_sensitive(g, root, head, playbook, a, room):
     fresh = [h for h in whole if not moved[h["id"]]]
     decisions = room.decisions(a.decision)
     pairs = [(h, d) for h in fresh for d in decisions if room.before(h, d)]
-    later = {h["id"]: room.later_hold(a.pr, h["id"], paths) for h, _ in pairs}  # only the newest reason-5 hold's
-    pair = next(((h, d) for h, d in pairs if not later[h["id"]]), None)   # decision, not a clearing one (qodo PR #16 1)
+    # the hold must be the PR's newest when the decision came: a clearing decision never is (qodo PR #16 1)
+    between = [room.hold_between(a.pr, h, d) for h, d in pairs]
+    pair = next((p for p, m in zip(pairs, between) if not m), None)
     prefix = f"{held}; --allow-hold 5 --decision {a.decision}: "
     if pair:
         g.ok("sensitive paths", f"{held}: allowed by {a.decision} (comment #{pair[1]['id']}), answering "
                                 f"MERGE-HOLD-{n} (comment #{pair[0]['id']})")
         return
     if pairs:
-        newer = message_kind(later[pairs[0][0]["id"]]["text"])
-        g.fail("sensitive paths", [(f"{prefix}MERGE-HOLD-{n} is not PR #{a.pr}'s newest reason-5 hold: {newer} came "
-                                    "after it; use its DECISION", 5)])
+        m = message_kind(between[0]["text"])
+        g.fail("sensitive paths", [(f"{prefix}{m} came after MERGE-HOLD-{n} and before {a.decision}: answer {m} and use "
+                                    "its DECISION", 5)])
         return
     edited = next((h for h in fresh for d in decisions if h["id"] < d["id"]), None)
     hold = fresh[0] if fresh else None

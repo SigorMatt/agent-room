@@ -98,38 +98,33 @@ def t_a_hold_names_its_head():  # the head that ends its first line, and only th
     assert R.hold_problems("MERGE-HOLD-1: PR #13", 12, [CI]) == ["PR #12", "reason 5", CI, "a head"]
 
 
-def t_which_later_holds_supersede():  # check 4: the PR, and a held path or reason 5, anywhere (cold M6f scoped-3)
+def t_the_holds_between_a_hold_and_its_decision():  # check 4 reads only the room's order (cold M6f scoped-4)
     h = "0123456789ab"
 
-    def supersedes(text, role="lead", at=2):
+    def between(text, at=2, role="lead"):  # MERGE-HOLD-1 is comment 1, DECISION-1 comment 3, TEXT comment AT
+        first = {"id": 1, "role": "lead", "text": f"MERGE-HOLD-1: PR #12, reason 5 (sensitive paths): {CI}, head {h}"}
+        decision = {"id": 3, "role": "architect", "text": "DECISION-1: superseded"}
         log = R.RoomLog.__new__(R.RoomLog)
-        log.number, log._messages = 1, [
-            {"id": 1, "role": "lead", "text": f"MERGE-HOLD-1: PR #12, reason 5 (sensitive paths): {CI}, head {h}"},
-            {"id": at, "role": role, "text": text}]
-        return log.later_hold(12, 1, [CI]) is not None
+        log.number = 1
+        log._messages = sorted([first, {"id": at, "role": role, "text": text}, decision], key=lambda m: m["id"])
+        return log.hold_between(12, first, decision) is not None
 
-    for text in (f"MERGE-HOLD-2: PR #12, reasons 1 (cold R2-1 high, no fix) and 5 (sensitive paths): {CI}, head {h}",
-                 f"MERGE-HOLD-2: PR #12, reason 1 (cold R2-1 high, no fix), head {h}\n- reason 5 (sensitive paths): {CI}",
-                 f"MERGE-HOLD-2: PR #13, reason 3 (checks fail, as on PR #12), head {h}\nPR #12: reason 5: {CI}",
-                 f"MERGE-HOLD-2: PR #12, reasons 1+5 (R2-1; `{CI}`), head {h}",
-                 f"MERGE-HOLD-2: PR #12, reason 3 (checks fail on {CI}), head {h}",  # the safe direction
-                 f"MERGE-HOLD-2: PR #12, two reasons, head {h}\nREASON 5 and more",
-                 f"MERGE-HOLD-2: PR #12, reason 4 (scope), head {h}\nReason 5 is DECISION-1's.",
+    for text in (f"MERGE-HOLD-2: PR #12, reasons 1 and 5 (cold R2-1; sensitive paths as in MERGE-HOLD-1), head {h}",
+                 f"MERGE-HOLD-2: PR #12, reason five (sensitive paths), head {h}",
+                 f"MERGE-HOLD-2: PR #12, reason 3 (not mergeable), head {h}",
+                 f"MERGE-HOLD-2: PR #12, head {h}",
+                 f"MERGE-HOLD-2: PR #13, reason 4 (scope), head {h}\nIt reverts part of PR #12.",
                  f"MERGE-HOLD-1: PR #12, reason 5 (sensitive paths): {CI}, head {h}"):
-        assert supersedes(text), text
-    for text in (f"MERGE-HOLD-2: PR #12, reason 3 (not mergeable: merge commits are off), head {h}",
-                 f"MERGE-HOLD-2: PR #12, reason 3, reason 6 (checks fail; qodo), head {h}",
-                 f"MERGE-HOLD-2: PR #12, reason 6, head {h}\nlib/{CI} and x{CI} aren't the held path",
-                 f"MERGE-HOLD-2: PR #12, reason 50 (x), head {h}",
-                 f"MERGE-HOLD-2: PR #13, reason 5 (sensitive paths): {CI}, head {h}",
+        assert between(text), text
+    for text in (f"MERGE-HOLD-2: PR #13, reason 5 (sensitive paths): {CI}, head {h}",
                  f"MERGE-HOLD-2: PR #120, reason 5 (sensitive paths): {CI}, head {h}",
                  f"ESCALATION-2: PR #12, reason 5 (sensitive paths): {CI}"):
-        assert not supersedes(text), text
-    assert not supersedes(f"MERGE-HOLD-2: PR #12, reason 5: {CI}, head {h}", role="architect")
-    assert not supersedes(f"MERGE-HOLD-2: PR #12, reason 5: {CI}, head {h}", at=0)  # before the paired hold
+        assert not between(text), text
+    text = f"MERGE-HOLD-2: PR #12, reason 5 (sensitive paths): {CI}, head {h}"
+    assert not between(text, role="architect")
+    assert not between(text, at=4), "posted after the decision"
+    assert not between(text, at=0), "posted before the hold"
 
-
-# --- gate --allow-hold 5 --decision against the gated head
 
 def t_the_verdict_names_the_head():
     s = T.mission()
@@ -257,7 +252,7 @@ def t_b11_an_older_holds_decision_at_a_newer_head():  # cold M6e scoped-5 S5-2, 
     assert allow(37).returncode == 6, "DECISION-37 still answers a hold for other code"
 
 
-def t_only_the_prs_newest_reason5_hold_counts():  # qodo PR #16 finding 1 (cold M6f exp2 b10)
+def t_a_hold_between_the_hold_and_its_decision():  # qodo PR #16 finding 1 (cold M6f exp2 b10)
     s = held_mission()
     h1 = s["head"]
     hold(73, h1[:12])
@@ -266,62 +261,30 @@ def t_only_the_prs_newest_reason5_hold_counts():  # qodo PR #16 finding 1 (cold 
     hold(74, h2[:12])  # B-10's record-only re-hold: the same code
     assert T.g("diff", h1, h2, "--", CI).stdout == ""
     T.say_id("1", "architect", "DECISION-73: superseded by MERGE-HOLD-74, allows nothing")
-    newest = f"MERGE-HOLD-73 is not PR #{PR}'s newest reason-5 hold: MERGE-HOLD-74 came after it; use its DECISION"
-    refused(allow(73), newest, h2)
+    newer = "MERGE-HOLD-74 came after MERGE-HOLD-73 and before DECISION-73: answer MERGE-HOLD-74 and use its DECISION"
+    refused(allow(73), newer, h2)
     open(T.CALLS, "w").close()
     r = allow(73, "merge", PR, "--sha", h2)
-    refused(r, newest, h2)
+    refused(r, newer, h2)
     assert T.calls() == [] and T.block()["intent"] == "none", T.out(r)
-    decide(74)
+    decide(74)  # the newest hold's decision
     assert allow(74).returncode == 0
-    # another PR's hold that doesn't name this one doesn't count, nor this PR's for other reasons that name neither
-    # a held path nor reason 5 (cold M6f scoped-1 S1-1)
-    T.say_id("1", "lead", f"MERGE-HOLD-75: PR #13, reason 5 (sensitive paths): {CI}, head {h2[:12]}\nAnother PR.")
-    T.say_id("1", "lead", f"MERGE-HOLD-76: PR #{PR}, reason 3 (checks fail): ci, head {h2[:12]}")
-    T.say_id("1", "lead", f"MERGE-HOLD-56: PR #{PR}, reason 3, reason 6 (checks fail; qodo), head {h2[:12]}")
-    T.say_id("1", "lead", f"MERGE-HOLD-57: PR #{PR}, reasons 3, 6 (checks fail; qodo), head {h2[:12]}")
+    # holds after the decision don't count (cold M6f scoped-1 S1-1), nor another PR's that doesn't name this one
+    T.say_id("1", "lead", f"MERGE-HOLD-75: PR #{PR}, reason 3 (checks fail), head {h2[:12]}")
+    hold(74, h2[:12])  # even a repost of the same hold, at the same code
     assert allow(74).returncode == 0
-    hold(78, h2[:12])  # a later reason-5 hold does
-    refused(allow(74), f"MERGE-HOLD-74 is not PR #{PR}'s newest reason-5 hold: MERGE-HOLD-78 came after it; "
-                       f"use its DECISION", h2)
-    # so does any hold naming this PR and a held path or reason 5, however it writes its reasons (cold M6f
-    # scoped-2 S2-1, scoped-3 S3-1, S3-2), and one for reason 3 that mentions the held path (the safe direction)
-    for n, text in ((61, f"PR #{PR}, reasons 1 and 5 (cold R2-1; sensitive paths: {CI}), head {h2[:12]}"),
-                    (62, f"PR #{PR}, sensitive paths again, head {h2[:12]}\nreason 5 (sensitive paths): {CI}"),
-                    (67, f"reason 5 (sensitive paths): {CI}, head {h2[:12]}\nPR #{PR}, re-held after the rows push"),
-                    (68, f"PR #{PR}, reasons 1 (cold R2-1 high, no fix) and 5 (sensitive paths): {CI}, head {h2[:12]}"),
-                    (69, f"PR #{PR}, reason 1 (cold R2-1 high, no fix), head {h2[:12]}\n- reason 5 (sensitive paths): {CI}"),
-                    (71, f"PR #{PR}, reason 4 (scope), head {h2[:12]}\nReason 5 is DECISION-74's."),
-                    (72, f"PR #{PR}, reason 3 (checks fail on {CI}), head {h2[:12]}")):
-        T.say_id("1", "lead", f"MERGE-HOLD-{n}: {text}")
-        refused(allow(74), f"MERGE-HOLD-74 is not PR #{PR}'s newest reason-5 hold: MERGE-HOLD-{n} came after it; "
-                           f"use its DECISION", h2)
-    T.say_id("1", "lead", f"MERGE-HOLD-66: PR #{PR}, reason 3 (checks fail), head {h2[:12]}")
-    T.failed(allow(74), "sensitive paths", "MERGE-HOLD-72 came after it")  # not 66
-    # the same number again: only the newer hold's decision
-    answered(79, h2[:12])
-    assert allow(79).returncode == 0
-    hold(79, h2[:12])
-    refused(allow(79), f"MERGE-HOLD-79 is not PR #{PR}'s newest reason-5 hold: MERGE-HOLD-79 came after it; "
-                       f"use its DECISION", h2)
-    decide(79)
-    assert allow(79).returncode == 0
+    hold(76, h2[:12])
+    T.say_id("1", "lead", f"MERGE-HOLD-77: PR #13, reason 5 (sensitive paths): {CI}, head {h2[:12]}\nAnother PR.")
+    decide(76)
+    assert allow(76).returncode == 0
+    # a repost before the decision: the repost's pair counts
+    hold(78, h2[:12])
+    hold(78, h2[:12])
+    decide(78)
+    assert allow(78).returncode == 0
 
 
-def t_another_prs_hold_naming_this_pr_and_its_held_path_supersedes_safe_direction():  # fails closed: a re-hold
-    s = held_mission()
-    h1 = s["head"]
-    answered(45, h1[:12])
-    T.say_id("1", "lead", f"MERGE-HOLD-48: PR #13, reason 4 (scope), head {h1[:12]}\nIt reverts part of PR #{PR}.")
-    assert allow(45).returncode == 0, "it names neither a held path nor reason 5"
-    T.say_id("1", "lead", f"MERGE-HOLD-46: PR #13, reason 4 (scope), head {h1[:12]}\nIt reverts PR #{PR}'s {CI}.")
-    refused(allow(45), f"MERGE-HOLD-45 is not PR #{PR}'s newest reason-5 hold: MERGE-HOLD-46 came after it; "
-                       f"use its DECISION", h1)
-    answered(47, h1[:12])  # the lead holds again, and the new hold's decision merges
-    assert allow(47).returncode == 0
-
-
-def t_an_off_template_rehold_supersedes():  # cold M6f scoped-2 S2-1 (s2.py rehold_line2_merge)
+def t_an_off_template_rehold_between_refuses():  # cold M6f scoped-2 S2-1, scoped-3 S3-1, S3-2, scoped-4 S4-1
     s = held_mission()
     h1 = s["head"]
     hold(43, h1[:12])
@@ -329,14 +292,56 @@ def t_an_off_template_rehold_supersedes():  # cold M6f scoped-2 S2-1 (s2.py reho
     h2 = push(s, {f"reviews/qodo/PR-{PR}/DISPOSITIONS.md": rows}, msg="review: rows", review=False)
     text = (f"MERGE-HOLD-44: PR #{PR}, two reasons, head {h2[:12]}\n- reason 1 (cold R2-1 high, no fix)\n"
             f"- reason 5 (sensitive paths): {CI}")
-    assert R.hold_problems(text, PR, [CI]) == [], "the gate pairs it as a reason-5 hold"
     T.say_id("1", "lead", text)
     T.say_id("1", "architect", "DECISION-43: superseded by MERGE-HOLD-44, allows nothing")
     T.say_id("1", "architect", "DECISION-44: back to Build.\nMission: back to Build.")
     open(T.CALLS, "w").close()
     r = allow(43, "merge", PR, "--sha", h2)
-    refused(r, f"MERGE-HOLD-43 is not PR #{PR}'s newest reason-5 hold: MERGE-HOLD-44 came after it; use its DECISION", h2)
+    refused(r, "MERGE-HOLD-44 came after MERGE-HOLD-43 and before DECISION-43: answer MERGE-HOLD-44 and use its "
+               "DECISION", h2)
     assert T.calls() == [] and T.block()["intent"] == "none", T.out(r)
+    # re-holds that name neither the path nor `reason 5` (S4-1), and S3-1's, S3-2's
+    for n, rehold in ((121, "reasons 1 and 5 (cold R2-1; sensitive paths as in MERGE-HOLD-120)"),
+                      (123, "reason five (sensitive paths)"), (125, "reason-5 (sensitive paths: `.github/workflows/**`)"),
+                      (127, f"reasons 1 (cold R2-1 high, no fix) and 5 (sensitive paths): {CI}"),
+                      (129, "reason 1 (cold R2-1 high, no fix)")):
+        hold(n - 1, h2[:12])
+        T.say_id("1", "lead", f"MERGE-HOLD-{n}: PR #{PR}, {rehold}, head {h2[:12]}" +
+                 (f"\n- reason 5 (sensitive paths): {CI}" if n == 129 else ""))
+        T.say_id("1", "architect", f"DECISION-{n - 1}: superseded by MERGE-HOLD-{n}, allows nothing")
+        refused(allow(n - 1), f"MERGE-HOLD-{n} came after MERGE-HOLD-{n - 1} and before DECISION-{n - 1}: "
+                              f"answer MERGE-HOLD-{n} and use its DECISION", h2)
+
+
+def t_another_prs_hold_naming_this_pr_between_refuses_fail_closed():
+    s = held_mission()
+    h1 = s["head"]
+    hold(47, h1[:12])
+    T.say_id("1", "lead", f"MERGE-HOLD-48: PR #13, reason 4 (scope), head {h1[:12]}\nAnother PR.")
+    decide(47)
+    assert allow(47).returncode == 0, "it doesn't name this PR"
+    hold(45, h1[:12])
+    T.say_id("1", "lead", f"MERGE-HOLD-46: PR #13, reason 4 (scope), head {h1[:12]}\nIt reverts part of PR #{PR}.")
+    decide(45)
+    refused(allow(45), "MERGE-HOLD-46 came after MERGE-HOLD-45 and before DECISION-45: answer MERGE-HOLD-46 and use "
+                       "its DECISION", h1)
+    answered(49, h1[:12])  # the lead holds again, and the new hold's decision merges
+    assert allow(49).returncode == 0
+
+
+def t_a_rehold_after_the_decision():  # the decision came first: check 3 decides
+    s = held_mission()
+    h1 = s["head"]
+    answered(130, h1[:12])
+    rows = T.qodo_dispositions(T.default_qodo_rows(s), reviewed=s["c1"]) + "\n<!-- DECISION-130 rows -->\n"
+    h2 = push(s, {f"reviews/qodo/PR-{PR}/DISPOSITIONS.md": rows}, msg="review: DECISION-130 rows", review=False)
+    hold(131, h2[:12])
+    r = allow(130)  # only records changed since MERGE-HOLD-130's head
+    assert r.returncode == 0 and last(r) == f"gate: PASS {h2}", T.out(r)
+    h3 = push(s, {CI: "on: [push]\n"}, msg="ci: change")
+    hold(132, h3[:12])
+    refused(allow(130), f"MERGE-HOLD-130 was posted for head {h1[:12]}; PR #{PR} changed since ({CI}): "
+                        f"post a new hold for head {h3[:12]}", h3)
 
 
 def t_a_later_hold_for_another_reason():  # cold M6f scoped-1 S1-1 (s1.py reason3_after_merge, reason6_after_pass)
