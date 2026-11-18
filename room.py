@@ -2473,13 +2473,14 @@ class RoomLog:
         """The lead's trusted messages of KIND (MERGE-HOLD-n)."""
         return [m for m in self.messages() if m["role"] == "lead" and message_kind(m["text"]) == kind]
 
-    def hold_between(self, pr, hold, decision):
-        """The newest trusted lead MERGE-HOLD, of any number or reason, that names PR #pr anywhere and was posted
-        after HOLD and before DECISION, in comment order as before() reads it, or None (M6f check 4). Only the room's
-        order counts, never what the holds say, so no wording of a re-hold dodges it (cold M6f scoped-4 S4-1); a hold
-        posted after the decision doesn't count (scoped-1 S1-1). An edit doesn't move a hold."""
+    def hold_between(self, hold, decision):
+        """The newest trusted lead message of kind MERGE-HOLD-<m>, for any PR, any number and any reason, posted after
+        HOLD and before DECISION in comment order, as before() orders them, or None (M6f check 4). Only the room's
+        order and the message's kind count, never what it says about its PR or reasons, so no wording dodges it
+        (cold M6f scoped-4 S4-1, scoped-5 S5-1); a room runs one PR at a time. A hold posted after the decision
+        doesn't count (scoped-1 S1-1). An edit doesn't move a hold."""
         holds = [m for m in self.messages() if hold["id"] < m["id"] < decision["id"] and m["role"] == "lead"
-                 and base_kind(message_kind(m["text"])) == "MERGE-HOLD" and re.search(rf"PR #{pr}(?!\d)", m["text"])]
+                 and base_kind(message_kind(m["text"])) == "MERGE-HOLD"]
         return max(holds, key=lambda m: m["id"], default=None)
 
 
@@ -2587,8 +2588,8 @@ def check_sensitive(g, root, head, playbook, a, room):
     fresh = [h for h in whole if not moved[h["id"]]]
     decisions = room.decisions(a.decision)
     pairs = [(h, d) for h in fresh for d in decisions if room.before(h, d)]
-    # the hold must be the PR's newest when the decision came: a clearing decision never is (qodo PR #16 1)
-    between = [room.hold_between(a.pr, h, d) for h, d in pairs]
+    # no hold may come between the hold and its decision: a clearing decision always has one (qodo PR #16 1)
+    between = [room.hold_between(h, d) for h, d in pairs]
     pair = next((p for p, m in zip(pairs, between) if not m), None)
     prefix = f"{held}; --allow-hold 5 --decision {a.decision}: "
     if pair:
@@ -2597,8 +2598,8 @@ def check_sensitive(g, root, head, playbook, a, room):
         return
     if pairs:
         m = message_kind(between[0]["text"])
-        g.fail("sensitive paths", [(f"{prefix}{m} came after MERGE-HOLD-{n} and before {a.decision}: answer {m} and use "
-                                    "its DECISION", 5)])
+        g.fail("sensitive paths", [(f"{prefix}{m} came after MERGE-HOLD-{n} and before {a.decision}: post a new hold "
+                                    f"for head {head[:12]}", 5)])  # its decision then has no hold before it (S5-3)
         return
     edited = next((h for h in fresh for d in decisions if h["id"] < d["id"]), None)
     hold = fresh[0] if fresh else None
