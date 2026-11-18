@@ -2473,10 +2473,15 @@ class RoomLog:
         """The lead's trusted messages of KIND (MERGE-HOLD-n)."""
         return [m for m in self.messages() if m["role"] == "lead" and message_kind(m["text"]) == kind]
 
-    def newest_hold(self, pr):
-        """The lead's newest trusted MERGE-HOLD, of any number or reason, that names PR #pr, or None."""
-        holds = [m for m in self.messages() if m["role"] == "lead" and base_kind(message_kind(m["text"])) == "MERGE-HOLD"
-                 and re.search(rf"PR #{pr}(?!\d)", m["text"])]
+    def later_hold(self, pr, after):
+        """The lead's newest trusted MERGE-HOLD, of any number, after comment AFTER whose first line names PR #pr
+        and reason 5, or None. A later hold for another reason only (3, 4 or 6, say after a 405) doesn't
+        supersede a reason-5 hold (cold M6f scoped-1 S1-1)."""
+        def first(m):
+            return m["text"].split("\n", 1)[0]
+        holds = [m for m in self.messages() if m["id"] > after and m["role"] == "lead"
+                 and base_kind(message_kind(m["text"])) == "MERGE-HOLD" and re.search(rf"PR #{pr}(?!\d)", first(m))
+                 and re.search(r"\breason 5\b", first(m), re.I)]
         return max(holds, key=lambda m: m["id"], default=None)
 
 
@@ -2501,13 +2506,13 @@ def message_tokens(text):
     return out
 
 
-HOLD_HEAD = re.compile(r"(?:,\s*|\s)head\s+([0-9a-f]{12,40})\s*$", re.I)
+HOLD_HEAD = re.compile(r"(?:,\s*|\s)head\s+([0-9a-f]{12,40})\.?\s*$", re.I)
 
 
 def hold_head(text):
     """The head a MERGE-HOLD was posted for: the `head <hex>` (12 to 40 hex digits, after a comma or a space) that
-    ends its first line, lowercased, or None. Heads it mentions anywhere else, an older hold's or a quoted
-    refusal's, don't count (cold M6f R1-1)."""
+    ends its first line, with one period after it at most (cold M6f scoped-1 S1-2), lowercased, or None. Heads it
+    mentions anywhere else, an older hold's or a quoted refusal's, don't count (cold M6f R1-1)."""
     m = HOLD_HEAD.search((text or "").split("\n", 1)[0])
     return m.group(1).lower() if m else None
 
@@ -2584,16 +2589,17 @@ def check_sensitive(g, root, head, playbook, a, room):
     fresh = [h for h in whole if not moved[h["id"]]]
     decisions = room.decisions(a.decision)
     pairs = [(h, d) for h in fresh for d in decisions if room.before(h, d)]
-    newest = room.newest_hold(a.pr)  # only its decision allows a merge, not a clearing one (qodo PR #16 1)
-    pair = next(((h, d) for h, d in pairs if h["id"] == newest["id"]), None)
+    later = {h["id"]: room.later_hold(a.pr, h["id"]) for h, _ in pairs}  # only the newest reason-5 hold's
+    pair = next(((h, d) for h, d in pairs if not later[h["id"]]), None)   # decision, not a clearing one (qodo PR #16 1)
     prefix = f"{held}; --allow-hold 5 --decision {a.decision}: "
     if pair:
         g.ok("sensitive paths", f"{held}: allowed by {a.decision} (comment #{pair[1]['id']}), answering "
                                 f"MERGE-HOLD-{n} (comment #{pair[0]['id']})")
         return
     if pairs:
-        g.fail("sensitive paths", [(f"{prefix}MERGE-HOLD-{n} is not PR #{a.pr}'s newest hold: "
-                                    f"{message_kind(newest['text'])} came after it; use its DECISION", 5)])
+        newer = message_kind(later[pairs[0][0]["id"]]["text"])
+        g.fail("sensitive paths", [(f"{prefix}MERGE-HOLD-{n} is not PR #{a.pr}'s newest reason-5 hold: {newer} came "
+                                    "after it; use its DECISION", 5)])
         return
     edited = next((h for h in fresh for d in decisions if h["id"] < d["id"]), None)
     hold = fresh[0] if fresh else None

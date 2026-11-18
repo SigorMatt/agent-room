@@ -1373,7 +1373,7 @@ def t_allow_hold():
     r = allow(12)
     assert r.returncode == 0 and verdict(r) == f"gate: PASS {s['head']}", out(r)
     assert "allowed by DECISION-12" in line(r, "sensitive paths") and "answering MERGE-HOLD-12" in line(r, "sensitive paths")
-    room("say", "1", "lead", f"MERGE-HOLD-13: PR #{PR}, reason 5 (`{path}`), head {s['head']} ", check=True)
+    room("say", "1", "lead", f"MERGE-HOLD-13: PR #{PR}, reason 5 (`{path}`), head {s['head']}.", check=True)
     post_raw("DECISION-13: fine, merge it")  # Matthew from GitHub, untagged
     assert allow(13).returncode == 0
     assert gate().returncode == 6, "without --allow-hold the match still holds"
