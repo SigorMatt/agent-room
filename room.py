@@ -2474,14 +2474,15 @@ class RoomLog:
         return [m for m in self.messages() if m["role"] == "lead" and message_kind(m["text"]) == kind]
 
     def later_hold(self, pr, after):
-        """The lead's newest trusted MERGE-HOLD, of any number, after comment AFTER whose first line names PR #pr
-        and reason 5, or None. A later hold for another reason only (3, 4 or 6, say after a 405) doesn't
-        supersede a reason-5 hold (cold M6f scoped-1 S1-1)."""
-        def first(m):
-            return m["text"].split("\n", 1)[0]
+        """The lead's newest trusted MERGE-HOLD, of any number, after comment AFTER that supersedes a reason-5 hold
+        for PR #pr, or None: its first line names PR #pr, and not only reasons other than 5. A hold for another
+        reason only (3, 4 or 6, say after a 405) doesn't supersede (cold M6f scoped-1 S1-1); one whose first line
+        names no reason number, or `reasons 1 and 5`, does: in doubt it supersedes (cold M6f scoped-2 S2-1)."""
+        def supersedes(m):
+            reasons = hold_reasons(m["text"])
+            return re.search(rf"PR #{pr}(?!\d)", m["text"].split("\n", 1)[0]) and (not reasons or 5 in reasons)
         holds = [m for m in self.messages() if m["id"] > after and m["role"] == "lead"
-                 and base_kind(message_kind(m["text"])) == "MERGE-HOLD" and re.search(rf"PR #{pr}(?!\d)", first(m))
-                 and re.search(r"\breason 5\b", first(m), re.I)]
+                 and base_kind(message_kind(m["text"])) == "MERGE-HOLD" and supersedes(m)]
         return max(holds, key=lambda m: m["id"], default=None)
 
 
@@ -2507,6 +2508,14 @@ def message_tokens(text):
 
 
 HOLD_HEAD = re.compile(r"(?:,\s*|\s)head\s+([0-9a-f]{12,40})\.?\s*$", re.I)
+HOLD_REASONS = re.compile(r"\breasons?\s+(\d(?:\d|\s|,|/|&|and|or)*)", re.I)
+
+
+def hold_reasons(text):
+    """The reason numbers a MERGE-HOLD's first line attaches to `reason` or `reasons` (reason 3, reason 3, reason 6,
+    reasons 1 and 5, reasons 3, 6), as a set: empty when it names none."""
+    first = (text or "").split("\n", 1)[0]
+    return {int(d) for group in HOLD_REASONS.findall(first) for d in re.findall(r"\d+", group)}
 
 
 def hold_head(text):

@@ -98,6 +98,14 @@ def t_a_hold_names_its_head():  # the head that ends its first line, and only th
     assert R.hold_problems("MERGE-HOLD-1: PR #13", 12, [CI]) == ["PR #12", "reason 5", CI, "a head"]
 
 
+def t_the_reasons_a_hold_names():  # check 4 reads them from the first line (cold M6f scoped-2 S2-1)
+    for first, want in (("reason 5 (sensitive paths): x", {5}), ("reason 3, reason 6 (x; y)", {3, 6}),
+                        ("reasons 1 and 5 (x)", {1, 5}), ("reasons 3, 6", {3, 6}), ("reasons 1, 2, and 5", {1, 2, 5}),
+                        ("Reason 2; reason 5", {2, 5}), ("reasons 3 or 4 (x), 7 files", {3, 4}), ("two reasons", set()),
+                        ("treason 5", set()), ("reason #5", set()), ("reason-5", set()), ("", set())):
+        assert R.hold_reasons(f"MERGE-HOLD-1: PR #12, {first}, head 0123456789ab\nreason 7 on a later line") == want, first
+
+
 # --- gate --allow-hold 5 --decision against the gated head
 
 def t_the_verdict_names_the_head():
@@ -248,9 +256,20 @@ def t_only_the_prs_newest_reason5_hold_counts():  # qodo PR #16 finding 1 (cold 
     T.say_id("1", "lead", f"MERGE-HOLD-76: PR #{PR}, reason 3 (checks fail): ci, head {h2[:12]}")
     T.say_id("1", "lead", f"MERGE-HOLD-77: PR #{PR}, reason 4 (scope), head {h2[:12]}\nReason 5 is DECISION-74's.")
     assert allow(74).returncode == 0
+    T.say_id("1", "lead", f"MERGE-HOLD-56: PR #{PR}, reason 3, reason 6 (checks fail; qodo), head {h2[:12]}")
+    T.say_id("1", "lead", f"MERGE-HOLD-57: PR #{PR}, reasons 3, 6 (checks fail; qodo), head {h2[:12]}")
+    assert allow(74).returncode == 0
     hold(78, h2[:12])  # a later reason-5 hold does
     refused(allow(74), f"MERGE-HOLD-74 is not PR #{PR}'s newest reason-5 hold: MERGE-HOLD-78 came after it; "
                        f"use its DECISION", h2)
+    # so does one off the template, unless its first line names only other reasons (cold M6f scoped-2 S2-1)
+    for n, text in ((61, f"PR #{PR}, reasons 1 and 5 (cold R2-1; sensitive paths: {CI}), head {h2[:12]}"),
+                    (62, f"PR #{PR}, sensitive paths again, head {h2[:12]}\nreason 5 (sensitive paths): {CI}")):
+        T.say_id("1", "lead", f"MERGE-HOLD-{n}: {text}")
+        refused(allow(74), f"MERGE-HOLD-74 is not PR #{PR}'s newest reason-5 hold: MERGE-HOLD-{n} came after it; "
+                           f"use its DECISION", h2)
+    T.say_id("1", "lead", f"MERGE-HOLD-66: PR #{PR}, reason 3 (checks fail), head {h2[:12]}")
+    T.failed(allow(74), "sensitive paths", "MERGE-HOLD-62 came after it")  # not 66
     # the same number again: only the newer hold's decision
     answered(79, h2[:12])
     assert allow(79).returncode == 0
@@ -259,6 +278,24 @@ def t_only_the_prs_newest_reason5_hold_counts():  # qodo PR #16 finding 1 (cold 
                        f"use its DECISION", h2)
     decide(79)
     assert allow(79).returncode == 0
+
+
+def t_an_off_template_rehold_supersedes():  # cold M6f scoped-2 S2-1 (s2.py rehold_line2_merge)
+    s = held_mission()
+    h1 = s["head"]
+    hold(43, h1[:12])
+    rows = T.qodo_dispositions(T.default_qodo_rows(s), reviewed=s["c1"]) + "\n<!-- rows -->\n"
+    h2 = push(s, {f"reviews/qodo/PR-{PR}/DISPOSITIONS.md": rows}, msg="review: rows", review=False)
+    text = (f"MERGE-HOLD-44: PR #{PR}, two reasons, head {h2[:12]}\n- reason 1 (cold R2-1 high, no fix)\n"
+            f"- reason 5 (sensitive paths): {CI}")
+    assert R.hold_problems(text, PR, [CI]) == [], "the gate pairs it as a reason-5 hold"
+    T.say_id("1", "lead", text)
+    T.say_id("1", "architect", "DECISION-43: superseded by MERGE-HOLD-44, allows nothing")
+    T.say_id("1", "architect", "DECISION-44: back to Build.\nMission: back to Build.")
+    open(T.CALLS, "w").close()
+    r = allow(43, "merge", PR, "--sha", h2)
+    refused(r, f"MERGE-HOLD-43 is not PR #{PR}'s newest reason-5 hold: MERGE-HOLD-44 came after it; use its DECISION", h2)
+    assert T.calls() == [] and T.block()["intent"] == "none", T.out(r)
 
 
 def t_a_later_hold_for_another_reason():  # cold M6f scoped-1 S1-1 (s1.py reason3_after_merge, reason6_after_pass)
