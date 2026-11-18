@@ -2579,7 +2579,8 @@ def check_sensitive(g, root, head, playbook, a, room):
         return
     # the decision must answer this PR's hold: the lead's MERGE-HOLD-n (same n) for reason 5, these paths
     # and a head whose code is HEAD's but for review records, posted before it and not edited since (an
-    # edit keeps the comment's id), and no hold for this PR after it
+    # edit keeps the comment's id), with no lead MERGE-HOLD of any PR posted between that hold and the
+    # decision (hold_between: room order only; a hold after the decision doesn't cancel it)
     n = a.decision.rsplit("-", 1)[1]
     holds = room.holds(f"MERGE-HOLD-{n}")
     lacking = [hold_problems(m["text"], a.pr, paths) for m in holds]

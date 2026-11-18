@@ -33,7 +33,7 @@ The refusal is reason 5, like the existing failures in `check_sensitive`, so the
 ## Docs
 
 - **`LEAD.md` 5.6 step 5:** the hold's form ends with `, head <head12>`, copied from the gate's `FAIL` line. Step 6 is unchanged; the gate does the check.
-- **`ARCHITECT.md` 9.2:** every hold names its head. When several reason-5 holds for one PR are open, answer the newest; a later hold for another reason alone doesn't cancel a reason-5 decision. Before Matthew answers it, show him what changed on its held paths since the older hold: `git diff <older head> <newer head> -- <held paths>`. An empty diff means it's the same code, which covers B-10's record-only re-hold (cold M6e scoped-7 S7-1, S7-2). Clear the older hold with a `DECISION` that allows nothing. The gate refuses an older hold's decision at a newer head anyway. Keep it short.
+- **`ARCHITECT.md` 9.2:** every hold names its head. When several holds are open, answer the newest: a decision posted after a newer hold, for any PR, never allows a merge, and a hold posted after a decision doesn't cancel it. Before Matthew answers it, show him what changed on its held paths since the older hold: `git diff <older head> <newer head> -- <held paths>`. An empty diff means it's the same code, which covers B-10's record-only re-hold (cold M6e scoped-7 S7-1, S7-2). Clear the older hold with a `DECISION` that allows nothing. The gate refuses an older hold's decision at a newer head anyway. Keep it short.
 - **Manuals:**
   - `answer-a-buzz` (the `MERGE-HOLD` entry): the head, and the several-holds rule.
   - `message-kinds`: the form.
@@ -50,7 +50,7 @@ All offline, in a new `tests/test_m6f.py`, or in `tests/test_gate.py` if its har
 - At a later head where another path changed: refused, naming the path and both heads.
 - A hold head that isn't an ancestor of the gated head (a force push), and one that doesn't resolve: refused.
 - A hold with no head: no pair, and the form names `head`.
-- An older hold's decision when a newer hold for the same PR exists, even with only records changed between their heads: refused, naming the newer hold.
+- An older hold's decision posted after a newer hold (for any PR), even with only records changed between their heads: refused, naming the newer hold. A decision posted before a newer hold still passes (S1-1).
 - A hold that mentions an older head on a later line, or quotes a refusal: its trailing first-line head counts.
 - A ref named like the head hex doesn't shadow the commit.
 - B-11's scenario: `MERGE-HOLD-37` at H1, then a held path changes and `MERGE-HOLD-38` at H2. `DECISION-37` at H2 is refused, and `DECISION-38` at H2 passes.
