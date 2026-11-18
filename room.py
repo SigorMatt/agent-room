@@ -2473,6 +2473,12 @@ class RoomLog:
         """The lead's trusted messages of KIND (MERGE-HOLD-n)."""
         return [m for m in self.messages() if m["role"] == "lead" and message_kind(m["text"]) == kind]
 
+    def newest_hold(self, pr):
+        """The lead's newest trusted MERGE-HOLD, of any number or reason, that names PR #pr, or None."""
+        holds = [m for m in self.messages() if m["role"] == "lead" and base_kind(message_kind(m["text"])) == "MERGE-HOLD"
+                 and re.search(rf"PR #{pr}(?!\d)", m["text"])]
+        return max(holds, key=lambda m: m["id"], default=None)
+
 
 def message_tokens(text):
     """The whole tokens of a room message, for naming paths: backticked text, and the words split on
@@ -2495,12 +2501,23 @@ def message_tokens(text):
     return out
 
 
-HOLD_HEAD = re.compile(r"\bhead\s+([0-9a-f]{12,40})(?![0-9a-z])", re.I)
+HOLD_HEAD = re.compile(r"(?:,\s*|\s)head\s+([0-9a-f]{12,40})\s*$", re.I)
 
 
-def hold_heads(text):
-    """The heads a MERGE-HOLD names: each `head <hex>` token of 12 to 40 hex digits, lowercased."""
-    return [h.lower() for h in HOLD_HEAD.findall(text)]
+def hold_head(text):
+    """The head a MERGE-HOLD was posted for: the `head <hex>` (12 to 40 hex digits, after a comma or a space) that
+    ends its first line, lowercased, or None. Heads it mentions anywhere else, an older hold's or a quoted
+    refusal's, don't count (cold M6f R1-1)."""
+    m = HOLD_HEAD.search((text or "").split("\n", 1)[0])
+    return m.group(1).lower() if m else None
+
+
+def commit_by_prefix(root, hexid):
+    """The one commit whose id starts with HEXID, or None. Only object ids count (rev-parse --disambiguate), so
+    a branch or tag named like HEXID can't stand in for it (cold M6f R1-3)."""
+    ids = git("rev-parse", f"--disambiguate={hexid}", cwd=root, check=False).stdout.split()
+    commits = [i for i in ids if git("cat-file", "-t", i, cwd=root, check=False).stdout.strip() == "commit"]
+    return commits[0] if len(commits) == 1 else None
 
 
 def hold_problems(text, pr, paths):
@@ -2510,23 +2527,22 @@ def hold_problems(text, pr, paths):
     out += [] if re.search(r"\breason 5\b", text, re.I) else ["reason 5"]
     tokens = message_tokens(text)
     out += [p for p in paths if p not in tokens]
-    return out + ([] if hold_heads(text) else ["a head"])
+    return out + ([] if hold_head(text) else ["a head"])
 
 
 def hold_head_problem(root, text, n, pr, head):
-    """Why MERGE-HOLD-N (TEXT) doesn't show the code at HEAD, or None: each head it names resolves to a commit in
-    HEAD's history, and only review records (exempt) changed between that commit and HEAD (M6f, B-11)."""
-    for named in hold_heads(text):
-        sha = resolve_commit(root, named)
-        if not sha or not sha.startswith(named) or not is_ancestor(root, sha, head):
-            return (f"MERGE-HOLD-{n} names head {named}, which isn't in PR #{pr}'s history: "
-                    f"post a new hold for head {head[:12]}")
-        changed = [p for p in zsplit(git("diff", "--name-only", "--no-renames", "-z", sha, head, cwd=root).stdout)
-                   if not exempt(p)]
-        if changed:
-            shown = ", ".join(changed[:5]) + (f" and {len(changed) - 5} more" if len(changed) > 5 else "")
-            return (f"MERGE-HOLD-{n} was posted for head {sha[:12]}; PR #{pr} changed since ({shown}): "
-                    f"post a new hold for head {head[:12]}")
+    """Why MERGE-HOLD-N (TEXT, whole by hold_problems) doesn't show the code at HEAD, or None: its head is a commit
+    in HEAD's history, and only review records (exempt) changed between that commit and HEAD (M6f, B-11)."""
+    named = hold_head(text)
+    sha = commit_by_prefix(root, named)
+    if not sha or not is_ancestor(root, sha, head):
+        return f"MERGE-HOLD-{n} names head {named}, which isn't in PR #{pr}'s history: post a new hold for head {head[:12]}"
+    changed = [p for p in zsplit(git("diff", "--name-only", "--no-renames", "-z", sha, head, cwd=root).stdout)
+               if not exempt(p)]
+    if changed:
+        shown = ", ".join(changed[:5]) + (f" and {len(changed) - 5} more" if len(changed) > 5 else "")
+        return (f"MERGE-HOLD-{n} was posted for head {sha[:12]}; PR #{pr} changed since ({shown}): "
+                f"post a new hold for head {head[:12]}")
     return None
 
 
@@ -2559,7 +2575,7 @@ def check_sensitive(g, root, head, playbook, a, room):
         return
     # the decision must answer this PR's hold: the lead's MERGE-HOLD-n (same n) for reason 5, these paths
     # and a head whose code is HEAD's but for review records, posted before it and not edited since (an
-    # edit keeps the comment's id)
+    # edit keeps the comment's id), and no hold for this PR after it
     n = a.decision.rsplit("-", 1)[1]
     holds = room.holds(f"MERGE-HOLD-{n}")
     lacking = [hold_problems(m["text"], a.pr, paths) for m in holds]
@@ -2567,16 +2583,22 @@ def check_sensitive(g, root, head, playbook, a, room):
     moved = {h["id"]: hold_head_problem(root, h["text"], n, a.pr, head) for h in whole}
     fresh = [h for h in whole if not moved[h["id"]]]
     decisions = room.decisions(a.decision)
-    pair = next(((h, d) for h in fresh for d in decisions if room.before(h, d)), None)
+    pairs = [(h, d) for h in fresh for d in decisions if room.before(h, d)]
+    newest = room.newest_hold(a.pr)  # only its decision allows a merge, not a clearing one (qodo PR #16 1)
+    pair = next(((h, d) for h, d in pairs if h["id"] == newest["id"]), None)
+    prefix = f"{held}; --allow-hold 5 --decision {a.decision}: "
     if pair:
         g.ok("sensitive paths", f"{held}: allowed by {a.decision} (comment #{pair[1]['id']}), answering "
                                 f"MERGE-HOLD-{n} (comment #{pair[0]['id']})")
+        return
+    if pairs:
+        g.fail("sensitive paths", [(f"{prefix}MERGE-HOLD-{n} is not PR #{a.pr}'s newest hold: "
+                                    f"{message_kind(newest['text'])} came after it; use its DECISION", 5)])
         return
     edited = next((h for h in fresh for d in decisions if h["id"] < d["id"]), None)
     hold = fresh[0] if fresh else None
     others = [h for h in whole if moved[h["id"]]]  # a hold for other code: the one the decision answers, or the newest
     stale = next((h for h in others for d in decisions if room.before(h, d)), others[-1] if others else None)
-    prefix = f"{held}; --allow-hold 5 --decision {a.decision}: "
     if edited:
         missing = f"MERGE-HOLD-{n} (comment #{edited['id']}) edited after {a.decision}: post a new hold"
     elif hold:

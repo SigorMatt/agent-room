@@ -1373,7 +1373,7 @@ def t_allow_hold():
     r = allow(12)
     assert r.returncode == 0 and verdict(r) == f"gate: PASS {s['head']}", out(r)
     assert "allowed by DECISION-12" in line(r, "sensitive paths") and "answering MERGE-HOLD-12" in line(r, "sensitive paths")
-    room("say", "1", "lead", f"MERGE-HOLD-13: PR #{PR}, reason 5 (`{path}`), head {s['head']}.", check=True)
+    room("say", "1", "lead", f"MERGE-HOLD-13: PR #{PR}, reason 5 (`{path}`), head {s['head']} ", check=True)
     post_raw("DECISION-13: fine, merge it")  # Matthew from GitHub, untagged
     assert allow(13).returncode == 0
     assert gate().returncode == 6, "without --allow-hold the match still holds"
@@ -1428,8 +1428,8 @@ def t_edited_hold_or_escalation_doesnt_count():  # qodo PR #7: An edited hold re
     assert verdict(r) == "gate: FAIL hold reasons 1", out(r)
 
 def t_hold_paths_are_whole_tokens():  # cold M3 R2-10, S1-2
-    def hp(text, pr, paths):
-        return R.hold_problems(text + "\nhead 0123456789ab", pr, paths)
+    def hp(text, pr, paths):  # the head is test_m6f.py's
+        return [p for p in R.hold_problems(text, pr, paths) if p != "a head"]
     assert hp("MERGE-HOLD-20: PR #12, reason 5: lib/tests/test_x.py", 12, ["tests/test_x.py"]) == ["tests/test_x.py"]
     assert hp("MERGE-HOLD-20: PR #12, reason 5: xtests/test_x.py.", 12, ["tests/test_x.py"]) == ["tests/test_x.py"]
     for text in ("MERGE-HOLD-20: PR #12, reason 5: a.py, tests/test_x.py", "MERGE-HOLD-20: PR #12 (reason 5: tests/test_x.py)",
