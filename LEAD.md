@@ -323,7 +323,7 @@ This follows `~/agent-room/docs/QODO-REVIEW.md` ([`docs/QODO-REVIEW.md`](docs/QO
    python3 room.py say N lead "MERGE-HOLD-<n>: PR #<PR>, reason <r> (<paths or finding>), head <head12>"
    python3 room.py state set intent=none waiting_for_owner=yes step="waiting for owner: gate"
    ```
-6. A `DECISION-<n>` that allows the sensitive path: `python3 room.py merge <PR> --sha <sha> --allow-hold 5 --decision DECISION-<n>`.
+6. The `DECISION-<n>` of the PR's newest reason-5 hold, when it allows the sensitive path (a later hold for another reason doesn't cancel it): `python3 room.py merge <PR> --sha <sha> --allow-hold 5 --decision DECISION-<n>`.
 
 ### 5.7 Close
 
